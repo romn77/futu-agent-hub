@@ -135,6 +135,7 @@ def _human_risk_report(payload: dict[str, Any]) -> str:
         + (safe(coverage["budget_reason"]) if coverage["budget_reason"] else "None"),
         f"Classified sector: {coverage['classified_sector']}",
         f"Classified region: {coverage['classified_region']}",
+        f"P&L evidence: {coverage['pnl_evidence_status']}",
         f"Price histories: {price_coverage['available']}/{price_coverage['requested']}",
         f"Data quality: {payload['data_quality_status']}",
         "Data quality notes:",

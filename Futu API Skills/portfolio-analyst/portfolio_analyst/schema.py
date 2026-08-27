@@ -223,6 +223,7 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         _semantic_error("report price-history coverage must match correlation coverage")
     if correlation["coverage"]["requested"] > payload["coverage"]["positions"]:
         _semantic_error("requested histories cannot exceed economic-position coverage")
+    pnl_status = coverage["pnl_evidence_status"]
     exposure_totals: dict[str, Decimal] = {}
     for view_name in ("sector", "region", "theme_full", "theme_split"):
         total = Decimal("0")
@@ -282,6 +283,38 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         "REGION_CONCENTRATION": ("region",) if "region" in checks else (),
         "THEME_CONCENTRATION": ("theme_split",) if "theme_split" in checks else (),
     }
+    finding_types = {finding["type"] for finding in findings}
+    if "PNL_CONCENTRATION" in finding_types and pnl_status != "COMPLETE":
+        raise ReportSemanticError(
+            "P&L semantic validation failed: concentration requires complete evidence"
+        )
+    for finding in findings:
+        if finding["type"] != "PNL_CONCENTRATION":
+            continue
+        evidence = finding["evidence"]
+        for total_field, share_field in (
+            ("profit_total_base", "largest_profit_share"),
+            ("loss_total_abs_base", "largest_loss_share"),
+        ):
+            total = _finite_decimal(evidence[total_field], f"P&L {total_field}")
+            raw_share = evidence[share_field]
+            if total < 0 or (total == 0) != (raw_share is None):
+                raise ReportSemanticError(
+                    "P&L semantic validation failed: pool totals and shares are inconsistent"
+                )
+            if raw_share is not None:
+                share = _finite_decimal(raw_share, f"P&L {share_field}")
+                if not Decimal("0") < share <= Decimal("1"):
+                    raise ReportSemanticError(
+                        "P&L semantic validation failed: concentration share is outside (0, 1]"
+                    )
+        if (
+            _finite_decimal(evidence["profit_total_base"], "P&L profit total") == 0
+            and _finite_decimal(evidence["loss_total_abs_base"], "P&L loss total") == 0
+        ):
+            raise ReportSemanticError(
+                "P&L semantic validation failed: an empty P&L population is not a finding"
+            )
     for finding in findings:
         relevant = finding_checks.get(finding["type"], ())
         applied = bool(relevant)
@@ -299,6 +332,38 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         )
         if finding["severity"] != expected_severity:
             raise ReportSemanticError("finding severity is not supported by policy evidence")
+    breached_candidate_types = {
+        candidate_type
+        for check_name, candidate_type in {
+            "single_position": "POSITION_CONCENTRATION",
+            "top_3": "POSITION_CONCENTRATION",
+            "top_5": "POSITION_CONCENTRATION",
+            "sector": "SECTOR_CONCENTRATION",
+            "region": "REGION_CONCENTRATION",
+            "theme_split": "THEME_CONCENTRATION",
+        }.items()
+        if checks.get(check_name, {}).get("breached")
+    }
+    missing_breaches = breached_candidate_types - finding_types
+    candidate_priority = {
+        "POSITION_CONCENTRATION": 1,
+        "REGION_CONCENTRATION": 2,
+        "SECTOR_CONCENTRATION": 2,
+        "THEME_CONCENTRATION": 3,
+    }
+    if missing_breaches:
+        worst_reported = (
+            severity_order[findings[-1]["severity"]],
+            priority_order[findings[-1]["review_priority"]],
+            findings[-1]["type"],
+        )
+        if any(
+            (severity_order["HIGH"], candidate_priority[item], item) < worst_reported
+            for item in missing_breaches
+        ):
+            raise ReportSemanticError(
+                "breached policy candidate was omitted in favor of a lower-ranked finding"
+            )
 
 
 def validate_risk_document(payload: dict[str, Any]) -> None:

@@ -18,9 +18,18 @@ market-qualified identity. A bare ticker in two markets remains two economic pos
 rows with conflicting currency/provenance, security type, sector, industry, region, theme set,
 asset class, or configured role fail closed; empty, already-qualified, or unsupported identities
 are not guessed. Market values and weights are summed only after these gates. Exact-zero quantity
-or base-value rows are excluded from every current Phase 2 population. P&L evidence is deferred to
-Phase 5. Any nonzero short/hedge position fails with `UNSUPPORTED_PORTFOLIO`; signed net weights are
-never presented as ordinary NAV exposure or fed to HHI.
+or base-value rows are excluded from every current Phase 2 population. Any nonzero short/hedge
+position fails with `UNSUPPORTED_PORTFOLIO`; signed net weights are never presented as ordinary NAV
+exposure or fed to HHI.
+
+P&L concentration is structural snapshot evidence, not the Phase 5 performance series. It is
+computed only when every analyzed current economic position has finite `unrealized_pl_base` and
+`realized_pl_base` evidence and no current position was omitted by the work budget. The two fields
+are summed per canonical position, then positive totals and absolute negative totals form separate
+profit and loss pools. The report records each pool total and its largest contributor share; a
+zero-size pool has a null share. Duplicate-account P&L is aggregated under the canonical position.
+Missing, nonfinite, or budget-omitted evidence sets `pnl_evidence_status: PARTIAL`, adds a quality
+note, and emits no `PNL_CONCENTRATION` finding. An empty current population is `UNAVAILABLE`.
 
 Sector and region views add each position's NAV weight. Aggregation defensively applies the shared
 Phase 1 sentinel normalization: blank values and case-insensitive `UNKNOWN`, `N/A`, `NONE`, and
@@ -102,6 +111,11 @@ the measured value, threshold, and breach boolean. Policy never checks the overl
 Without a policy, every finding and overall risk are `UNRATED`; evidence is not silently converted
 to LOW/MEDIUM advice. Policy-backed findings are rated strictly from serialized thresholds and
 breach booleans, then sorted by severity, review priority, stable type, and identity.
+Position, sector, region, theme, P&L, role, and correlation candidates are generated independently
+before this single Top-3 sort; configuring a role cannot suppress a correlation or theme candidate.
+Runtime semantic validation rejects a breached policy candidate omitted in favor of a lower-ranked
+finding. When more than three breached dimensions exist, the same deterministic rank selects the
+three highest-priority candidates while every breach remains explicit in `policy_checks`.
 
 ## Commands and persistence
 

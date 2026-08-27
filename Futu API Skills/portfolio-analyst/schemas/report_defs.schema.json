@@ -3,6 +3,7 @@
   "$id": "https://portfolio-analyst.local/schemas/report_defs.schema.json",
   "$defs": {
     "decimal": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "nonnegativeDecimal": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
     "unitDecimal": {"type": "string", "pattern": "^(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$"},
     "signedUnitDecimal": {"type": "string", "pattern": "^-?(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$"},
     "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
@@ -13,12 +14,13 @@
     "countCoverage": {"type": "object", "additionalProperties": false, "required": ["requested", "available"], "properties": {"requested": {"type": "integer", "minimum": 0}, "available": {"type": "integer", "minimum": 0}}},
     "coverage": {
       "type": "object", "additionalProperties": false,
-      "required": ["source_holdings", "positions", "total_positions", "omitted_positions", "budget_status", "budget_reason", "classified_sector", "classified_region", "price_histories"],
+      "required": ["source_holdings", "positions", "total_positions", "omitted_positions", "budget_status", "budget_reason", "classified_sector", "classified_region", "pnl_evidence_status", "price_histories"],
       "properties": {
         "source_holdings": {"type": "integer", "minimum": 0}, "positions": {"type": "integer", "minimum": 0},
         "total_positions": {"type": "integer", "minimum": 0}, "omitted_positions": {"type": "integer", "minimum": 0},
         "budget_status": {"enum": ["COMPLETE", "BUDGET_LIMIT"]}, "budget_reason": {"type": ["string", "null"]},
         "classified_sector": {"type": "integer", "minimum": 0}, "classified_region": {"type": "integer", "minimum": 0},
+        "pnl_evidence_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
         "price_histories": {"$ref": "#/$defs/countCoverage"}
       }
     },
@@ -66,7 +68,7 @@
     "signedExposureEvidence": {"type": "object", "additionalProperties": false, "required": ["short_exposure_base"], "properties": {"short_exposure_base": {"$ref": "#/$defs/decimal"}}},
     "sectorEvidence": {"type": "object", "additionalProperties": false, "required": ["basis", "sector", "weight", "policy_threshold_applied"], "properties": {"basis": {"const": "NAV"}, "sector": {"$ref": "#/$defs/label"}, "weight": {"$ref": "#/$defs/decimal"}, "policy_threshold_applied": {"type": "boolean"}}},
     "regionEvidence": {"type": "object", "additionalProperties": false, "required": ["basis", "region", "weight", "policy_threshold_applied"], "properties": {"basis": {"const": "NAV"}, "region": {"$ref": "#/$defs/label"}, "weight": {"$ref": "#/$defs/decimal"}, "policy_threshold_applied": {"const": true}}},
-    "pnlEvidence": {"type": "object", "additionalProperties": false, "required": ["basis", "largest_absolute_share", "source_fields"], "properties": {"basis": {"const": "ABSOLUTE_REPORTED_PNL"}, "largest_absolute_share": {"$ref": "#/$defs/unitDecimal"}, "source_fields": {"type": "array", "prefixItems": [{"const": "unrealized_pl_base"}, {"const": "realized_pl_base"}], "items": false, "minItems": 2, "maxItems": 2}}},
+    "pnlEvidence": {"type": "object", "additionalProperties": false, "required": ["basis", "profit_total_base", "loss_total_abs_base", "largest_profit_share", "largest_loss_share", "source_fields"], "properties": {"basis": {"const": "ABSOLUTE_REPORTED_PNL"}, "profit_total_base": {"$ref": "#/$defs/nonnegativeDecimal"}, "loss_total_abs_base": {"$ref": "#/$defs/nonnegativeDecimal"}, "largest_profit_share": {"oneOf": [{"$ref": "#/$defs/unitDecimal"}, {"type": "null"}]}, "largest_loss_share": {"oneOf": [{"$ref": "#/$defs/unitDecimal"}, {"type": "null"}]}, "source_fields": {"type": "array", "prefixItems": [{"const": "unrealized_pl_base"}, {"const": "realized_pl_base"}], "items": false, "minItems": 2, "maxItems": 2}}},
     "roleEvidence": {"type": "object", "additionalProperties": false, "required": ["basis", "roles", "dominant_weight"], "properties": {"basis": {"const": "NAV"}, "roles": {"$ref": "#/$defs/exposureMap"}, "dominant_weight": {"$ref": "#/$defs/decimal"}}},
     "correlationEvidence": {"type": "object", "additionalProperties": false, "required": ["symbols", "threshold"], "properties": {"symbols": {"$ref": "#/$defs/cluster"}, "threshold": {"$ref": "#/$defs/unitDecimal"}}},
     "themeEvidence": {"type": "object", "additionalProperties": false, "required": ["view", "theme", "weight", "policy_threshold_applied"], "properties": {"view": {"const": "ADDITIVE_SPLIT_ALLOCATION"}, "theme": {"$ref": "#/$defs/label"}, "weight": {"$ref": "#/$defs/decimal"}, "policy_threshold_applied": {"type": "boolean"}}},

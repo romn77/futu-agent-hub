@@ -121,3 +121,7 @@ than distorting Top-N, HHI, P&L, role, or correlation evidence. Risk aggregation
 shared unknown-sentinel canonicalizer to sector, region, and theme tags before that agreement gate.
 Zero holdings are excluded, signed portfolios fail closed as unsupported, no-policy findings are
 UNRATED, negative correlations are separate inverse evidence, and work budgets are explicit.
+Risk candidates are generated independently before the deterministic Top-3 selection. Snapshot
+P&L concentration uses separate profit and absolute-loss pools only when realized and unrealized
+base P&L are finite and complete for the full analyzed current population; otherwise coverage is
+PARTIAL and no P&L finding is emitted.

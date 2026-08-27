@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -171,6 +172,60 @@ def test_runtime_validation_rejects_rated_finding_without_matching_policy_check(
 
     with pytest.raises(ValueError, match="policy evidence"):
         validate_risk_document(payload)
+
+
+def test_runtime_validation_rejects_breached_policy_candidate_omitted_for_unrated_finding():
+    source = snapshot()
+    positions = tuple(replace(position, position_role="OFFENSIVE") for position in source.positions)
+    payload = analyze_risk(replace(source, positions=positions)).to_dict()
+    assert "THEME_CONCENTRATION" not in {finding["type"] for finding in payload["top_risks"]}
+    payload["policy_status"] = "CONFIGURED"
+    payload["policy_checks"] = {
+        "single_position": {"measured": "0.4", "threshold": "0.3", "breached": True},
+        "theme_split": {"measured": "0.5", "threshold": "0.4", "breached": True},
+    }
+    payload["top_risks"][0]["severity"] = "HIGH"
+    payload["top_risks"][0]["evidence"]["policy_threshold_applied"] = True
+    payload["overall_risk"] = "HIGH"
+
+    with pytest.raises(ValueError, match="breached policy candidate"):
+        validate_risk_document(payload)
+
+
+def test_pnl_schema_and_semantics_reject_fake_totals_shares_and_partial_coverage():
+    source = snapshot()
+    positions = (
+        replace(
+            source.positions[0], unrealized_pl_base=Decimal("90"), realized_pl_base=Decimal("10")
+        ),
+        replace(
+            source.positions[1], unrealized_pl_base=Decimal("-30"), realized_pl_base=Decimal("-20")
+        ),
+        replace(
+            source.positions[2], unrealized_pl_base=Decimal("10"), realized_pl_base=Decimal("0")
+        ),
+    )
+    payload = analyze_risk(replace(source, positions=positions)).to_dict()
+    index = next(
+        index
+        for index, finding in enumerate(payload["top_risks"])
+        if finding["type"] == "PNL_CONCENTRATION"
+    )
+
+    negative = deepcopy(payload)
+    negative["top_risks"][index]["evidence"]["profit_total_base"] = "-1"
+    with pytest.raises(jsonschema.ValidationError):
+        validate_risk_document(negative)
+
+    missing_share = deepcopy(payload)
+    missing_share["top_risks"][index]["evidence"]["largest_loss_share"] = None
+    with pytest.raises(ValueError, match="P&L semantic"):
+        validate_risk_document(missing_share)
+
+    partial = deepcopy(payload)
+    partial["coverage"]["pnl_evidence_status"] = "PARTIAL"
+    with pytest.raises(ValueError, match="P&L semantic"):
+        validate_risk_document(partial)
 
 
 def test_runtime_validation_rejects_noncanonical_or_negative_exposure_evidence():

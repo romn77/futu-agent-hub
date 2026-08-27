@@ -65,6 +65,7 @@ class PortfolioReport:
             ),
             f"- Classified sector: {data['coverage']['classified_sector']}",
             f"- Classified region: {data['coverage']['classified_region']}",
+            f"- P&L evidence: {data['coverage']['pnl_evidence_status']}",
             f"- Price histories: {data['coverage']['price_histories']['available']}/"
             f"{data['coverage']['price_histories']['requested']}",
             "",

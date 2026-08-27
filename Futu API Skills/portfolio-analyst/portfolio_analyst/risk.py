@@ -123,6 +123,7 @@ class EconomicPosition:
     market_value_base: Decimal
     unrealized_pl_base: Decimal | None
     realized_pl_base: Decimal | None
+    pnl_complete: bool
     source_holding_count: int
 
 
@@ -194,12 +195,10 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
             raise RiskInputError(f"conflicting metadata for economic position {identity}")
 
         def aggregate_optional(field: str) -> Decimal | None:
-            present = [
-                value
-                for value in (getattr(source, field) for source in sources)
-                if value is not None
-            ]
-            return sum(present, Decimal("0")) if present else None
+            values = [getattr(source, field) for source in sources]
+            if any(value is None for value in values):
+                return None
+            return sum(values, Decimal("0"))
 
         market, symbol = identities[identity]
         holdings.append(
@@ -221,6 +220,13 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
                 ),
                 unrealized_pl_base=aggregate_optional("unrealized_pl_base"),
                 realized_pl_base=aggregate_optional("realized_pl_base"),
+                pnl_complete=all(
+                    source.unrealized_pl_base is not None
+                    and source.realized_pl_base is not None
+                    and source.unrealized_pl_base.is_finite()
+                    and source.realized_pl_base.is_finite()
+                    for source in sources
+                ),
                 source_holding_count=len(sources),
             )
         )
@@ -695,6 +701,7 @@ def _findings(
     correlation: CorrelationEvidence,
     policy_checks: Mapping[str, Any],
     high_correlation: Decimal,
+    pnl_evidence_status: str,
 ) -> tuple[RiskFinding, ...]:
     positions = sorted(
         economic_positions, key=lambda position: (-abs(position.weight), position.identity)
@@ -802,6 +809,61 @@ def _findings(
                 "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
             )
         )
+    if pnl_evidence_status == "COMPLETE":
+        pnl_values = {
+            position.identity: position.unrealized_pl_base + position.realized_pl_base
+            for position in positions
+        }
+        profits = tuple(
+            sorted(
+                ((identity, value) for identity, value in pnl_values.items() if value > 0),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
+        losses = tuple(
+            sorted(
+                ((identity, -value) for identity, value in pnl_values.items() if value < 0),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
+        profit_total = sum((value for _identity, value in profits), Decimal("0"))
+        loss_total = sum((value for _identity, value in losses), Decimal("0"))
+        if profit_total or loss_total:
+            affected = tuple(
+                dict.fromkeys(
+                    (
+                        *((profits[0][0],) if profits else ()),
+                        *((losses[0][0],) if losses else ()),
+                    )
+                )
+            )
+            findings.append(
+                RiskFinding(
+                    "PNL_CONCENTRATION",
+                    "UNRATED",
+                    "Reported profit and loss pools are reviewed separately for concentration.",
+                    MappingProxyType(
+                        {
+                            "basis": "ABSOLUTE_REPORTED_PNL",
+                            "profit_total_base": profit_total,
+                            "loss_total_abs_base": loss_total,
+                            "largest_profit_share": (
+                                profits[0][1] / profit_total if profit_total else None
+                            ),
+                            "largest_loss_share": (
+                                losses[0][1] / loss_total if loss_total else None
+                            ),
+                            "source_fields": (
+                                "unrealized_pl_base",
+                                "realized_pl_base",
+                            ),
+                        }
+                    ),
+                    affected,
+                    "P2",
+                    "Hypothetical only: simulate removing the largest reported P&L contributor and recompute both pools.",
+                )
+            )
     roles_configured = bool(positions) and all(position.position_role for position in positions)
     if roles_configured:
         roles: dict[str, Decimal] = {}
@@ -830,7 +892,7 @@ def _findings(
                 "Hypothetical only: simulate a shock to the dominant configured role.",
             )
         )
-    elif correlation.clusters:
+    if correlation.clusters:
         cluster = correlation.clusters[0]
         findings.append(
             RiskFinding(
@@ -843,37 +905,34 @@ def _findings(
                 "Hypothetical only: simulate a shock shared by the correlated cluster.",
             )
         )
-    else:
-        theme, theme_weight = max(
-            exposures.theme_split.items(), key=lambda item: (item[1], item[0])
+    theme, theme_weight = max(exposures.theme_split.items(), key=lambda item: (item[1], item[0]))
+    findings.append(
+        RiskFinding(
+            "THEME_CONCENTRATION",
+            (
+                "HIGH"
+                if policy_checks.get("theme_split", {}).get("breached")
+                else "LOW"
+                if "theme_split" in policy_checks
+                else "UNRATED"
+            ),
+            f"{theme} is the largest additive split-allocation theme exposure.",
+            MappingProxyType(
+                {
+                    "view": "ADDITIVE_SPLIT_ALLOCATION",
+                    "theme": theme,
+                    "weight": theme_weight,
+                    "policy_threshold_applied": "theme_split" in policy_checks,
+                }
+            ),
+            tuple(
+                position.identity
+                for position in positions
+                if theme in (position.themes or ("UNKNOWN",))
+            ),
+            "P3",
         )
-        findings.append(
-            RiskFinding(
-                "THEME_CONCENTRATION",
-                (
-                    "HIGH"
-                    if policy_checks.get("theme_split", {}).get("breached")
-                    else "LOW"
-                    if "theme_split" in policy_checks
-                    else "UNRATED"
-                ),
-                f"{theme} is the largest additive split-allocation theme exposure.",
-                MappingProxyType(
-                    {
-                        "view": "ADDITIVE_SPLIT_ALLOCATION",
-                        "theme": theme,
-                        "weight": theme_weight,
-                        "policy_threshold_applied": "theme_split" in policy_checks,
-                    }
-                ),
-                tuple(
-                    position.identity
-                    for position in positions
-                    if theme in (position.themes or ("UNKNOWN",))
-                ),
-                "P3",
-            )
-        )
+    )
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNRATED": 4}
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
     return tuple(
@@ -957,6 +1016,14 @@ def analyze_risk(
                     {"measured": measured, "threshold": threshold, "breached": measured > threshold}
                 )
     frozen_checks = MappingProxyType(dict(sorted(checks.items())))
+    pnl_evidence_status = (
+        "UNAVAILABLE"
+        if not all_economic_positions
+        else "PARTIAL"
+        if len(economic_positions) < len(all_economic_positions)
+        or any(not position.pnl_complete for position in economic_positions)
+        else "COMPLETE"
+    )
     findings = _findings(
         snapshot,
         economic_positions,
@@ -965,6 +1032,7 @@ def analyze_risk(
         correlation,
         frozen_checks,
         high_correlation,
+        pnl_evidence_status,
     )
     notes = tuple(
         dict.fromkeys(
@@ -974,6 +1042,11 @@ def analyze_risk(
                 *snapshot.data_quality.source_errors,
                 *correlation.notes,
                 *(f"BUDGET_LIMIT: {reason}" for reason in budget_reasons),
+                *(
+                    ("P&L evidence is incomplete; PNL_CONCENTRATION was not emitted.",)
+                    if pnl_evidence_status == "PARTIAL"
+                    else ()
+                ),
             )
         )
     )
@@ -994,6 +1067,7 @@ def analyze_risk(
                 "budget_reason": "; ".join(budget_reasons) if budget_reasons else None,
                 "classified_sector": sum(p.sector != "UNKNOWN" for p in economic_positions),
                 "classified_region": sum(p.region != "UNKNOWN" for p in economic_positions),
+                "pnl_evidence_status": pnl_evidence_status,
                 "price_histories": correlation.coverage,
             }
         ),

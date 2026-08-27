@@ -337,15 +337,67 @@ def test_optional_policy_loader_requires_user_provenance_and_has_no_defaults(tmp
         load_portfolio_policy(tmp_path)
 
 
-def test_pnl_concentration_is_deferred_until_phase_5_even_when_source_fields_exist():
+def test_pnl_concentration_reports_complete_profit_and_loss_pools():
     source = snapshot()
     positions = (
-        replace(source.positions[0], unrealized_pl_base=Decimal("90")),
-        replace(source.positions[1], unrealized_pl_base=Decimal("10")),
-        replace(source.positions[2], unrealized_pl_base=Decimal("0")),
+        replace(
+            source.positions[0],
+            unrealized_pl_base=Decimal("90"),
+            realized_pl_base=Decimal("10"),
+        ),
+        replace(
+            source.positions[1],
+            unrealized_pl_base=Decimal("-30"),
+            realized_pl_base=Decimal("-20"),
+        ),
+        replace(
+            source.positions[2],
+            unrealized_pl_base=Decimal("10"),
+            realized_pl_base=Decimal("0"),
+        ),
     )
     report = analyze_risk(replace(source, positions=positions))
 
+    finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
+    assert report.coverage["pnl_evidence_status"] == "COMPLETE"
+    assert finding.evidence == {
+        "basis": "ABSOLUTE_REPORTED_PNL",
+        "profit_total_base": Decimal("110"),
+        "loss_total_abs_base": Decimal("50"),
+        "largest_profit_share": Decimal("100") / Decimal("110"),
+        "largest_loss_share": Decimal("1"),
+        "source_fields": ("unrealized_pl_base", "realized_pl_base"),
+    }
+    assert finding.affected_positions == ("US.AAA", "US.BBB")
+    validate_risk_document(report.to_dict())
+
+
+def test_incomplete_pnl_evidence_is_partial_and_does_not_emit_concentration():
+    source = snapshot()
+    positions = tuple(
+        replace(position, unrealized_pl_base=Decimal("1"), realized_pl_base=Decimal("0"))
+        for position in source.positions
+    )
+    positions = (replace(positions[0], realized_pl_base=None), *positions[1:])
+
+    report = analyze_risk(replace(source, positions=positions))
+
+    assert report.coverage["pnl_evidence_status"] == "PARTIAL"
+    assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
+    assert any("P&L" in note and "incomplete" in note for note in report.data_quality_notes)
+
+
+def test_nonfinite_pnl_evidence_is_partial_not_serialized_as_a_finding():
+    source = snapshot()
+    positions = tuple(
+        replace(position, unrealized_pl_base=Decimal("1"), realized_pl_base=Decimal("0"))
+        for position in source.positions
+    )
+    positions = (replace(positions[0], realized_pl_base=Decimal("NaN")), *positions[1:])
+
+    report = analyze_risk(replace(source, positions=positions))
+
+    assert report.coverage["pnl_evidence_status"] == "PARTIAL"
     assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
 
 
@@ -363,6 +415,24 @@ def test_role_imbalance_is_absent_until_roles_are_configured_then_uses_nav_expos
         "DEFENSIVE": Decimal("0.2"),
         "OFFENSIVE": Decimal("0.7"),
     }
+
+
+def test_role_correlation_and_theme_candidates_are_independent_before_top_three_selection():
+    source = snapshot()
+    positions = tuple(replace(position, position_role="OFFENSIVE") for position in source.positions)
+
+    report = analyze_risk(
+        replace(source, positions=positions),
+        price_provider=CorrelatedPrices(),
+        policy=PortfolioPolicy(theme_split=Decimal("0.4")),
+    )
+
+    assert [finding.type for finding in report.top_risks] == [
+        "THEME_CONCENTRATION",
+        "CORRELATION_CLUSTER",
+        "POSITION_CONCENTRATION",
+    ]
+    assert report.top_risks[0].severity == "HIGH"
 
 
 def test_cash_only_snapshot_reports_explicit_data_availability_findings_not_a_crash():

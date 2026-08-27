@@ -108,20 +108,28 @@ def test_unqualified_or_ambiguous_security_identity_fails_closed(position):
         analyze_risk(replace(source, positions=(position, *source.positions[1:])))
 
 
-def test_duplicate_holding_pnl_does_not_enter_current_structure_findings_before_phase_5():
+def test_duplicate_holding_pnl_is_aggregated_before_concentration():
     source = snapshot()
-    first = replace(source.positions[0], unrealized_pl_base=Decimal("40"))
+    first = replace(
+        source.positions[0], unrealized_pl_base=Decimal("40"), realized_pl_base=Decimal("0")
+    )
     duplicate = replace(
         first,
         account_ref="acct-other",
         weight=Decimal("0.1"),
         market_value_base=Decimal("100"),
         unrealized_pl_base=Decimal("50"),
+        realized_pl_base=Decimal("0"),
     )
-    other = replace(source.positions[1], unrealized_pl_base=Decimal("10"))
+    other = replace(
+        source.positions[1], unrealized_pl_base=Decimal("10"), realized_pl_base=Decimal("0")
+    )
     report = analyze_risk(replace(source, positions=(first, duplicate, other)))
 
-    assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
+    finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
+    assert finding.evidence["profit_total_base"] == Decimal("100")
+    assert finding.evidence["largest_profit_share"] == Decimal("0.9")
+    assert finding.affected_positions == ("US.AAA",)
 
 
 @pytest.mark.parametrize(
