@@ -108,6 +108,36 @@ def test_fx_future_and_stale_evidence_fail_before_valuation(effective_at, messag
         _snapshot(_builder(effective_at=effective_at))
 
 
+@pytest.mark.parametrize(
+    "unused_effective_at", [AS_OF - timedelta(days=30), AS_OF + timedelta(days=30)]
+)
+def test_usd_only_snapshot_ignores_and_omits_unused_stale_or_future_hkd_rate(
+    unused_effective_at,
+):
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=StaticCurrencyConverter(
+            {("HKD", "USD"): Decimal("0.125")},
+            source="UNUSED_RATE",
+            effective_at=unused_effective_at,
+        ),
+        classifications=ClassificationMapper({}),
+    )
+    snapshot = builder.build(
+        accounts=(Account("acct-private", "REAL", "MARGIN", "NORMAL", ("US",), "ACTIVE"),),
+        cash_balances=(CashBalance("acct-private", "USD", Decimal("100")),),
+        positions=(),
+        as_of=AS_OF,
+        trd_env="REAL",
+        source_version="v1",
+        data_quality=DataQuality("COMPLETE"),
+    )
+
+    assert [(item.source_currency, item.source) for item in snapshot.fx_evidence] == [
+        ("USD", "BASE_CURRENCY_IDENTITY")
+    ]
+
+
 def test_explicit_96_hour_policy_intentionally_accepts_weekend_gap():
     friday = datetime(2026, 8, 28, 21, tzinfo=timezone.utc)
     monday = friday + timedelta(hours=72)

@@ -8,7 +8,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
 
-from .normalization import canonical_unknown
+from .normalization import canonical_currency_provenance, canonical_unknown
 
 
 QUALITY_STATES = frozenset(
@@ -59,6 +59,7 @@ class Account:
     status: str
     context_type: str = "SEC"
     security_firm: str = "UNKNOWN"
+    alias_provenance: str = "STABLE"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "markets", tuple(self.markets))
@@ -102,6 +103,11 @@ class Position:
         object.__setattr__(
             self, "security_type", canonical_unknown(self.security_type, uppercase=True)
         )
+        object.__setattr__(
+            self,
+            "currency_provenance",
+            canonical_currency_provenance(self.currency_provenance),
+        )
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
 
@@ -137,6 +143,11 @@ class NormalizedPosition:
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "security_type", canonical_unknown(self.security_type, uppercase=True)
+        )
+        object.__setattr__(
+            self,
+            "currency_provenance",
+            canonical_currency_provenance(self.currency_provenance),
         )
         object.__setattr__(self, "themes", tuple(self.themes))
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))

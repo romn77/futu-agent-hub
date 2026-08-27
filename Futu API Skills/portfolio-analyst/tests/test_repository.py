@@ -97,6 +97,7 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
         ("USD", 50),
     }
     assert result.positions[0].currency is None
+    assert result.positions[0].currency_provenance == "UNKNOWN"
     assert result.positions[0].security_type == "UNKNOWN"
     assert result.positions[0].realized_pl_local == 25
     assert result.data_quality.status == "COMPLETE"
@@ -104,6 +105,7 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
         "accounts_returned": 2,
         "accounts_returned_read": 2,
         "discovery_status": "COMPLETE",
+        "alias_provenance": "STABLE",
     }
     serialized = json.dumps(result, default=str)
     assert all(account_id not in serialized for account_id in ACCOUNT_IDS)

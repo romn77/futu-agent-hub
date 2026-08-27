@@ -271,6 +271,108 @@ def test_builder_refuses_currency_without_auditable_provenance():
         )
 
 
+@pytest.mark.parametrize(
+    "provenance", ["", " ", "unknown", "N/A", "none", "NULL", "unsupported source"]
+)
+def test_position_currency_provenance_sentinels_and_unsupported_values_block(provenance):
+    position = Position(
+        account_ref="acct-0001",
+        code="US.AAPL",
+        name="Unproven",
+        security_type="STOCK",
+        currency="USD",
+        currency_provenance=provenance,
+        quantity=Decimal("1"),
+        can_sell_quantity=Decimal("1"),
+        average_cost_local=Decimal("10"),
+        last_price_local=Decimal("10"),
+        market_value_local=Decimal("10"),
+        unrealized_pl_local=None,
+        realized_pl_local=None,
+    )
+    assert position.currency_provenance == "UNKNOWN"
+
+    with pytest.raises(UnsafeAggregationError, match="currency provenance unavailable"):
+        PortfolioBuilder(
+            base_currency="USD",
+            converter=_converter({}),
+            classifications=ClassificationMapper({}),
+        ).build(
+            accounts=(_account(),),
+            cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+            positions=(position,),
+            as_of=FX_EFFECTIVE_AT,
+            trd_env="REAL",
+            source_version="fixture-v1",
+            data_quality=_quality(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (" audited_source ", "AUDITED_SOURCE"),
+        ("Audited Source", "AUDITED_SOURCE"),
+        (" user_config ", "USER_CONFIG"),
+        ("User Config", "USER_CONFIG"),
+    ],
+)
+def test_allowed_currency_provenance_is_canonicalized(raw, expected):
+    position = Position(
+        "acct-0001",
+        "US.AAPL",
+        "Example",
+        "STOCK",
+        "USD",
+        raw,
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        None,
+        None,
+    )
+    assert position.currency_provenance == expected
+
+
+@pytest.mark.parametrize("provenance", ["", " ", "unknown", "N/A", "none", "NULL", "unsupported"])
+def test_direct_security_metadata_currency_provenance_is_canonical_unknown(provenance):
+    metadata = SecurityMetadata(currency="USD", security_type="STOCK", provenance=provenance)
+    assert metadata.provenance == "UNKNOWN"
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=_converter({}),
+        classifications=ClassificationMapper({}),
+        security_metadata=SecurityMetadataMapper({"US.AAPL": metadata}),
+    )
+    position = Position(
+        "acct-0001",
+        "US.AAPL",
+        "Example",
+        "STOCK",
+        "USD",
+        "AUDITED_SOURCE",
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        None,
+        None,
+    )
+    with pytest.raises(UnsafeAggregationError, match="currency provenance unavailable"):
+        builder.build(
+            accounts=(_account(),),
+            cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+            positions=(position,),
+            as_of=FX_EFFECTIVE_AT,
+            trd_env="REAL",
+            source_version="fixture-v1",
+            data_quality=_quality(),
+        )
+
+
 def test_exact_security_metadata_uses_audited_source_code_before_market_normalization():
     builder = PortfolioBuilder(
         base_currency="USD",

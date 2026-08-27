@@ -116,12 +116,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 destination.write_text(rendered + "\n", encoding="utf-8")
             return 0 if report["ok"] else 1
 
+        should_save = not args.no_save and (args.save or args.output is not None)
         snapshot = generate_snapshot(
-            settings, trd_env=args.trd_env, base_currency=args.base_currency
+            settings,
+            trd_env=args.trd_env,
+            base_currency=args.base_currency,
+            persist_aliases=should_save,
         )
         payload = snapshot.to_dict()
         rendered = json.dumps(payload, ensure_ascii=False, indent=2)
-        should_save = not args.no_save and (args.save or args.output is not None)
         if should_save:
             relative_path = args.output or f"snapshots/{snapshot.snapshot_id}.json"
             destination = SnapshotStore(settings.data_home).save(relative_path, rendered + "\n")

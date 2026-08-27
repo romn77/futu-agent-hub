@@ -131,6 +131,7 @@ class FutuPortfolioRepository:
                         status=str(raw.get("acc_status", "UNKNOWN")) or "UNKNOWN",
                         context_type="SEC",
                         security_firm=firm or "UNKNOWN",
+                        alias_provenance=self.aliaser.provenance,
                     ),
                     query_market=query_market,
                     security_firm=firm,
@@ -205,6 +206,11 @@ class FutuPortfolioRepository:
             warnings = (
                 "account discovery is UNVERIFIED because the audited source suppresses context errors",
             )
+        if self.aliaser.provenance == "EPHEMERAL":
+            warnings = (
+                *warnings,
+                "account aliases are EPHEMERAL for this non-persisting invocation",
+            )
         return PortfolioInputs(
             accounts=tuple(account.public for account in selected),
             cash_balances=tuple(cash_balances),
@@ -217,6 +223,7 @@ class FutuPortfolioRepository:
                     "accounts_returned": expected,
                     "accounts_returned_read": accounts_read,
                     "discovery_status": "COMPLETE" if self.discovery_complete else "UNVERIFIED",
+                    "alias_provenance": self.aliaser.provenance,
                 },
             ),
             source_version=_source_version(),

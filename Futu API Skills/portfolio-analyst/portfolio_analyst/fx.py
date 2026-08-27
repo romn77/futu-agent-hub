@@ -61,7 +61,6 @@ class StaticCurrencyConverter:
             )
 
     def quote(self, source: str, target: str, as_of: datetime) -> FxRateEvidence | None:
-        self.validate(as_of)
         source = source.upper()
         target = target.upper()
         if source == target:
@@ -72,6 +71,7 @@ class StaticCurrencyConverter:
                 source="BASE_CURRENCY_IDENTITY",
                 effective_at=as_of,
             )
+        self.validate(as_of)
         rate = self._rates.get((source, target))
         if rate is None:
             return None

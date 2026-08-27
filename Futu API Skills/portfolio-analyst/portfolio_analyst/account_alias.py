@@ -16,14 +16,21 @@ class AccountAliasError(ValueError):
 
 
 class AccountAliaser:
-    def __init__(self, key: bytes) -> None:
+    def __init__(self, key: bytes, *, provenance: str = "STABLE") -> None:
         if len(key) < 32:
             raise AccountAliasError("account alias key must contain at least 32 bytes")
+        if provenance not in {"STABLE", "EPHEMERAL"}:
+            raise AccountAliasError("unsupported account alias provenance")
         self._key = bytes(key)
+        self.provenance = provenance
 
     @classmethod
     def from_key(cls, key: bytes) -> "AccountAliaser":
-        return cls(key)
+        return cls(key, provenance="STABLE")
+
+    @classmethod
+    def ephemeral(cls) -> "AccountAliaser":
+        return cls(secrets.token_bytes(32), provenance="EPHEMERAL")
 
     def alias(self, account_id: str) -> str:
         digest = hmac.new(
@@ -66,7 +73,7 @@ class AccountAliasStore:
                 os.close(config_fd)
         finally:
             os.close(root_fd)
-        return AccountAliaser(key)
+        return AccountAliaser(key, provenance="STABLE")
 
     @staticmethod
     def _config_anchor_matches(root_fd: int, anchored_fd: int, flags: int) -> bool:
@@ -149,7 +156,7 @@ class AccountAliasStore:
                 os.fsync(handle.fileno())
         if self._is_reparse(path) or not path.is_file():
             raise AccountAliasError("account alias key must be a regular file")
-        return AccountAliaser(path.read_bytes())
+        return AccountAliaser(path.read_bytes(), provenance="STABLE")
 
     @staticmethod
     def _is_reparse(path: Path) -> bool:

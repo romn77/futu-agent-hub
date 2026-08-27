@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .normalization import canonical_unknown
+from .normalization import canonical_currency_provenance, canonical_unknown
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class SecurityMetadata:
         object.__setattr__(
             self, "security_type", canonical_unknown(self.security_type, uppercase=True)
         )
+        object.__setattr__(self, "provenance", canonical_currency_provenance(self.provenance))
 
 
 class SecurityMetadataMapper:

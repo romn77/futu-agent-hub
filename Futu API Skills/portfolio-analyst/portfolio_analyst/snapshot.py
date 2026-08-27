@@ -19,7 +19,7 @@ from .models import (
     PortfolioSnapshot,
     Position,
 )
-from .normalization import is_unknown_sentinel
+from .normalization import is_known_currency_provenance, is_unknown_sentinel
 from .quality import compose_quality
 from .security_metadata import SecurityMetadataMapper
 
@@ -97,10 +97,6 @@ class PortfolioBuilder:
     ) -> PortfolioSnapshot:
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("as_of must be timezone-aware")
-        try:
-            self.converter.validate(as_of)
-        except FxEvidenceError as exc:
-            raise UnsafeAggregationError(str(exc)) from exc
         accounts_tuple = tuple(accounts)
         cash_input = tuple(cash_balances)
         position_input = tuple(positions)
@@ -150,7 +146,7 @@ class PortfolioBuilder:
                 if metadata and metadata.currency
                 else position.currency_provenance
             )
-            if currency_provenance in {"", "UNKNOWN", "UNAVAILABLE"}:
+            if not is_known_currency_provenance(currency_provenance):
                 raise UnsafeAggregationError(
                     f"currency provenance unavailable for security {normalized_code}"
                 )

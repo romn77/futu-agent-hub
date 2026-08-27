@@ -6,17 +6,22 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .classification import Classification, ClassificationMapper
 from .futu_adapter import FutuAdapter
 from .fx import FxEvidenceError, StaticCurrencyConverter
 from .models import PortfolioSnapshot
-from .normalization import canonical_unknown, is_unknown_sentinel
+from .normalization import (
+    canonical_currency_provenance,
+    canonical_unknown,
+    is_unknown_sentinel,
+)
 from .repository import FutuPortfolioRepository, PrivateJsonReader, SourceDataError
 from .schema import validate_snapshot_document
 from .security_metadata import SecurityMetadata, SecurityMetadataMapper
+from .secure_config import PrivateConfigError, load_private_json_object
 from .settings import Settings, discover_futuapi_skill
 from .snapshot import PortfolioBuilder
 
@@ -108,7 +113,7 @@ def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
     if not path.exists():
         return SecurityMetadataMapper({})
     payload = _load_json_object(path)
-    if payload.get("provenance") != "USER_CONFIG":
+    if canonical_currency_provenance(payload.get("provenance")) != "USER_CONFIG":
         raise ConfigError("security_metadata.json provenance must be USER_CONFIG")
     raw_securities = payload.get("securities")
     if not isinstance(raw_securities, dict):
@@ -130,9 +135,11 @@ def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
 
 
 def load_account_currencies(data_home: Path) -> dict[str, str]:
-    path = data_home / "config" / "account_currencies.json"
-    payload = _load_json_object(path)
-    if payload.get("provenance") != "USER_CONFIG":
+    try:
+        payload = load_private_json_object(data_home, "account_currencies.json")
+    except PrivateConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+    if canonical_currency_provenance(payload.get("provenance")) != "USER_CONFIG":
         raise ConfigError("account_currencies.json provenance must be USER_CONFIG")
     raw_accounts = payload.get("accounts")
     if not isinstance(raw_accounts, dict):
@@ -159,6 +166,8 @@ def generate_snapshot(
     as_of: datetime | None = None,
     aliaser: AccountAliaser | None = None,
     discovery_complete: bool = False,
+    persist_aliases: bool = False,
+    account_currency_loader: Callable[[Path], Mapping[str, str]] | None = None,
 ) -> PortfolioSnapshot:
     reader = adapter
     if reader is None:
@@ -166,9 +175,15 @@ def generate_snapshot(
         if skill_dir is None:
             raise ConfigError("audited-compatible futuapi Skill is unavailable")
         reader = FutuAdapter(skill_dir)
-    account_currencies = load_account_currencies(settings.data_home)
+    account_currencies = dict(
+        (account_currency_loader or load_account_currencies)(settings.data_home)
+    )
     try:
-        private_aliaser = aliaser or AccountAliasStore(settings.data_home).load_or_create()
+        private_aliaser = aliaser or (
+            AccountAliasStore(settings.data_home).load_or_create()
+            if persist_aliases
+            else AccountAliaser.ephemeral()
+        )
     except AccountAliasError as exc:
         raise ConfigError(str(exc)) from exc
     inputs = FutuPortfolioRepository(

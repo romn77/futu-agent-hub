@@ -1,17 +1,27 @@
 import json
+import os
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from portfolio_analyst import cli
+from portfolio_analyst import cli, service as snapshot_service
 from portfolio_analyst.account_alias import AccountAliaser
+from portfolio_analyst.classification import Classification, ClassificationMapper
+from portfolio_analyst.fx import StaticCurrencyConverter
 from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
 from portfolio_analyst.repository import FutuPortfolioRepository, SourceDataError
-from portfolio_analyst.service import ConfigError, generate_snapshot, load_currency_converter
+from portfolio_analyst.service import (
+    ConfigError,
+    generate_snapshot,
+    load_account_currencies,
+    load_currency_converter,
+)
 from portfolio_analyst.settings import Settings
+from portfolio_analyst.security_metadata import SecurityMetadata, SecurityMetadataMapper
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -40,7 +50,106 @@ def _configured_home(tmp_path):
     shutil.copy2(FIXTURES / "classifications.json", config / "classifications.json")
     shutil.copy2(FIXTURES / "security_metadata.json", config / "security_metadata.json")
     shutil.copy2(FIXTURES / "account_currencies.json", config / "account_currencies.json")
+    config.chmod(0o700)
+    (config / "account_currencies.json").chmod(0o600)
     return home
+
+
+def _private_account_config(tmp_path):
+    home = tmp_path / "private-config"
+    config = home / "config"
+    config.mkdir(parents=True, mode=0o700)
+    config.chmod(0o700)
+    path = config / "account_currencies.json"
+    path.write_text(
+        json.dumps({"provenance": "USER_CONFIG", "accounts": {"90000001": "USD"}}),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return home, config, path
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-config permission contract")
+def test_private_account_currency_config_requires_anchored_0700_and_0600(tmp_path):
+    home, config, path = _private_account_config(tmp_path)
+    assert load_account_currencies(home) == {"90000001": "USD"}
+
+    path.chmod(0o640)
+    with pytest.raises(ConfigError, match="0600"):
+        load_account_currencies(home)
+    path.chmod(0o600)
+    config.chmod(0o750)
+    with pytest.raises(ConfigError, match="0700"):
+        load_account_currencies(home)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-config CLI contract")
+def test_insecure_private_account_config_is_structured_cli_config_error(
+    monkeypatch, tmp_path, capsys
+):
+    home, _config, path = _private_account_config(tmp_path)
+    path.chmod(0o644)
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        cli,
+        "generate_snapshot",
+        lambda settings, **_kwargs: load_account_currencies(settings.data_home),
+    )
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "CONFIG_ERROR"
+    assert "90000001" not in json.dumps(payload)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-config no-follow contract")
+def test_private_account_currency_config_refuses_symlinks_without_leaking_ids(tmp_path):
+    home, _config, path = _private_account_config(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    outside.chmod(0o600)
+    path.unlink()
+    path.symlink_to(outside)
+
+    with pytest.raises(ConfigError) as caught:
+        load_account_currencies(home)
+    assert "90000001" not in str(caught.value)
+
+
+@pytest.mark.parametrize("swap_target", ["file", "directory"])
+@pytest.mark.skipif(os.name != "posix", reason="POSIX anchored swap contract")
+def test_private_account_currency_config_detects_concurrent_swaps(
+    tmp_path, monkeypatch, swap_target
+):
+    from portfolio_analyst import secure_config
+
+    home, config, path = _private_account_config(tmp_path)
+    original_read = secure_config.os.read
+    swapped = False
+
+    def read_then_swap(fd, size):
+        nonlocal swapped
+        chunk = original_read(fd, size)
+        if chunk and not swapped:
+            swapped = True
+            if swap_target == "file":
+                path.rename(config / "old.json")
+                path.write_bytes(chunk)
+                path.chmod(0o600)
+            else:
+                moved = home / "moved-config"
+                config.rename(moved)
+                outside = tmp_path / "outside-config"
+                outside.mkdir(mode=0o700)
+                (outside / path.name).write_bytes(chunk)
+                (outside / path.name).chmod(0o600)
+                config.symlink_to(outside, target_is_directory=True)
+        return chunk
+
+    monkeypatch.setattr(secure_config.os, "read", read_then_swap)
+    with pytest.raises(ConfigError, match="changed") as caught:
+        load_account_currencies(home)
+    assert "90000001" not in str(caught.value)
 
 
 def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
@@ -64,6 +173,7 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
         "accounts_returned": 2,
         "accounts_returned_read": 2,
         "discovery_status": "COMPLETE",
+        "alias_provenance": "STABLE",
     }
     assert snapshot.positions[1].currency == "HKD"
     assert snapshot.positions[1].currency_provenance == "USER_CONFIG"
@@ -83,6 +193,31 @@ def test_snapshot_with_production_discovery_contract_never_overclaims_complete(t
 
     assert snapshot.data_quality.status == "PARTIAL"
     assert snapshot.data_quality.coverage["discovery_status"] == "UNVERIFIED"
+
+
+def test_persisting_snapshot_creates_and_reuses_stable_private_alias_key(tmp_path):
+    home = _configured_home(tmp_path)
+    first = generate_snapshot(
+        Settings(data_home=home),
+        adapter=FixtureAdapter(),
+        discovery_complete=True,
+        persist_aliases=True,
+        as_of=datetime(2026, 8, 27, 10, tzinfo=timezone.utc),
+    )
+    second = generate_snapshot(
+        Settings(data_home=home),
+        adapter=FixtureAdapter(),
+        discovery_complete=True,
+        persist_aliases=True,
+        as_of=datetime(2026, 8, 27, 10, tzinfo=timezone.utc),
+    )
+
+    key = home / "config" / "account_alias.key"
+    assert key.is_file()
+    assert [account.account_ref for account in first.accounts] == [
+        account.account_ref for account in second.accounts
+    ]
+    assert {account.alias_provenance for account in first.accounts} == {"STABLE"}
 
 
 def test_service_stops_when_no_discovered_account_portfolio_was_read(tmp_path):
@@ -206,6 +341,79 @@ def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
     assert exit_code == 0
     assert payload["schema_version"] == "1.0"
     assert not (home / "snapshots").exists()
+
+
+@pytest.mark.parametrize("argv", [["snapshot", "--json"], ["snapshot", "--json", "--no-save"]])
+def test_first_successful_nonpersisting_snapshot_creates_no_filesystem_state(
+    monkeypatch, tmp_path, capsys, argv
+):
+    home = tmp_path / "never-created"
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        snapshot_service,
+        "load_currency_converter",
+        lambda _home: StaticCurrencyConverter(
+            {("HKD", "USD"): Decimal("0.125")},
+            source="TEST",
+            effective_at=datetime(2026, 8, 27, tzinfo=timezone.utc),
+        ),
+    )
+    classifications = {
+        "US.AAPL": Classification("TECH", "HARDWARE", "US", ("LARGE",), "EQUITY"),
+        "HK.00700": Classification("TECH", "INTERNET", "CN", ("LARGE",), "EQUITY"),
+        "US.MSFT": Classification("TECH", "SOFTWARE", "US", ("LARGE",), "EQUITY"),
+    }
+    metadata = {
+        "US.AAPL": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+        "HK.00700": SecurityMetadata("HKD", "STOCK", "USER_CONFIG"),
+        "US.MSFT": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+    }
+    monkeypatch.setattr(
+        snapshot_service,
+        "load_classifications",
+        lambda _home: ClassificationMapper(classifications),
+    )
+    monkeypatch.setattr(
+        snapshot_service,
+        "load_security_metadata",
+        lambda _home: SecurityMetadataMapper(metadata),
+    )
+
+    def ephemeral_snapshot(settings, **kwargs):
+        return snapshot_service.generate_snapshot(
+            settings,
+            adapter=FixtureAdapter(),
+            discovery_complete=True,
+            as_of=datetime(2026, 8, 27, 10, tzinfo=timezone.utc),
+            account_currency_loader=lambda _home: {
+                "90000001": "USD",
+                "90000002": "USD",
+            },
+            **kwargs,
+        )
+
+    monkeypatch.setattr(cli, "generate_snapshot", ephemeral_snapshot)
+
+    assert cli.main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert not home.exists()
+    assert {account["alias_provenance"] for account in payload["accounts"]} == {"EPHEMERAL"}
+    assert payload["data_quality"]["coverage"]["alias_provenance"] == "EPHEMERAL"
+    assert any("EPHEMERAL" in item for item in payload["data_quality"]["warnings"])
+
+
+def test_cli_threads_saved_intent_before_alias_creation(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(tmp_path / "private"))
+    observed = {}
+
+    def stop_after_intent(_settings, **kwargs):
+        observed["persist_aliases"] = kwargs["persist_aliases"]
+        raise ConfigError("expected stop")
+
+    monkeypatch.setattr(cli, "generate_snapshot", stop_after_intent)
+    assert cli.main(["snapshot", "--json", "--save"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "CONFIG_ERROR"
+    assert observed["persist_aliases"] is True
 
 
 def test_snapshot_cli_save_uses_immutable_default_name(monkeypatch, tmp_path, capsys):

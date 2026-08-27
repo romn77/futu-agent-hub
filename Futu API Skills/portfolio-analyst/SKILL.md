@@ -65,10 +65,17 @@ inference, and supports Canadian accounts configured as either USD or CAD:
 }
 ```
 
+Because this file contains raw account IDs, `config` must be a real private directory with mode
+`0700` and `account_currencies.json` must be a regular, non-symlink file with mode `0600`. Reads use
+anchored no-follow descriptors and reject concurrent path replacement.
+
 Raw account IDs remain private. Public snapshots use installation-private HMAC aliases backed by a
-0600 key created atomically below the data home. Because the audited account-list command suppresses
-individual context discovery failures, normal production snapshots mark discovery `UNVERIFIED` and
-cannot claim `COMPLETE` merely because every returned account was read.
+0600 key created atomically below the data home when the snapshot is saved. Default and explicit
+`--no-save` runs create no alias key or other filesystem state; they use invocation-only aliases and
+mark `alias_provenance` as `EPHEMERAL` with a quality warning. `--save` or `--output` uses stable
+installation aliases marked `STABLE`. Because the audited account-list command suppresses individual
+context discovery failures, normal production snapshots mark discovery `UNVERIFIED` and cannot claim
+`COMPLETE` merely because every returned account was read.
 
 The audited portfolio response does not contain per-position currency. Provide exact-code facts in
 `config/security_metadata.json`; a market prefix is never treated as currency evidence:
