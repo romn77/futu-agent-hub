@@ -371,7 +371,10 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         }.items()
         if check_name in checks
     }
-    missing_candidates = policy_candidate_types - finding_types
+    required_candidate_types = set(policy_candidate_types)
+    if coverage["positions"]:
+        required_candidate_types.add("REGION_CONCENTRATION")
+    missing_candidates = required_candidate_types - finding_types
     candidate_priority = {
         "POSITION_CONCENTRATION": 1,
         "REGION_CONCENTRATION": 2,
@@ -393,13 +396,21 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
 
         def omitted_rank(candidate_type: str) -> tuple[int, int, str]:
             relevant = tuple(name for name in candidate_checks[candidate_type] if name in checks)
-            severity = "HIGH" if any(checks[name]["breached"] for name in relevant) else "LOW"
+            severity = (
+                "HIGH"
+                if any(checks[name]["breached"] for name in relevant)
+                else "LOW"
+                if relevant
+                else "UNRATED"
+            )
             return severity_order[severity], candidate_priority[candidate_type], candidate_type
 
-        if any(omitted_rank(item) < worst_reported for item in missing_candidates):
-            raise ReportSemanticError(
-                "policy candidate was omitted in favor of a lower-ranked finding"
+        displaced = {item for item in missing_candidates if omitted_rank(item) < worst_reported}
+        if displaced:
+            subject = (
+                "region candidate" if "REGION_CONCENTRATION" in displaced else "policy candidate"
             )
+            raise ReportSemanticError(f"{subject} was omitted in favor of a lower-ranked finding")
 
 
 def validate_risk_document(payload: dict[str, Any]) -> None:

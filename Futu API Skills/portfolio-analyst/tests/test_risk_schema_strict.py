@@ -174,6 +174,45 @@ def test_runtime_validation_rejects_rated_finding_without_matching_policy_check(
         validate_risk_document(payload)
 
 
+def test_runtime_validation_rejects_region_policy_flag_without_policy():
+    payload = _risk()
+    region = next(
+        finding for finding in payload["top_risks"] if finding["type"] == "REGION_CONCENTRATION"
+    )
+    region["evidence"]["policy_threshold_applied"] = True
+
+    with pytest.raises(ValueError, match="policy evidence flag"):
+        validate_risk_document(payload)
+
+
+def test_runtime_validation_rejects_unrated_region_omitted_for_lower_ranked_theme():
+    payload = _risk()
+    payload["top_risks"][1] = {
+        "type": "THEME_CONCENTRATION",
+        "severity": "UNRATED",
+        "summary": "Theme is a lower-priority observation.",
+        "evidence": {
+            "view": "ADDITIVE_SPLIT_ALLOCATION",
+            "theme": "AI",
+            "weight": "0.5",
+            "policy_threshold_applied": False,
+        },
+        "affected_positions": ["US.AAA", "US.BBB"],
+        "review_priority": "P3",
+        "simulation_direction": None,
+    }
+    payload["top_risks"] = sorted(
+        payload["top_risks"],
+        key=lambda finding: (
+            {"P0": 0, "P1": 1, "P2": 2, "P3": 3}[finding["review_priority"]],
+            finding["type"],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="region candidate"):
+        validate_risk_document(payload)
+
+
 def test_runtime_validation_rejects_breached_policy_candidate_omitted_for_unrated_finding():
     source = snapshot()
     positions = tuple(replace(position, position_role="OFFENSIVE") for position in source.positions)
@@ -196,10 +235,10 @@ def test_runtime_validation_rejects_nonbreaching_policy_candidate_omitted_for_un
     source = snapshot()
     positions = tuple(replace(position, position_role="OFFENSIVE") for position in source.positions)
     payload = analyze_risk(replace(source, positions=positions)).to_dict()
-    assert "REGION_CONCENTRATION" not in {finding["type"] for finding in payload["top_risks"]}
+    assert "THEME_CONCENTRATION" not in {finding["type"] for finding in payload["top_risks"]}
     payload["policy_status"] = "CONFIGURED"
     payload["policy_checks"] = {
-        "region": {"measured": "0.7", "threshold": "0.8", "breached": False}
+        "theme_split": {"measured": "0.5", "threshold": "0.8", "breached": False}
     }
 
     with pytest.raises(ValueError, match="policy candidate"):

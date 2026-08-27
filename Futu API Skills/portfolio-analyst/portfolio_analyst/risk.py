@@ -825,26 +825,31 @@ def _findings(
             "Hypothetical only: simulate lower exposure to the largest sector and recompute views.",
         )
     )
-    if "region" in policy_checks:
-        region, region_weight = max(exposures.region.items(), key=lambda item: (item[1], item[0]))
-        findings.append(
-            RiskFinding(
-                "REGION_CONCENTRATION",
-                "HIGH" if policy_checks["region"]["breached"] else "LOW",
-                f"{region} is the largest deterministic region exposure.",
-                MappingProxyType(
-                    {
-                        "basis": "NAV",
-                        "region": region,
-                        "weight": region_weight,
-                        "policy_threshold_applied": True,
-                    }
-                ),
-                tuple(position.identity for position in positions if position.region == region),
-                "P2",
-                "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
-            )
+    region, region_weight = max(exposures.region.items(), key=lambda item: (item[1], item[0]))
+    findings.append(
+        RiskFinding(
+            "REGION_CONCENTRATION",
+            (
+                "HIGH"
+                if policy_checks.get("region", {}).get("breached")
+                else "LOW"
+                if "region" in policy_checks
+                else "UNRATED"
+            ),
+            f"{region} is the largest deterministic region exposure.",
+            MappingProxyType(
+                {
+                    "basis": "NAV",
+                    "region": region,
+                    "weight": region_weight,
+                    "policy_threshold_applied": "region" in policy_checks,
+                }
+            ),
+            tuple(position.identity for position in positions if position.region == region),
+            "P2",
+            "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
         )
+    )
     if pnl_evidence_status == "COMPLETE":
         pnl_values = {
             position.identity: position.unrealized_pl_base + position.realized_pl_base

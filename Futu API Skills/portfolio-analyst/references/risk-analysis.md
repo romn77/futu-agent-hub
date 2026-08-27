@@ -123,6 +123,8 @@ to LOW/MEDIUM advice. Policy-backed findings are rated strictly from serialized 
 breach booleans, then sorted by severity, review priority, stable type, and identity.
 Position, sector, region, theme, P&L, role, and correlation candidates are generated independently
 before this single Top-3 sort; configuring a role cannot suppress a correlation or theme candidate.
+Every nonempty portfolio generates a region candidate: it is `UNRATED` without a region policy and
+`LOW`/`HIGH` from a configured non-breach/breach, with the evidence flag matching that provenance.
 Runtime semantic validation rejects a breached policy candidate omitted in favor of a lower-ranked
 finding. When more than three breached dimensions exist, the same deterministic rank selects the
 three highest-priority candidates while every breach remains explicit in `policy_checks`.

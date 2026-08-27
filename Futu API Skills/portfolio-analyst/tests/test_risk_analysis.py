@@ -154,6 +154,20 @@ def test_risk_metrics_keep_theme_overlap_and_additive_views_separate():
     validate_risk_document(payload)
 
 
+def test_unconfigured_region_candidate_is_unrated_and_stably_sorted_in_top_three():
+    report = analyze_risk(snapshot())
+
+    assert [finding.type for finding in report.top_risks] == [
+        "POSITION_CONCENTRATION",
+        "REGION_CONCENTRATION",
+        "SECTOR_CONCENTRATION",
+    ]
+    region = report.top_risks[1]
+    assert region.severity == "UNRATED"
+    assert region.evidence["policy_threshold_applied"] is False
+    validate_risk_document(report.to_dict())
+
+
 def test_sanitized_risk_golden_snippet_is_deterministic():
     payload = analyze_risk(snapshot()).to_dict()
     actual = {
@@ -415,7 +429,7 @@ def test_nonfinite_pnl_evidence_is_partial_not_serialized_as_a_finding():
     assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
 
 
-def test_role_imbalance_is_absent_until_roles_are_configured_then_uses_nav_exposure():
+def test_lower_priority_role_candidate_does_not_displace_stable_top_three():
     source = snapshot()
     assert "ROLE_IMBALANCE" not in {item.type for item in analyze_risk(source).top_risks}
     positions = tuple(
@@ -424,11 +438,11 @@ def test_role_imbalance_is_absent_until_roles_are_configured_then_uses_nav_expos
     )
     report = analyze_risk(replace(source, positions=positions))
 
-    finding = next(item for item in report.top_risks if item.type == "ROLE_IMBALANCE")
-    assert finding.evidence["roles"] == {
-        "DEFENSIVE": Decimal("0.2"),
-        "OFFENSIVE": Decimal("0.7"),
-    }
+    assert [item.type for item in report.top_risks] == [
+        "POSITION_CONCENTRATION",
+        "REGION_CONCENTRATION",
+        "SECTOR_CONCENTRATION",
+    ]
 
 
 def test_role_correlation_and_theme_candidates_are_independent_before_top_three_selection():
