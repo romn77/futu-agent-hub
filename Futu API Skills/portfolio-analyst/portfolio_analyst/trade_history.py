@@ -137,18 +137,9 @@ class FutuTradeHistoryService:
         orders: list[dict[str, Any]] = []
         deals: list[dict[str, Any]] = []
         rows_seen_total = 0
-        notes: list[str] = (
-            [
-                "historical order rows are capped at 200 per account/context; source completeness is unverified"
-            ]
-            if selected
-            else []
-        )
-        if portfolio_snapshot is not None:
-            notes.append(
-                "turnover uses one explicitly selected snapshot NAV rather than average period NAV"
-            )
-        elif portfolio_nav is not None or source_snapshot_id is not None:
+        if portfolio_snapshot is None and (
+            portfolio_nav is not None or source_snapshot_id is not None
+        ):
             raise TradeReviewInputError(
                 "base monetary analysis requires the complete immutable source snapshot"
             )
@@ -166,7 +157,6 @@ class FutuTradeHistoryService:
         for index, (account_id, market, firm, alias) in enumerate(selected_contexts):
             remaining = deadline - time.monotonic()
             if remaining <= 0 or consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
-                notes.append("history-read work budget stopped remaining account contexts")
                 omitted_contexts.extend(requested_contexts[index:])
                 break
             common = [
@@ -285,16 +275,12 @@ class FutuTradeHistoryService:
                         "reason": reason,
                     }
                 )
-                notes.append(f"history read failed for masked account {alias} ({reason})")
-        if not selected:
-            notes.append(f"no {environment} securities accounts were available")
         return build_trade_review(
             orders=orders,
             deals=deals,
             start=start,
             end=end,
             policy=policy,
-            source_notes=notes,
             base_currency=portfolio_snapshot.base_currency if portfolio_snapshot else None,
             portfolio_nav_base=portfolio_snapshot.nav_base if portfolio_snapshot else None,
             source_snapshot_id=(portfolio_snapshot.snapshot_id if portfolio_snapshot else None),

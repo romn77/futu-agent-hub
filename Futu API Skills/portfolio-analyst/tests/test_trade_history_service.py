@@ -86,6 +86,10 @@ def test_trade_history_service_is_bounded_multi_account_and_masks_private_ids():
     assert review.metrics.fill_count == 2
     assert len({lot.account_ref for lot in review.open_lots}) == 2
     assert adapter.protected == ("12345", "67890")
+    assert review.external_source_evidence == ()
+    assert "EXTERNAL_SOURCE_NOTE" not in {item["code"] for item in review.quality_issues}
+    assert "externally provided" not in review.to_markdown().lower()
+    assert "externally provided" not in review.to_human().lower()
     assert all(
         "12345" not in str(item) and "67890" not in str(item) for item in review.to_dict().values()
     )
@@ -224,6 +228,10 @@ def test_failed_and_budget_omitted_contexts_are_separate_masked_coverage():
     assert review.coverage["contexts_omitted_budget"] == 1
     assert review.coverage["contexts_read"] == 0
     assert review.coverage["accounts_covered"] == 0
+    assert review.external_source_evidence == ()
+    assert {"CONTEXT_FAILED", "CONTEXT_OMITTED_BUDGET"} <= {
+        item["code"] for item in review.quality_issues
+    }
     assert review.data_quality_status == "UNAVAILABLE"
     assert {item["code"] for item in review.quality_issues} >= {
         "CONTEXT_FAILED",

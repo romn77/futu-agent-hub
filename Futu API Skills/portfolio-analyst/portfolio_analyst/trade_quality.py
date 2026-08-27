@@ -4,10 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import re
+import unicodedata
+
+from .futu_adapter import FutuAdapter
 
 
 MAX_EXTERNAL_SOURCE_NOTES = 20
 MAX_EXTERNAL_SOURCE_NOTE_CHARS = 512
+
+_STANDALONE_SECRET = re.compile(r"(?i)(?:\bbearer\s+\S+|\bsk-[a-z0-9._-]+|\b\d{8,}\b)")
+_LABELLED_CREDENTIAL = re.compile(
+    r"(?ix)\b(?P<label>api[ _-]?key|secret|password|passwd|pwd|"
+    r"(?:(?:access|refresh)[ _-]?)?token|credentials?)\b"
+    r"(?P<separator>\s*(?:[:=]\s*|\s+))(?P<value>\S+)"
+)
 
 
 QUALITY_DETAILS = {
@@ -49,7 +59,18 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
             raise ValueError("too many external source notes")
         if not isinstance(raw, str):
             raise ValueError("source note must be a string")
-        detail = re.sub(r"[\x00-\x1f\x7f]", " ", raw).strip()
+        detail = FutuAdapter.sanitize_output(raw)
+        detail = unicodedata.normalize("NFKC", detail)
+        detail = "".join(
+            " " if unicodedata.category(character) in {"Cc", "Cf", "Cs"} else character
+            for character in detail
+        )
+        detail = _LABELLED_CREDENTIAL.sub(
+            lambda match: f"{match.group('label')}{match.group('separator')}{FutuAdapter.REDACTION}",
+            detail,
+        )
+        detail = _STANDALONE_SECRET.sub(FutuAdapter.REDACTION, detail)
+        detail = " ".join(detail.split())
         if not detail or len(detail) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
             raise ValueError("source note must contain 1 to 512 safe characters")
         if detail in seen:

@@ -382,10 +382,13 @@ class TradeReview:
             ),
             "\n## Unverified interpretations\n",
             *([f"- {safe(item)}" for item in self.unverified_interpretations] or ["- None"]),
-            "\n## External source evidence (externally provided; not independently verified)\n",
             *(
-                [f"- {safe(item['detail'])}" for item in self.external_source_evidence]
-                or ["- None"]
+                [
+                    "\n## External source evidence (externally provided; not independently verified)\n",
+                    *[f"- {safe(item['detail'])}" for item in self.external_source_evidence],
+                ]
+                if self.external_source_evidence
+                else []
             ),
             "\n## Data quality notes\n",
             *([f"- {safe(item)}" for item in self.data_quality_notes] or ["- None"]),
@@ -423,13 +426,16 @@ class TradeReview:
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
                 f"Structured quality issues: {safe(json.dumps(_json_value(self.quality_issues), sort_keys=True))}",
-                "External source evidence (externally provided; not independently verified):",
                 *(
                     [
-                        f"External source note: {safe(item['detail'])}"
-                        for item in self.external_source_evidence
+                        "External source evidence (externally provided; not independently verified):",
+                        *[
+                            f"External source note: {safe(item['detail'])}"
+                            for item in self.external_source_evidence
+                        ],
                     ]
-                    or ["External source note: None"]
+                    if self.external_source_evidence
+                    else []
                 ),
                 f"Policy: {self.policy_status}",
                 f"Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
@@ -1349,61 +1355,6 @@ def build_trade_review(
         external_source_evidence = tuple(canonical_external_source_evidence(source_notes))
     except ValueError as exc:
         raise TradeReviewInputError(str(exc)) from exc
-    notes: tuple[str, ...] = ()
-    if in_progress_markets:
-        notes = (
-            *notes,
-            "requested range includes the current exchange-local date for "
-            + ", ".join(in_progress_markets)
-            + "; the session may be incomplete",
-        )
-    if corporate_action_evidence_status == "UNSUPPORTED_EVIDENCE":
-        notes = (
-            *notes,
-            "corporate-action, transfer, and cost-adjustment evidence is unsupported by the audited upstream fields",
-        )
-    if excluded_events:
-        notes = (
-            *notes,
-            f"{len(excluded_events)} recognized non-trade events were excluded from FIFO and trade metrics",
-        )
-    if not base_complete and normalized:
-        notes = (
-            *notes,
-            "base-currency monetary aggregation is unavailable because fill currency/FX evidence is incomplete",
-        )
-    if trips and not pnl_base_complete:
-        notes = (
-            *notes,
-            "cross-currency historical base P&L is unavailable without transaction-date FX; snapshot FX is current-valuation evidence only",
-        )
-    if trips:
-        notes = (*notes, "realized P&L is gross pre-fee because fee evidence is unavailable")
-    if cooldown is None:
-        notes = (*notes, "reentry metric is UNAVAILABLE because no cooldown policy is configured")
-    if open_count is None:
-        notes = (
-            *notes,
-            "market-open metric is UNAVAILABLE because no open-window policy is configured",
-        )
-    reconciliation_issues = (
-        orders_missing_fills
-        + orphan_fill_orders
-        + order_fill_qty_mismatches
-        + order_status_conflicts
-    )
-    if reconciliation_issues:
-        notes = (*notes, "order/fill reconciliation contains incomplete or conflicting evidence")
-    if unmatched_sells:
-        notes = (
-            *notes,
-            f"{unmatched_sells} sell fills lack evidenced opening inventory in the requested history window; they were excluded from FIFO trip metrics",
-        )
-    if source_unavailable:
-        notes = (
-            *notes,
-            "historical activity metrics are UNAVAILABLE because no requested context completed successfully",
-        )
     status = (
         "BREACH"
         if any(x["status"] == "BREACH" for x in checks)

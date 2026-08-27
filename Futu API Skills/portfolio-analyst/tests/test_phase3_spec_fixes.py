@@ -1298,3 +1298,48 @@ def test_trade_external_source_notes_are_bounded_and_sanitized():
             end=date(2026, 8, 27),
             source_notes=["x" * 513],
         )
+
+
+def test_trade_external_source_evidence_scrubs_secrets_and_unicode_controls_everywhere():
+    raw = "account id: 123456789; token: sk-live-secret\u202eexe.txt"
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+    payload = report.to_dict()
+    rendered = json.dumps(payload, ensure_ascii=False) + report.to_markdown() + report.to_human()
+
+    for sensitive in ("123456789", "sk-live-secret", "\u202e", "exe.txt"):
+        assert sensitive not in rendered
+    assert "[REDACTED]" in payload["external_source_evidence"][0]["detail"]
+    validate_trade_review_document(payload)
+
+    forged = deepcopy(payload)
+    forged["external_source_evidence"][0]["detail"] = raw
+    _rehash_trade(forged)
+    with pytest.raises(Exception):
+        validate_trade_review_document(forged)
+
+
+@pytest.mark.parametrize(
+    ("raw", "secret"),
+    [
+        ("password hunter2", "hunter2"),
+        ("secret private-value", "private-value"),
+        ("api key key-material", "key-material"),
+        ("Bearer bearer-material", "bearer-material"),
+        ("standalone sk-private-material", "sk-private-material"),
+    ],
+)
+def test_trade_external_source_evidence_scrubs_common_credential_forms(raw, secret):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+    assert secret not in json.dumps(report.to_dict())

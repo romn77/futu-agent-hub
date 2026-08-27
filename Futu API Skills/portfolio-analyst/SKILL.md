@@ -180,7 +180,11 @@ the eight finding types. This admits the documented 10,000-symbol SELL-to-BUY bo
 permitting Cartesian findings-by-evidence expansion.
 Externally supplied source notes are preserved in bounded `external_source_evidence` entries with
 `EXTERNAL_SOURCE_NOTE` and `UNVERIFIED_EXTERNAL`; they are escaped in Markdown/terminal output and
-are ambiguity evidence only, not independently verified facts or inferred motives.
+are ambiguity evidence only, not independently verified facts or inferred motives. Before becoming
+authoritative JSON, external text passes the shared account/credential scrub, NFKC and single-line
+normalization, and removal of all Unicode Cc/Cf/Cs controls (including bidi controls); runtime
+validation reapplies the same sanitizer. Internal row-cap, turnover, failure, and budget evidence is
+derived only from coverage/status codes and never enters `external_source_evidence`.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 

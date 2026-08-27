@@ -38,7 +38,13 @@ transfers, cost adjustments, incomplete history, or externally supplied ambiguit
 quality evidence rather than inferred trades. External notes are sanitized and bounded to 20 entries
 of at most 512 characters, stored as `external_source_evidence` with `EXTERNAL_SOURCE_NOTE` and
 `UNVERIFIED_EXTERNAL`, and rendered as externally provided, independently unverified ambiguity
-evidence. They are never converted into factual or psychological assertions. The audited upstream history fields do not identify
+evidence. Sanitization first applies the common account/credential/diagnostic scrub (including long
+account IDs, labelled token/API-key/secret/password values, bearer credentials, and `sk-*` tokens),
+then NFKC-normalizes to one line and removes every Unicode Cc/Cf/Cs control, including C1 and bidi
+controls. JSON, Markdown, and terminal output use only this sanitized authoritative text; semantic
+validation recomputes it and rejects noncanonical text. Internal history-service row-cap, snapshot
+turnover, budget, and failure limitations never flow through `source_notes`; coverage/status rebuilds
+their canonical internal quality codes. They are never converted into factual or psychological assertions. The audited upstream history fields do not identify
 corporate actions, transfers, or cost adjustments, so reports say `UNSUPPORTED_EVIDENCE`; they never
 claim those events are absent. Explicitly identified non-trade events remain normalized evidence but
 are excluded from FIFO and trade metrics.
