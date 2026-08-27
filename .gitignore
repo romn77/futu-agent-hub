@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.ruff_cache/
 
 # Distribution / packaging
 .Python
@@ -43,3 +45,15 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Portfolio analyst private/local state (never commit real account data)
+Futu API Skills/portfolio-analyst/.env*
+Futu API Skills/portfolio-analyst/accounts/
+Futu API Skills/portfolio-analyst/snapshots/
+Futu API Skills/portfolio-analyst/trades/
+Futu API Skills/portfolio-analyst/credentials/
+Futu API Skills/portfolio-analyst/personal-rules/
+Futu API Skills/portfolio-analyst/reports/
+Futu API Skills/portfolio-analyst/output/
+Futu API Skills/portfolio-analyst/*.account.json
+Futu API Skills/portfolio-analyst/*.snapshot.json
