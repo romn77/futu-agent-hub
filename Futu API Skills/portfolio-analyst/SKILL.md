@@ -254,6 +254,11 @@ quality status and canonical structured reasons are rebuilt from history coverag
 insufficient evidence, and every position quality note. See
 [references/position-lifecycle.md](references/position-lifecycle.md).
 
+Every eligible history snapshot contributes an explicit observation with `present` and nullable
+weight. An absence interrupts persistence and cannot support `ROLE_DRIFT`. Canonical timestamped
+snapshot IDs are bound to `as_of`, weights are finite long-only values, and snapshot, record,
+observation, operation, and wall-time budgets fail closed. Accepted history is indexed once.
+
 Journal writes are explicit, append-only operations:
 
 ```bash
@@ -266,5 +271,10 @@ Decision and analysis streams are bounded, credential-scrubbed, hash chained, lo
 Truncation, duplicate identities, chain corruption, unsafe links, and oversized records fail closed.
 No analysis command writes a journal event as a side effect. Content-addressed snapshot history uses
 `snapshots/YYYY/MM/<snapshot_id>.json`; exact duplicates are idempotent and conflicting bodies fail.
-POSIX persistence uses anchored no-follow descriptors and inode revalidation. The documented Windows
-fallback rejects reparse points and revalidates file identity, but cannot provide POSIX dirfd strength.
+Enumeration is bounded and rejects misplaced, duplicate, or non-canonical entries while ignoring
+only stale private `.tmp` leaves. Journal JSON is canonical and duplicate-key-safe, with total size
+checked inside the interprocess lock. POSIX persistence revalidates `0700` directories and `0600`,
+single-link regular files on opened descriptors. Platforms without equivalent handle-level
+no-follow/reparse and interprocess locking fail closed with `UNSUPPORTED_PLATFORM_SECURITY`.
+Multi-file bundles publish `manifest.json` last; missing manifests or digest failures are
+`INCOMPLETE`, never valid report bundles.

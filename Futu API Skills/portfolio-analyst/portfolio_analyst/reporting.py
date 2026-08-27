@@ -257,7 +257,7 @@ class PortfolioReport:
                         "- History provenance: "
                         + (
                             "; ".join(
-                                f"{md(entry['snapshot_id'])} | {entry['as_of']} | {md(entry['identity'])} | weight={entry['weight']}"
+                                f"{md(entry['snapshot_id'])} | {entry['as_of']} | {md(entry['identity'])} | present={entry['present']} | weight={entry['weight'] if entry['weight'] is not None else 'N/A'}"
                                 for entry in item["history_evidence"]
                             )
                             or "None"

@@ -193,7 +193,7 @@ def test_cli_metadata_conflict_is_structured_invalid_snapshot(monkeypatch, tmp_p
     )
     invalid = replace(invalid, snapshot_id=snapshot_identity(invalid))
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/conflict.json", json.dumps(invalid.to_dict()))
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
 

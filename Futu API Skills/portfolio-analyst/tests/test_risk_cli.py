@@ -14,7 +14,8 @@ from test_risk_analysis import snapshot
 
 
 def _saved_snapshot(home: Path, name: str = "snapshots/source.json") -> Path:
-    home.mkdir(parents=True, exist_ok=True)
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    home.chmod(0o700)
     payload = json.dumps(snapshot().to_dict(), indent=2) + "\n"
     return SnapshotStore(home).save(name, payload)
 

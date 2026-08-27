@@ -406,9 +406,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             try:
                 history = SnapshotRepository(settings.data_home).list(end=source_snapshot.as_of)
-            except SnapshotRepositoryError:
+                history_issue = None
+            except SnapshotRepositoryError as exc:
                 history = ()
-            lifecycle_report = analyze_lifecycle(source_snapshot, repository, history=history)
+                history_issue = {"code": "HISTORY_INVALID", "detail": terminal_text(exc)}
+            lifecycle_report = analyze_lifecycle(
+                source_snapshot, repository, history=history, history_issue=history_issue
+            )
             payload = lifecycle_report.to_dict()
             validate_lifecycle_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -474,10 +478,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     lifecycle_history = SnapshotRepository(settings.data_home).list(
                         end=source_snapshot.as_of
                     )
-                except SnapshotRepositoryError:
+                    lifecycle_history_issue = None
+                except SnapshotRepositoryError as exc:
                     lifecycle_history = ()
+                    lifecycle_history_issue = {
+                        "code": "HISTORY_INVALID",
+                        "detail": terminal_text(exc),
+                    }
                 lifecycle_report = analyze_lifecycle(
-                    source_snapshot, lifecycle_repository, history=lifecycle_history
+                    source_snapshot,
+                    lifecycle_repository,
+                    history=lifecycle_history,
+                    history_issue=lifecycle_history_issue,
                 )
             except (LifecycleConfigError, LifecycleInputError):
                 lifecycle_report = unavailable_lifecycle_report(

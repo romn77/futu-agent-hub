@@ -129,7 +129,7 @@ def test_simulate_cli_reads_confined_request_and_transactionally_saves_bundle(
     monkeypatch, tmp_path, capsys
 ):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     request = {
         "schema_version": "1.1",
@@ -174,7 +174,7 @@ def test_simulate_cli_reads_confined_request_and_transactionally_saves_bundle(
 
 def test_trades_cli_is_no_save_by_default_and_uses_fixture_service(monkeypatch, tmp_path, capsys):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
     monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: OFFICIAL_SKILL)
 

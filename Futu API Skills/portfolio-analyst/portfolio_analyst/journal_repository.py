@@ -76,6 +76,15 @@ def _canonical(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise JournalError("journal JSON contains duplicate keys")
+        result[key] = value
+    return result
+
+
 @dataclass(frozen=True)
 class JournalRecord:
     schema_version: str
@@ -185,7 +194,7 @@ class JournalRepository:
             "metadata": _safe_metadata(fields["metadata"]),
         }
         if os.name != "posix":
-            return self._append_fallback(filename, prepared)
+            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal append disabled")
         import fcntl
 
         journal_fd = self._journal_directory_fd(create=True)
@@ -193,10 +202,13 @@ class JournalRepository:
         try:
             file_fd = os.open(filename, flags, 0o600, dir_fd=journal_fd)
             try:
-                os.fchmod(file_fd, 0o600)
                 metadata = os.fstat(file_fd)
-                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                    raise JournalError("journal must be a non-linked regular file")
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise JournalError("journal must be a private non-linked regular file")
                 fcntl.flock(file_fd, fcntl.LOCK_EX)
                 existing = self._read_fd(file_fd)
                 previous = existing[-1].record_hash if existing else _ZERO_HASH
@@ -207,6 +219,8 @@ class JournalRepository:
                 line = _canonical(record.to_dict()) + b"\n"
                 if len(line) > MAX_RECORD_BYTES:
                     raise JournalError("journal record size exceeds the limit")
+                if os.fstat(file_fd).st_size + len(line) > MAX_JOURNAL_BYTES:
+                    raise JournalError("journal total size exceeds the limit")
                 view = memoryview(line)
                 while view:
                     written = os.write(file_fd, view)
@@ -230,15 +244,33 @@ class JournalRepository:
 
     def _journal_directory_fd(self, *, create: bool) -> int:
         flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-        root_fd = os.open(self.data_home, flags)
         try:
+            root_fd = os.open(self.data_home, flags)
+        except OSError as exc:
+            raise JournalError("journal home is unavailable or unsafe") from exc
+        try:
+            root_metadata = os.fstat(root_fd)
+            if (
+                not stat.S_ISDIR(root_metadata.st_mode)
+                or stat.S_IMODE(root_metadata.st_mode) != 0o700
+            ):
+                raise JournalError("PORTFOLIO_AGENT_HOME must have mode 0700")
             if create:
                 try:
                     os.mkdir("journal", 0o700, dir_fd=root_fd)
                 except FileExistsError:
                     pass
-            directory_fd = os.open("journal", flags, dir_fd=root_fd)
-            if stat.S_IMODE(os.fstat(directory_fd).st_mode) != 0o700:
+            try:
+                directory_fd = os.open("journal", flags, dir_fd=root_fd)
+            except FileNotFoundError:
+                raise
+            except OSError as exc:
+                raise JournalError("journal directory is unavailable or unsafe") from exc
+            directory_metadata = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory_metadata.st_mode)
+                or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+            ):
                 os.close(directory_fd)
                 raise JournalError("journal directory must have mode 0700")
             return directory_fd
@@ -248,17 +280,12 @@ class JournalRepository:
     def _read(self, filename: str) -> tuple[JournalRecord, ...]:
         if not self.data_home.exists():
             return ()
+        try:
+            self.data_home = ensure_private_home(self.data_home)
+        except PrivateHomeError as exc:
+            raise JournalError(str(exc)) from exc
         if os.name != "posix":
-            path = self.data_home / "journal" / filename
-            if not path.exists():
-                return ()
-            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
-                raise JournalError("journal path contains a reparse point")
-            with path.open("rb") as handle:
-                raw = handle.read(MAX_JOURNAL_BYTES + 1)
-                if len(raw) > MAX_JOURNAL_BYTES:
-                    raise JournalError("journal count or size exceeds the limit")
-                return self._parse(raw)
+            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal reads disabled")
         try:
             journal_fd = self._journal_directory_fd(create=False)
         except FileNotFoundError:
@@ -317,7 +344,9 @@ class JournalRepository:
             if len(line) > MAX_RECORD_BYTES:
                 raise JournalError("journal record size exceeds the limit")
             try:
-                payload = json.loads(line)
+                payload = json.loads(line, object_pairs_hook=_unique_object)
+                if _canonical(payload) != line:
+                    raise JournalError("journal record is not canonical JSON")
                 if not isinstance(payload, dict) or set(payload) != {
                     "schema_version",
                     "event_id",
@@ -363,28 +392,4 @@ class JournalRepository:
         return tuple(records)
 
     def _append_fallback(self, filename: str, prepared: dict[str, Any]) -> JournalRecord:
-        """Windows fallback: reparse checks and a process-local atomic append lock are best effort."""
-        import threading
-
-        lock = getattr(self, "_fallback_lock", None)
-        if lock is None:
-            lock = threading.Lock()
-            self._fallback_lock = lock
-        with lock:
-            directory = self.data_home / "journal"
-            directory.mkdir(mode=0o700, exist_ok=True)
-            if directory.is_symlink() or getattr(directory, "is_junction", lambda: False)():
-                raise JournalError("journal directory contains a reparse point")
-            path = directory / filename
-            records = self._read(filename)
-            record = self._build_record(
-                prepared, records[-1].record_hash if records else _ZERO_HASH
-            )
-            line = _canonical(record.to_dict()) + b"\n"
-            if len(line) > MAX_RECORD_BYTES:
-                raise JournalError("journal record size exceeds the limit")
-            with path.open("ab") as handle:
-                handle.write(line)
-                handle.flush()
-                os.fsync(handle.fileno())
-            return record
+        raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal append disabled")

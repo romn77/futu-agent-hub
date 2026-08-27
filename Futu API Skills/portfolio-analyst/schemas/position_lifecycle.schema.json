@@ -8,7 +8,7 @@
     "schema_version": {"const": "1.0"},
     "lifecycle_report_id": {"type": "string", "pattern": "^lr-[0-9a-f]{20}$"},
     "as_of": {"type": "string", "format": "date-time"},
-    "source_snapshot_id": {"type": "string", "pattern": "^ps-"},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
     "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
     "data_quality_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
     "coverage": {
@@ -22,7 +22,7 @@
         "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
         "history": {
           "type": "object", "additionalProperties": false,
-          "required": ["status", "candidate_snapshots", "accepted_snapshots", "duplicate_snapshots", "future_snapshots", "pre_open_observations", "position_observations", "window_start", "window_end"],
+          "required": ["status", "candidate_snapshots", "accepted_snapshots", "duplicate_snapshots", "future_snapshots", "pre_open_observations", "position_observations", "window_start", "window_end", "snapshots", "issue"],
           "properties": {
             "status": {"enum": ["AVAILABLE", "PARTIAL", "UNAVAILABLE"]},
             "candidate_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
@@ -32,7 +32,9 @@
             "pre_open_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
             "position_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
             "window_start": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
-            "window_end": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+            "window_end": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+            "snapshots": {"type": "array", "maxItems": 10000, "items": {"type": "object", "additionalProperties": false, "required": ["snapshot_id", "as_of"], "properties": {"snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"}, "as_of": {"type": "string", "format": "date-time"}}}},
+            "issue": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["code", "detail"], "properties": {"code": {"enum": ["HISTORY_INVALID", "HISTORY_UNAVAILABLE"]}, "detail": {"type": "string", "minLength": 1, "maxLength": 4096}}}, {"type": "null"}]}
           }
         }
       }
@@ -48,7 +50,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["code", "scope", "detail"],
       "properties": {
-        "code": {"enum": ["HISTORY_PARTIAL", "HISTORY_UNAVAILABLE", "FUTURE_HISTORY_EXCLUDED", "DUPLICATE_HISTORY_EXCLUDED", "PRE_OPEN_HISTORY_EXCLUDED", "POSITION_DATA_NOTE", "MODULE_UNAVAILABLE"]},
+        "code": {"enum": ["HISTORY_PARTIAL", "HISTORY_UNAVAILABLE", "HISTORY_INVALID", "FUTURE_HISTORY_EXCLUDED", "DUPLICATE_HISTORY_EXCLUDED", "PRE_OPEN_HISTORY_EXCLUDED", "POSITION_DATA_NOTE", "MODULE_UNAVAILABLE"]},
         "scope": {"type": "string", "minLength": 1, "maxLength": 128},
         "detail": {"type": "string", "minLength": 1, "maxLength": 4096}
       }
@@ -105,12 +107,13 @@
           "type": "array", "maxItems": 10000,
           "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["snapshot_id", "as_of", "identity", "weight"],
+            "required": ["snapshot_id", "as_of", "identity", "present", "weight"],
             "properties": {
               "snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
               "as_of": {"type": "string", "format": "date-time"},
               "identity": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
-              "weight": {"$ref": "#/$defs/decimal"}
+              "present": {"type": "boolean"},
+              "weight": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]}
             }
           }
         },

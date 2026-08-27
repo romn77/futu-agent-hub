@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 import hashlib
 import json
 import re
+import time
 from typing import Any, Mapping, Sequence
 
 from .lifecycle_repository import (
@@ -72,7 +73,8 @@ class LifecycleHistoryEvidence:
     snapshot_id: str
     as_of: Any
     identity: str
-    weight: Decimal
+    present: bool
+    weight: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -204,7 +206,7 @@ class LifecycleReport:
                 ]
             )
             lines.extend(
-                f"History evidence: {terminal_text(entry.snapshot_id)} | {entry.as_of.isoformat()} | {terminal_text(entry.identity)} | weight={entry.weight}"
+                f"History evidence: {terminal_text(entry.snapshot_id)} | {entry.as_of.isoformat()} | {terminal_text(entry.identity)} | present={entry.present} | weight={entry.weight if entry.weight is not None else 'N/A'}"
                 for entry in item.history_evidence
             )
             lines.extend(
@@ -295,7 +297,7 @@ class LifecycleReport:
                     "",
                     *(
                         [
-                            f"- `{md(entry.snapshot_id)}` | {entry.as_of.isoformat()} | {md(entry.identity)} | weight={entry.weight}"
+                            f"- `{md(entry.snapshot_id)}` | {entry.as_of.isoformat()} | {md(entry.identity)} | present={entry.present} | weight={entry.weight if entry.weight is not None else 'N/A'}"
                             for entry in item.history_evidence
                         ]
                         or ["- None"]
@@ -343,7 +345,15 @@ def _quality_reasons(
 ) -> tuple[Mapping[str, str], ...]:
     history = coverage["history"]
     reasons: list[dict[str, str]] = []
-    if history["status"] != "AVAILABLE":
+    if history.get("issue") is not None:
+        reasons.append(
+            {
+                "code": history["issue"]["code"],
+                "scope": "HISTORY",
+                "detail": history["issue"]["detail"],
+            }
+        )
+    elif history["status"] != "AVAILABLE":
         reasons.append(
             {
                 "code": f"HISTORY_{history['status']}",
@@ -413,26 +423,32 @@ _ROLE_POLICY = {
     "minimum_snapshots": 3,
     "minimum_span_days": 30,
 }
+MAX_HISTORY_SNAPSHOTS = 1_000
+MAX_CURRENT_POSITIONS = 10_000
+MAX_CONFIG_RECORDS = 10_000
+MAX_POSITION_OBSERVATIONS = 2_000_000
 
 
 def _history_evidence(
     record: LifecycleRecord,
-    history: Sequence[PortfolioSnapshot],
+    history: Sequence[tuple[PortfolioSnapshot, Mapping[str, EconomicPosition]]],
 ) -> tuple[tuple[LifecycleHistoryEvidence, ...], int]:
     observations: list[LifecycleHistoryEvidence] = []
     pre_open = 0
-    for snapshot in history:
-        for item in aggregate_economic_positions(snapshot):
-            if item.identity == record.symbol:
-                if snapshot.as_of.date() < record.opened_at:
-                    pre_open += 1
-                    break
-                observations.append(
-                    LifecycleHistoryEvidence(
-                        snapshot.snapshot_id, snapshot.as_of, item.identity, item.weight
-                    )
-                )
-                break
+    for snapshot, positions in history:
+        if snapshot.as_of.date() < record.opened_at:
+            pre_open += 1
+            continue
+        item = positions.get(record.symbol)
+        observations.append(
+            LifecycleHistoryEvidence(
+                snapshot.snapshot_id,
+                snapshot.as_of,
+                record.symbol,
+                item is not None,
+                None if item is None else item.weight,
+            )
+        )
     return tuple(sorted(observations, key=lambda item: (item.as_of, item.snapshot_id))), pre_open
 
 
@@ -446,11 +462,15 @@ def _history_role_drift(
     sufficient = (
         len(evidence) >= _ROLE_POLICY["minimum_snapshots"]
         and (evidence[-1].as_of - evidence[0].as_of).days >= _ROLE_POLICY["minimum_span_days"]
+        and all(item.present for item in evidence)
     )
     if not sufficient:
         return False, "PARTIAL"
     return (
-        all(item.weight >= _ROLE_POLICY["threshold"] for item in evidence),
+        all(
+            item.weight is not None and item.weight >= _ROLE_POLICY["threshold"]
+            for item in evidence
+        ),
         "AVAILABLE",
     )
 
@@ -460,18 +480,20 @@ def _assessment(
     record: LifecycleRecord | None,
     *,
     as_of: date,
-    history: Sequence[PortfolioSnapshot],
+    history: Sequence[tuple[PortfolioSnapshot, Mapping[str, EconomicPosition]]],
     thesis_review: str | None,
 ) -> LifecycleAssessment:
     symbol = current.identity if current is not None else record.symbol  # type: ignore[union-attr]
     if record is None:
         evidence = tuple(
             LifecycleHistoryEvidence(
-                item.snapshot_id, item.as_of, position.identity, position.weight
+                item.snapshot_id,
+                item.as_of,
+                symbol,
+                symbol in positions,
+                positions[symbol].weight if symbol in positions else None,
             )
-            for item in history
-            for position in aggregate_economic_positions(item)
-            if position.identity == symbol
+            for item, positions in history
         )
         finding = _finding(
             "UNCONFIGURED",
@@ -679,11 +701,49 @@ def analyze_lifecycle(
     *,
     history: Sequence[PortfolioSnapshot] = (),
     thesis_reviews: Mapping[str, str] | None = None,
+    history_issue: Mapping[str, str] | None = None,
+    max_history_snapshots: int = MAX_HISTORY_SNAPSHOTS,
+    max_operations: int = 3_000_000,
+    max_seconds: float = 10.0,
+    clock: Any = time.monotonic,
 ) -> LifecycleReport:
+    if max_history_snapshots < 0 or max_operations <= 0 or max_seconds <= 0:
+        raise LifecycleInputError("lifecycle analysis budget must be positive")
     candidate_history_count = len(history)
+    normalized_history_issue: dict[str, str] | None = None
+    if history_issue is not None:
+        code = str(history_issue.get("code", ""))
+        if code not in {"HISTORY_INVALID", "HISTORY_UNAVAILABLE"}:
+            raise LifecycleInputError("lifecycle history issue code is unsupported")
+        normalized_history_issue = {
+            "code": code,
+            "detail": terminal_text(history_issue.get("detail", "history repository unavailable")),
+        }
+    if candidate_history_count > max_history_snapshots:
+        raise LifecycleInputError("lifecycle history snapshot budget exceeded")
+    started = clock()
+    remaining_operations = max_operations
+
+    def consume(operations: int = 1) -> None:
+        nonlocal remaining_operations
+        remaining_operations -= operations
+        if remaining_operations < 0 or clock() - started > max_seconds:
+            raise LifecycleInputError("lifecycle analysis operation or wall-time budget exceeded")
+
     try:
+        if len(snapshot.positions) > MAX_CURRENT_POSITIONS:
+            raise LifecycleInputError("lifecycle current position budget exceeded")
+        consume(len(snapshot.positions) + 1)
         snapshot = snapshot_from_document(snapshot.to_dict())
-        validated_history = tuple(snapshot_from_document(item.to_dict()) for item in history)
+        validated_history_list: list[PortfolioSnapshot] = []
+        for item in history:
+            if len(item.positions) > MAX_CURRENT_POSITIONS:
+                raise LifecycleInputError("lifecycle history position budget exceeded")
+            consume(len(item.positions) + 1)
+            validated_history_list.append(snapshot_from_document(item.to_dict()))
+        validated_history = tuple(validated_history_list)
+    except LifecycleInputError:
+        raise
     except InvalidSnapshot as exc:
         raise LifecycleInputError("lifecycle input snapshot is invalid") from exc
     accepted_history: list[PortfolioSnapshot] = []
@@ -701,22 +761,49 @@ def analyze_lifecycle(
         accepted_history.append(item)
     history = tuple(accepted_history)
     economic = aggregate_economic_positions(snapshot)
-    if any(item.weight < 0 for item in economic):
+    if len(economic) > MAX_CURRENT_POSITIONS:
+        raise LifecycleInputError("lifecycle current position budget exceeded")
+    if any(
+        not item.weight.is_finite() or not Decimal(0) <= item.weight <= Decimal(1)
+        for item in economic
+    ):
         raise LifecycleInputError("signed lifecycle portfolios are unsupported")
     current = {item.identity: item for item in economic}
     records = {item.symbol: item for item in repository.list()}
+    if len(records) > MAX_CONFIG_RECORDS:
+        raise LifecycleInputError("lifecycle configuration record budget exceeded")
+    history_index: list[tuple[PortfolioSnapshot, Mapping[str, EconomicPosition]]] = []
+    for item in history:
+        positions = aggregate_economic_positions(item)
+        consume(len(item.positions) + len(positions) + 1)
+        if any(
+            not position.weight.is_finite() or not Decimal(0) <= position.weight <= Decimal(1)
+            for position in positions
+        ):
+            raise LifecycleInputError("lifecycle history weight is outside the supported range")
+        history_index.append((item, {position.identity: position for position in positions}))
     reviews = {str(key).upper(): value for key, value in (thesis_reviews or {}).items()}
     symbols = sorted(set(current) | set(records))
+    observation_budget = len(history_index) * len(symbols)
+    if observation_budget > MAX_POSITION_OBSERVATIONS:
+        raise LifecycleInputError("lifecycle position observation budget exceeded")
+    consume(observation_budget + len(symbols))
     assessments = tuple(
         _assessment(
             current.get(symbol),
             records.get(symbol),
             as_of=snapshot.as_of.date(),
-            history=history,
+            history=history_index,
             thesis_review=reviews.get(symbol),
         )
         for symbol in symbols
     )
+    if normalized_history_issue is not None:
+        position_note = f"{normalized_history_issue['code']}: {normalized_history_issue['detail']}"
+        assessments = tuple(
+            replace(item, data_quality_notes=(*item.data_quality_notes, position_note))
+            for item in assessments
+        )
     findings = tuple(
         sorted(
             (finding for item in assessments for finding in item.findings),
@@ -733,7 +820,8 @@ def analyze_lifecycle(
         "history": {
             "status": (
                 "PARTIAL"
-                if future_history
+                if normalized_history_issue is not None
+                or future_history
                 or duplicate_history
                 or any(item.history_excluded_pre_open for item in assessments)
                 or any(item.history_evidence_status == "PARTIAL" for item in assessments)
@@ -749,6 +837,10 @@ def analyze_lifecycle(
             "position_observations": sum(len(item.history_evidence) for item in assessments),
             "window_start": history[0].as_of if history else None,
             "window_end": history[-1].as_of if history else None,
+            "snapshots": tuple(
+                {"snapshot_id": item.snapshot_id, "as_of": item.as_of} for item in history
+            ),
+            "issue": normalized_history_issue,
         },
     }
     reasons = _quality_reasons(coverage, assessments)
@@ -798,6 +890,8 @@ def unavailable_lifecycle_report(snapshot: PortfolioSnapshot, note: str) -> Life
                 "position_observations": 0,
                 "window_start": None,
                 "window_end": None,
+                "snapshots": (),
+                "issue": None,
             },
         },
         (),

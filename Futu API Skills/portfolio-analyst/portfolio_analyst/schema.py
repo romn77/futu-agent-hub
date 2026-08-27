@@ -27,6 +27,16 @@ class ReportSemanticError(ValueError):
     """A structurally valid report violates the risk evidence contract."""
 
 
+def _snapshot_id_timestamp(value: str, *, label: str) -> datetime:
+    match = re.fullmatch(r"ps-(\d{8}T\d{6}Z)-(?:real|simulate)-[a-z]{3}-[0-9a-f]{16}", value)
+    if match is None:
+        raise ReportSemanticError(f"{label} snapshot identity is not canonical")
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise ReportSemanticError(f"{label} snapshot identity timestamp is invalid") from exc
+
+
 _TRADE_ARRAY_LIMITS = {
     "normalized_orders": 20_000,
     "normalized_fills": 20_000,
@@ -462,6 +472,12 @@ def _validate_correlation_semantics(correlation: dict[str, Any], snapshot_as_of:
 
 
 def _validate_report_semantics(payload: dict[str, Any]) -> None:
+    encoded_source_timestamp = _snapshot_id_timestamp(
+        payload["source_snapshot_id"], label="risk source"
+    )
+    report_timestamp = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
+    if encoded_source_timestamp != report_timestamp.astimezone(timezone.utc):
+        raise ReportSemanticError("risk source snapshot identity timestamp is inconsistent")
     correlation = payload["correlation"]
     _validate_correlation_semantics(correlation, payload["as_of"])
     coverage = payload["coverage"]
@@ -676,7 +692,10 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
     lifecycle = payload["lifecycle"]
     if lifecycle.get("status") != "UNAVAILABLE_UNTIL_PHASE_4":
         validate_lifecycle_document(lifecycle)
-        if lifecycle["source_snapshot_id"] != payload["source_snapshot_id"]:
+        if (
+            lifecycle["source_snapshot_id"] != payload["source_snapshot_id"]
+            or lifecycle["as_of"] != payload["as_of"]
+        ):
             raise ReportSemanticError("lifecycle and risk modules reference different snapshots")
 
 
@@ -696,6 +715,12 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     )
     if claimed != expected:
         raise ReportSemanticError("lifecycle report complete-body identity is invalid")
+    encoded_source_timestamp = _snapshot_id_timestamp(
+        payload["source_snapshot_id"], label="lifecycle source"
+    )
+    report_timestamp = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
+    if report_timestamp.astimezone(timezone.utc) != encoded_source_timestamp:
+        raise ReportSemanticError("lifecycle source snapshot identity timestamp is inconsistent")
     positions = payload["positions"]
     if payload["status"] == "UNAVAILABLE":
         reasons = payload["data_quality_reasons"]
@@ -722,6 +747,22 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     ):
         raise ReportSemanticError("lifecycle unconfigured coverage is inconsistent")
     history_coverage = coverage["history"]
+    history_catalog = history_coverage["snapshots"]
+    catalog_keys = [(entry["as_of"], entry["snapshot_id"]) for entry in history_catalog]
+    if (
+        len(history_catalog) != history_coverage["accepted_snapshots"]
+        or catalog_keys != sorted(catalog_keys)
+        or len({entry["snapshot_id"] for entry in history_catalog}) != len(history_catalog)
+    ):
+        raise ReportSemanticError("lifecycle accepted history catalog is inconsistent")
+    for entry in history_catalog:
+        catalog_timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
+        if (
+            _snapshot_id_timestamp(entry["snapshot_id"], label="lifecycle accepted history")
+            != catalog_timestamp.astimezone(timezone.utc)
+            or catalog_timestamp > report_timestamp
+        ):
+            raise ReportSemanticError("lifecycle accepted history catalog identity is inconsistent")
     observed_history_ids = {
         entry["snapshot_id"] for item in positions for entry in item["history_evidence"]
     }
@@ -759,9 +800,15 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             for entry in item["history_evidence"]
         ):
             raise ReportSemanticError("lifecycle history evidence falls outside coverage window")
+        if (
+            history_coverage["window_start"] != history_catalog[0]["as_of"]
+            or history_coverage["window_end"] != history_catalog[-1]["as_of"]
+        ):
+            raise ReportSemanticError("lifecycle history window does not match its catalog")
     expected_history_coverage_status = (
         "PARTIAL"
-        if history_coverage["future_snapshots"]
+        if history_coverage["issue"] is not None
+        or history_coverage["future_snapshots"]
         or history_coverage["duplicate_snapshots"]
         or history_coverage["pre_open_observations"]
         or any(item["history_evidence_status"] == "PARTIAL" for item in positions)
@@ -773,7 +820,15 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
         raise ReportSemanticError("lifecycle history quality status is inconsistent")
     if payload["status"] != "UNAVAILABLE":
         expected_reasons: list[dict[str, str]] = []
-        if history_coverage["status"] != "AVAILABLE":
+        if history_coverage["issue"] is not None:
+            expected_reasons.append(
+                {
+                    "code": history_coverage["issue"]["code"],
+                    "scope": "HISTORY",
+                    "detail": history_coverage["issue"]["detail"],
+                }
+            )
+        elif history_coverage["status"] != "AVAILABLE":
             expected_reasons.append(
                 {
                     "code": f"HISTORY_{history_coverage['status']}",
@@ -874,17 +929,39 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             for entry in history
         ):
             raise ReportSemanticError("lifecycle history identity or time bound is invalid")
+        if any(
+            (entry["present"] and entry["weight"] is None)
+            or (not entry["present"] and entry["weight"] is not None)
+            or (
+                entry["weight"] is not None
+                and not Decimal(0) <= Decimal(entry["weight"]) <= Decimal(1)
+            )
+            for entry in history
+        ):
+            raise ReportSemanticError("lifecycle history presence or weight is inconsistent")
         for entry in history:
             timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
-            encoded = datetime.strptime(entry["snapshot_id"][3:19], "%Y%m%dT%H%M%SZ").replace(
-                tzinfo=timezone.utc
-            )
+            encoded = _snapshot_id_timestamp(entry["snapshot_id"], label="lifecycle history")
             if timestamp.astimezone(timezone.utc) != encoded:
                 raise ReportSemanticError("lifecycle history identity timestamp is inconsistent")
         if item["history_excluded_pre_open"] and not any(
             "pre-open" in note for note in item["data_quality_notes"]
         ):
             raise ReportSemanticError("excluded pre-open history lacks a quality note")
+        opened_for_history = (
+            None if item["opened_at"] is None else date.fromisoformat(item["opened_at"])
+        )
+        eligible_catalog = [
+            entry
+            for entry in history_catalog
+            if opened_for_history is None
+            or datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00")).date()
+            >= opened_for_history
+        ]
+        if [entry["snapshot_id"] for entry in history] != [
+            entry["snapshot_id"] for entry in eligible_catalog
+        ] or item["history_excluded_pre_open"] != len(history_catalog) - len(eligible_catalog):
+            raise ReportSemanticError("lifecycle history observations are incomplete")
         if item["record_status"] is None:
             expected_status = "UNCONFIGURED"
             if (
@@ -983,6 +1060,8 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             raise ReportSemanticError("lifecycle review priority is inconsistent")
         target = item["target_weight"]
         current = item["current_weight"]
+        if current is not None and not Decimal(0) <= Decimal(current) <= Decimal(1):
+            raise ReportSemanticError("lifecycle current weight is outside the supported range")
         if target is not None and current is not None:
             drift = not Decimal(target["min"]) <= Decimal(current) <= Decimal(target["max"])
             if drift != ("WEIGHT_DRIFT" in types):
@@ -1112,7 +1191,9 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00")) for entry in history
             ]
             sufficient_history = bool(
-                len(history) >= 3 and (history_times[-1] - history_times[0]).days >= 30
+                len(history) >= 3
+                and (history_times[-1] - history_times[0]).days >= 30
+                and all(entry["present"] for entry in history)
             )
             expected_history_status = (
                 "AVAILABLE"
@@ -1126,7 +1207,10 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             expected_role_drift = bool(
                 role_check_required
                 and sufficient_history
-                and all(Decimal(entry["weight"]) >= Decimal("0.10") for entry in history)
+                and all(
+                    entry["weight"] is not None and Decimal(entry["weight"]) >= Decimal("0.10")
+                    for entry in history
+                )
             )
             if expected_role_drift != ("ROLE_DRIFT" in types):
                 raise ReportSemanticError("lifecycle role drift is not supported by history")

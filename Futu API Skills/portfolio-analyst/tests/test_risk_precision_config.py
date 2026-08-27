@@ -97,7 +97,7 @@ def test_cli_invalid_lookback_is_structured_config_error_and_stdout_pure(
     monkeypatch, tmp_path, capsys
 ):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
 

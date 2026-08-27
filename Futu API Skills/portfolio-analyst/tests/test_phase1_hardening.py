@@ -309,7 +309,7 @@ def test_private_hmac_aliases_are_stable_distinct_and_not_public_hashes():
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission and no-follow contract")
 def test_alias_key_is_persisted_0600_and_symlink_is_refused(tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     store = AccountAliasStore(home)
     first = store.load_or_create().alias("90000001")
     key_path = home / "config" / "account_alias.key"
@@ -330,7 +330,7 @@ def test_snapshot_store_rejects_symlink_component_and_concurrent_component_swap(
     tmp_path, monkeypatch
 ):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     outside = tmp_path / "outside"
     outside.mkdir()
     (home / "linked").symlink_to(outside, target_is_directory=True)
@@ -340,7 +340,7 @@ def test_snapshot_store_rejects_symlink_component_and_concurrent_component_swap(
     assert not (outside / "leak.json").exists()
 
     snapshots = home / "snapshots"
-    snapshots.mkdir()
+    snapshots.mkdir(mode=0o700)
     moved = home / "moved"
     original_link = os.link
     swapped = False

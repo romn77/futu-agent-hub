@@ -136,7 +136,7 @@ def test_signed_cli_error_is_structured_as_unsupported_not_invalid_snapshot(
     )
     signed = replace(source, positions=(short,), short_exposure_base=Decimal("100"))
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_args: signed)
 
@@ -205,7 +205,7 @@ def test_optional_policy_private_config_error_is_structured_config_error(
     monkeypatch, tmp_path, capsys
 ):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     config = home / "config"
     config.mkdir()
@@ -256,7 +256,7 @@ def test_reidentified_financially_false_snapshot_is_rejected(mutate, tmp_path):
     false = mutate(snapshot())
     false = replace(false, snapshot_id=snapshot_identity(false))
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/false.json", json.dumps(false.to_dict()))
 
     with pytest.raises(InvalidSnapshot, match="financial semantics"):
@@ -266,7 +266,7 @@ def test_reidentified_financially_false_snapshot_is_rejected(mutate, tmp_path):
 @pytest.mark.skipif(os.name != "posix", reason="descriptor anchor contract is POSIX-specific")
 def test_snapshot_read_rejects_leaf_anchor_swap(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     monkeypatch.setattr(snapshot_io, "_same_file_anchor", lambda *args: False, raising=False)
 
@@ -277,7 +277,7 @@ def test_snapshot_read_rejects_leaf_anchor_swap(monkeypatch, tmp_path):
 @pytest.mark.skipif(os.name != "posix", reason="descriptor anchor contract is POSIX-specific")
 def test_snapshot_read_rejects_parent_anchor_swap(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     monkeypatch.setattr(snapshot_io, "_same_parent_anchor", lambda *args: False, raising=False)
 
@@ -287,7 +287,7 @@ def test_snapshot_read_rejects_parent_anchor_swap(monkeypatch, tmp_path):
 
 def test_analyze_bundle_preflight_collision_leaves_no_partial_sibling(tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     store = SnapshotStore(home)
     store.save("reports/run/portfolio_report.md", "existing")
 
@@ -304,7 +304,7 @@ def test_analyze_bundle_preflight_collision_leaves_no_partial_sibling(tmp_path):
 @pytest.mark.skipif(os.name != "posix", reason="hard-link injection contract is POSIX-specific")
 def test_analyze_bundle_rolls_back_first_link_when_second_commit_fails(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     store = SnapshotStore(home)
     real_link = os.link
     calls = 0
@@ -330,7 +330,7 @@ def test_analyze_bundle_rolls_back_first_link_when_second_commit_fails(monkeypat
 @pytest.mark.skipif(os.name != "posix", reason="hard-link injection contract is POSIX-specific")
 def test_analyze_bundle_normalizes_commit_race_collision_and_rolls_back(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     store = SnapshotStore(home)
     real_link = os.link
     calls = 0
@@ -444,7 +444,7 @@ def test_nonbreaching_region_policy_still_emits_low_candidate():
 @pytest.mark.skipif(os.name != "posix", reason="descriptor temp cleanup is POSIX-specific")
 def test_bundle_cleans_registered_posix_temp_when_file_fsync_fails(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     real_fsync = os.fsync
     calls = 0
 
@@ -467,19 +467,8 @@ def test_bundle_cleans_registered_posix_temp_when_file_fsync_fails(monkeypatch, 
 
 def test_bundle_fallback_cleans_registered_temp_when_file_fsync_fails(monkeypatch, tmp_path):
     home = tmp_path / "private"
-    home.mkdir()
-    real_fsync = os.fsync
-    calls = 0
-
-    def fail_first(descriptor):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("injected fallback fsync failure")
-        return real_fsync(descriptor)
-
-    monkeypatch.setattr(os, "fsync", fail_first)
-    with pytest.raises(OSError, match="injected fallback fsync"):
+    home.mkdir(mode=0o700)
+    with pytest.raises(ValueError, match="UNSUPPORTED_PLATFORM_SECURITY"):
         SnapshotStore(home)._save_bundle_fallback(
             ("reports", "run"),
             (("portfolio_report.json", "json"), ("portfolio_report.md", "markdown")),

@@ -19,13 +19,20 @@ the snapshot's timezone-aware `as_of` calendar date. Unsupported horizons fail r
 at least 30 days. Without that evidence the report records the check as unavailable/partial. Thesis
 states require an explicit user review input and never derive from returns.
 
-Every accepted history observation records the full snapshot ID, timezone-aware `as_of`, canonical
-market-qualified identity, and Decimal weight. Inputs are fully schema/identity/financial-semantics
+Every eligible history snapshot records the full snapshot ID, timezone-aware `as_of`, canonical
+market-qualified identity, explicit presence, and a Decimal weight only when present. An intervening
+absence interrupts persistence and makes role evidence partial rather than silently disappearing.
+Inputs are fully schema/identity/financial-semantics
 validated, deduplicated, and stably sorted. Observations before the record's `opened_at` date or after
 the current snapshot `as_of` are excluded with explicit coverage and quality notes. Runtime report
 validation recomputes the eligible window, minimum count, 30-day duration, threshold persistence,
 history availability, and `ROLE_DRIFT` result from the serialized evidence; report-ID recomputation
 cannot turn an insufficient window into an authoritative role-drift finding.
+
+The current source and every history item use canonical timestamped IDs whose encoded timestamp must
+equal `as_of`; lifecycle, risk, and portfolio outputs agree on source ID and time. Long-only weights
+must be finite and between zero and one. Snapshot, configuration-record, observation, operation, and
+injected wall-clock budgets fail closed before unbounded work; accepted snapshots are indexed once.
 
 Human and Markdown views include lifecycle `as_of`, source snapshot, status, coverage, structured
 quality reasons, role/status, current and target bounds, dates/horizon, thesis review status, every
@@ -52,13 +59,21 @@ redirect it only to a private file or trusted consumer.
 `PORTFOLIO_AGENT_HOME` defaults to `~/.moomoo-portfolio-agent` and must be outside the repository.
 On POSIX the home and state directories use mode `0700`, files use `0600`, and reads/writes reject
 symlinks and hard links. Anchored descriptors, no-follow opens, inode revalidation, no-overwrite
-links, locking, fsync, and bounded reads protect the local contract. The Windows fallback rejects
-symlinks/junctions/reparse points and revalidates identity, but is explicitly weaker than dirfd.
+links, locking, fsync, and bounded reads protect the local contract. Platforms without equivalent
+handle-level reparse/no-follow and interprocess locking disable repository mutation, append, and
+repository reads with `UNSUPPORTED_PLATFORM_SECURITY`.
 
 Snapshots are immutable and content-addressed under `snapshots/YYYY/MM`. Journal decisions and
 analysis references are explicit `decisions.jsonl` and `analyses.jsonl` appends. Each record has a
 full-body identity and previous-record hash. Existing records are never silently repaired.
+Snapshot enumeration validates exact year/month placement, legal months, entry/byte budgets, and
+descriptor permissions before parsing. Journal JSON is canonical and duplicate-key-safe. Analysis
+bundles publish `manifest.json` last; missing manifests, unexpected artifacts, unsafe files, or
+digest mismatches are `INCOMPLETE`.
 
 Comprehensive analysis treats lifecycle as an independent local module. Invalid or inaccessible
 lifecycle configuration produces an `UNAVAILABLE` lifecycle section while the risk report remains
 valid and fully attributable to the same `source_snapshot_id`.
+An empty history is `HISTORY_UNAVAILABLE`; a corrupt or unsafe repository becomes sanitized
+structured `HISTORY_INVALID` evidence attached to top-level and per-position quality instead of being
+silently treated as empty.

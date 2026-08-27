@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import os
+from types import SimpleNamespace
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,7 @@ import pytest
 from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.journal_repository import JournalError, JournalRepository
 from portfolio_analyst.lifecycle import analyze_lifecycle
+from portfolio_analyst.lifecycle import LifecycleInputError
 from portfolio_analyst.lifecycle_repository import (
     LifecycleConfigError,
     LifecycleRecord,
@@ -20,7 +22,11 @@ from portfolio_analyst.lifecycle_repository import (
     TargetWeight,
 )
 from portfolio_analyst.snapshot_repository import SnapshotConflict, SnapshotRepository
-from portfolio_analyst.persistence import SnapshotStore
+from portfolio_analyst.snapshot_repository import SnapshotRepositoryError
+import portfolio_analyst.snapshot_repository as snapshot_repository_module
+import portfolio_analyst.journal_repository as journal_repository_module
+import portfolio_analyst.lifecycle_repository as lifecycle_repository_module
+from portfolio_analyst.persistence import IncompleteBundle, SnapshotStore
 from portfolio_analyst.reporting import build_portfolio_report
 from portfolio_analyst.risk import analyze_risk
 from portfolio_analyst.schema import (
@@ -92,6 +98,38 @@ def test_snapshot_repository_rejects_conflicting_existing_content(tmp_path):
         repo.save(item)
 
 
+def test_snapshot_repository_rejects_wrong_layout_duplicates_temp_and_insecure_home(tmp_path):
+    home = _home(tmp_path)
+    repo = SnapshotRepository(home)
+    item = make_snapshot()
+    canonical = repo.save(item)
+    canonical.parent.joinpath(f".{item.snapshot_id}.json.dead.tmp").write_text("stale")
+    assert [value.snapshot_id for value in repo.list()] == [item.snapshot_id]
+
+    misplaced = home / "snapshots" / "2026" / "13"
+    misplaced.mkdir(mode=0o700)
+    copied = misplaced / canonical.name
+    copied.write_bytes(canonical.read_bytes())
+    copied.chmod(0o600)
+    with pytest.raises(SnapshotRepositoryError, match="canonical|month|layout"):
+        repo.list()
+
+    home.chmod(0o755)
+    with pytest.raises(SnapshotRepositoryError, match="0700"):
+        repo.read(item.snapshot_id)
+    with pytest.raises(SnapshotRepositoryError, match="0700"):
+        repo.save(item)
+
+
+def test_snapshot_repository_enumeration_budget_fails_before_parsing(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    repo = SnapshotRepository(home)
+    repo.save(make_snapshot())
+    monkeypatch.setattr(snapshot_repository_module, "MAX_SNAPSHOT_ENTRIES", 0)
+    with pytest.raises(SnapshotRepositoryError, match="budget"):
+        repo.list()
+
+
 def test_journal_is_concurrent_append_only_hash_chained_and_bounded(tmp_path):
     home = _home(tmp_path)
     repo = JournalRepository(home)
@@ -138,6 +176,43 @@ def test_journal_sanitizes_credentials_and_rejects_oversized_records(tmp_path):
             summary="x" * 70_000,
             metadata={},
         )
+
+
+def test_journal_rejects_duplicate_keys_and_preflights_total_append_size(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    repo = JournalRepository(home)
+    record = repo.append_decision(
+        timestamp=datetime(2026, 8, 27, tzinfo=timezone.utc),
+        source_snapshot_id=make_snapshot().snapshot_id,
+        summary="canonical",
+        decision="ACCEPTED",
+        metadata={},
+    )
+    journal = home / "journal" / "decisions.jsonl"
+    raw = journal.read_bytes()
+    payload = record.to_dict()
+    duplicate = (
+        b'{"summary":'
+        + json.dumps(payload["summary"], ensure_ascii=False).encode()
+        + b","
+        + raw[1:]
+    )
+    journal.write_bytes(duplicate)
+    with pytest.raises(JournalError, match="invalid|canonical|duplicate"):
+        repo.list_decisions()
+
+    journal.write_bytes(raw)
+    before = journal.read_bytes()
+    monkeypatch.setattr(journal_repository_module, "MAX_JOURNAL_BYTES", len(before) + 8)
+    with pytest.raises(JournalError, match="size|limit"):
+        repo.append_decision(
+            timestamp=datetime(2026, 8, 28, tzinfo=timezone.utc),
+            source_snapshot_id=make_snapshot().snapshot_id,
+            summary="second record cannot fit",
+            decision="ACCEPTED",
+            metadata={},
+        )
+    assert journal.read_bytes() == before
 
 
 def test_lifecycle_unconfigured_exact_boundary_and_weight_drift(tmp_path):
@@ -308,7 +383,14 @@ def test_lifecycle_and_journal_cli_are_explicit_and_no_surprise_writes(
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out)["source_snapshot_id"] == snap.snapshot_id
+    lifecycle_payload = json.loads(capsys.readouterr().out)
+    assert lifecycle_payload["source_snapshot_id"] == snap.snapshot_id
+    assert lifecycle_payload["coverage"]["history"]["issue"]["code"] == "HISTORY_INVALID"
+    assert lifecycle_payload["coverage"]["history"]["status"] == "PARTIAL"
+    assert all(
+        any("HISTORY_INVALID" in note for note in item["data_quality_notes"])
+        for item in lifecycle_payload["positions"]
+    )
     assert not (home / "journal").exists()
 
     assert (
@@ -370,6 +452,35 @@ def test_repository_list_operations_create_no_state_and_lifecycle_create_never_o
     assert created.read_bytes() == before
 
 
+def test_lifecycle_repository_entry_budget_is_checked_before_yaml_reads(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    positions = home / "positions"
+    positions.mkdir(mode=0o700)
+    for name in ("US.AAA.yaml", "US.BBB.yaml"):
+        path = positions / name
+        path.write_text("invalid: yaml contract\n")
+        path.chmod(0o600)
+    monkeypatch.setattr(lifecycle_repository_module, "MAX_LIFECYCLE_RECORDS", 1)
+    with pytest.raises(LifecycleConfigError, match="excessive"):
+        LifecycleRepository(home).list()
+
+
+def test_windows_repository_security_fallbacks_fail_closed(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    monkeypatch.setattr(snapshot_repository_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(SnapshotRepositoryError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        SnapshotRepository(home).read(make_snapshot().snapshot_id)
+
+    monkeypatch.setattr(lifecycle_repository_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(LifecycleConfigError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        LifecycleRepository(home).read("US.AAA")
+
+    with pytest.raises(JournalError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        JournalRepository(home)._append_fallback("decisions.jsonl", {})
+    with pytest.raises(ValueError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        SnapshotStore(home)._save_fallback(("snapshot.json",), "{}")
+
+
 def test_analyze_saved_bundle_is_complete_manifested_and_transactional(
     monkeypatch, tmp_path, capsys
 ):
@@ -403,6 +514,63 @@ def test_analyze_saved_bundle_is_complete_manifested_and_transactional(
     assert manifest["source_snapshot_id"] == snap.snapshot_id
     for name, digest in manifest["artifacts"].items():
         assert hashlib.sha256((output / name).read_bytes()).hexdigest() == digest
+    assert set(SnapshotStore(home).validate_bundle("reports/run")) == set(manifest["artifacts"])
+
+
+def test_bundle_manifest_is_published_last_and_missing_or_bad_digest_is_incomplete(
+    monkeypatch, tmp_path
+):
+    home = _home(tmp_path)
+    store = SnapshotStore(home)
+    real_link = os.link
+    published: list[str] = []
+
+    def observe_link(*args, **kwargs):
+        published.append(str(args[1]))
+        return real_link(*args, **kwargs)
+
+    monkeypatch.setattr(os, "link", observe_link)
+    files = {"artifact.json": "{}\n"}
+    manifest = {
+        "schema_version": "1.0",
+        "source_snapshot_id": make_snapshot().snapshot_id,
+        "artifacts": {"artifact.json": __import__("hashlib").sha256(b"{}\n").hexdigest()},
+    }
+    store.save_bundle(
+        "reports/atomic",
+        {**files, "manifest.json": json.dumps(manifest, sort_keys=True)},
+    )
+    assert published[-1] == "manifest.json"
+    assert set(store.validate_bundle("reports/atomic")) == {"artifact.json"}
+
+    (home / "reports" / "atomic" / "artifact.json").write_text("tampered")
+    with pytest.raises(IncompleteBundle, match="INCOMPLETE"):
+        store.validate_bundle("reports/atomic")
+    (home / "reports" / "atomic" / "manifest.json").unlink()
+    with pytest.raises(IncompleteBundle, match="INCOMPLETE"):
+        store.validate_bundle("reports/atomic")
+
+
+def test_bundle_manifest_publish_failure_rolls_back_all_artifacts(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    store = SnapshotStore(home)
+    real_link = os.link
+
+    def fail_manifest(*args, **kwargs):
+        if args[1] == "manifest.json":
+            raise OSError("injected manifest publish failure")
+        return real_link(*args, **kwargs)
+
+    monkeypatch.setattr(os, "link", fail_manifest)
+    with pytest.raises(OSError, match="manifest publish"):
+        store.save_bundle(
+            "reports/interrupted",
+            {"artifact.json": "{}\n", "manifest.json": "{}\n"},
+        )
+    output = home / "reports" / "interrupted"
+    assert not any(path for path in output.iterdir() if not path.name.startswith("."))
+    with pytest.raises(IncompleteBundle, match="INCOMPLETE"):
+        store.validate_bundle("reports/interrupted")
 
 
 def test_doctor_explicit_save_uses_private_immutable_store(monkeypatch, tmp_path, capsys):
@@ -495,6 +663,113 @@ def test_lifecycle_semantics_reject_forged_role_history_after_rehash(tmp_path):
     )
     with pytest.raises(ReportSemanticError, match="role|history"):
         validate_lifecycle_document(payload)
+
+
+def test_role_drift_history_records_absence_and_cannot_prove_persistence(tmp_path):
+    home = _home(tmp_path)
+    snap = make_snapshot()
+    _write_record(
+        home,
+        role="SATELLITE",
+        opened_at="2026-01-01",
+        holding_horizon="24 months",
+        target_weight={"min": 0.1, "max": 0.5},
+    )
+    history = []
+    for index, days in enumerate((-40, -30, -20, 0)):
+        item = _historical_snapshot(snap, days=days)
+        if index == 1:
+            changed_positions = tuple(
+                replace(position, symbol="ZZZ") if position.symbol == "AAA" else position
+                for position in item.positions
+            )
+            changed = replace(item, positions=changed_positions, snapshot_id="")
+            item = replace(changed, snapshot_id=snapshot_identity(changed))
+        history.append(item)
+
+    report = analyze_lifecycle(snap, LifecycleRepository(home), history=tuple(history))
+    aaa = next(item for item in report.positions if item.symbol == "US.AAA")
+    assert aaa.lifecycle_status != "ROLE_DRIFT"
+    assert aaa.history_evidence_status == "PARTIAL"
+    assert [entry.present for entry in aaa.history_evidence] == [True, False, True, True]
+    assert aaa.history_evidence[1].weight is None
+
+    payload = report.to_dict()
+    deleted = json.loads(json.dumps(payload))
+    deleted_aaa = next(item for item in deleted["positions"] if item["symbol"] == "US.AAA")
+    deleted_aaa["history_evidence"].pop(1)
+    deleted["coverage"]["history"]["position_observations"] -= 1
+    deleted_body = dict(deleted)
+    deleted_body.pop("lifecycle_report_id")
+    import hashlib
+
+    deleted["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(
+                deleted_body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="incomplete"):
+        validate_lifecycle_document(deleted)
+
+    forged = next(item for item in payload["positions"] if item["symbol"] == "US.AAA")
+    forged["history_evidence"][1]["present"] = True
+    forged["history_evidence"][1]["weight"] = "0.4"
+    body = dict(payload)
+    body.pop("lifecycle_report_id")
+    payload["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="history|role"):
+        validate_lifecycle_document(payload)
+
+
+def test_lifecycle_rejects_current_identity_time_and_history_budget_tampering(tmp_path):
+    home = _home(tmp_path)
+    snap = make_snapshot()
+    payload = analyze_lifecycle(snap, LifecycleRepository(home)).to_dict()
+    payload["source_snapshot_id"] = "ps-20260828T100000Z-real-usd-0000000000000000"
+    body = dict(payload)
+    body.pop("lifecycle_report_id")
+    import hashlib
+
+    payload["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="snapshot.*timestamp"):
+        validate_lifecycle_document(payload)
+
+    with pytest.raises(LifecycleInputError, match="budget"):
+        analyze_lifecycle(
+            snap,
+            LifecycleRepository(home),
+            history=tuple(_historical_snapshot(snap, days=-days) for days in (1, 2)),
+            max_history_snapshots=1,
+        )
+
+
+def test_lifecycle_operation_and_injected_wall_clock_budgets_fail_closed(tmp_path):
+    home = _home(tmp_path)
+    snap = make_snapshot()
+    with pytest.raises(LifecycleInputError, match="budget"):
+        analyze_lifecycle(snap, LifecycleRepository(home), max_operations=1)
+
+    ticks = iter((0.0, 11.0))
+    with pytest.raises(LifecycleInputError, match="wall-time budget"):
+        analyze_lifecycle(
+            snap,
+            LifecycleRepository(home),
+            max_seconds=10.0,
+            clock=lambda: next(ticks),
+        )
 
 
 def test_typed_lifecycle_record_cannot_bypass_canonical_validation():

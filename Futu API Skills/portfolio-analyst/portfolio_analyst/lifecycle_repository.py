@@ -41,6 +41,8 @@ _FIELDS = frozenset(
         "last_reviewed_at",
     }
 )
+MAX_LIFECYCLE_RECORDS = 10_000
+MAX_LIFECYCLE_TOTAL_BYTES = 640 * 1024 * 1024
 
 
 class LifecycleConfigError(ValueError):
@@ -265,6 +267,12 @@ class LifecycleRepository:
     def list(self) -> tuple[LifecycleRecord, ...]:
         if not self.data_home.exists():
             return ()
+        try:
+            self.data_home = ensure_private_home(self.data_home)
+        except PrivateHomeError as exc:
+            raise LifecycleConfigError(str(exc)) from exc
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         directory = self.data_home / "positions"
         if not directory.exists():
             return ()
@@ -276,13 +284,22 @@ class LifecycleRepository:
             raise LifecycleConfigError("positions directory is unsafe")
         if os.name == "posix" and stat.S_IMODE(directory.stat().st_mode) != 0o700:
             raise LifecycleConfigError("positions directory must have mode 0700")
-        records = [
-            self.read(path.stem) for path in sorted(directory.iterdir()) if path.suffix == ".yaml"
-        ]
-        if len(records) != len(list(directory.iterdir())) or len(records) > 10_000:
-            raise LifecycleConfigError(
-                "positions directory contains unexpected or excessive entries"
-            )
+        self._validate_directory_descriptors()
+        paths: list[Path] = []
+        total_bytes = 0
+        for path in directory.iterdir():
+            paths.append(path)
+            if len(paths) > MAX_LIFECYCLE_RECORDS or path.suffix != ".yaml":
+                raise LifecycleConfigError(
+                    "positions directory contains unexpected or excessive entries"
+                )
+            total_bytes += path.lstat().st_size
+            if total_bytes > MAX_LIFECYCLE_TOTAL_BYTES:
+                raise LifecycleConfigError(
+                    "positions directory contains unexpected or excessive entries"
+                )
+        paths.sort()
+        records = [self.read(path.stem) for path in paths]
         if len({item.symbol for item in records}) != len(records):
             raise LifecycleConfigError("duplicate lifecycle symbols are forbidden")
         return tuple(sorted(records, key=lambda item: item.symbol))
@@ -297,6 +314,8 @@ class LifecycleRepository:
             self.data_home = ensure_private_home(self.data_home, create=True)
         except PrivateHomeError as exc:
             raise LifecycleConfigError(str(exc)) from exc
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle mutation disabled")
         directory = self.data_home / "positions"
         if directory.exists():
             metadata = directory.lstat()
@@ -315,6 +334,12 @@ class LifecycleRepository:
             ) from exc
 
     def read(self, symbol: str) -> LifecycleRecord:
+        try:
+            self.data_home = ensure_private_home(self.data_home)
+        except PrivateHomeError as exc:
+            raise LifecycleConfigError(str(exc)) from exc
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         canonical = str(symbol).strip().upper()
         if SYMBOL.fullmatch(canonical) is None:
             raise LifecycleConfigError("lifecycle symbol must be canonical and market-qualified")
@@ -332,25 +357,25 @@ class LifecycleRepository:
 
     def _read_anchored(self, filename: str) -> bytes:
         if os.name != "posix":
-            path = self.data_home / "positions" / filename
-            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
-                raise LifecycleConfigError("lifecycle path contains a reparse point")
-            before = path.stat()
-            raw = path.read_bytes()
-            after = path.stat()
-            if before.st_nlink != 1:
-                raise LifecycleConfigError("lifecycle record must not be a hard link")
-            if os.name == "posix" and stat.S_IMODE(before.st_mode) != 0o600:
-                raise LifecycleConfigError("lifecycle record must have mode 0600")
-            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-                raise LifecycleConfigError("lifecycle record changed during read")
-            return raw
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         dflags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
         fflags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        root_fd = os.open(self.data_home, dflags)
         try:
+            root_fd = os.open(self.data_home, dflags)
+        except OSError as exc:
+            raise LifecycleConfigError("lifecycle record is unavailable or unsafe") from exc
+        try:
+            root_metadata = os.fstat(root_fd)
+            if stat.S_IMODE(root_metadata.st_mode) != 0o700:
+                raise LifecycleConfigError("PORTFOLIO_AGENT_HOME must have mode 0700")
             directory_fd = os.open("positions", dflags, dir_fd=root_fd)
             try:
+                directory_metadata = os.fstat(directory_fd)
+                if (
+                    not stat.S_ISDIR(directory_metadata.st_mode)
+                    or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+                ):
+                    raise LifecycleConfigError("positions directory must have mode 0700")
                 fd = os.open(filename, fflags, dir_fd=directory_fd)
                 try:
                     metadata = os.fstat(fd)
@@ -360,9 +385,19 @@ class LifecycleRepository:
                         raise LifecycleConfigError("lifecycle record must not be a hard link")
                     if stat.S_IMODE(metadata.st_mode) != 0o600:
                         raise LifecycleConfigError("lifecycle record must have mode 0600")
-                    raw = os.read(fd, 64 * 1024 + 1)
-                    if len(raw) > 64 * 1024:
+                    if metadata.st_size > 64 * 1024:
                         raise LifecycleConfigError("lifecycle record exceeds the size limit")
+                    chunks: list[bytes] = []
+                    total = 0
+                    while True:
+                        chunk = os.read(fd, min(8192, 64 * 1024 + 1 - total))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total > 64 * 1024:
+                            raise LifecycleConfigError("lifecycle record exceeds the size limit")
+                    raw = b"".join(chunks)
                     check = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
                     if (metadata.st_dev, metadata.st_ino) != (check.st_dev, check.st_ino):
                         raise LifecycleConfigError("lifecycle record changed during read")
@@ -375,3 +410,26 @@ class LifecycleRepository:
             raise LifecycleConfigError("lifecycle record is unavailable or unsafe") from exc
         finally:
             os.close(root_fd)
+
+    def _validate_directory_descriptors(self) -> None:
+        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            root_fd = os.open(self.data_home, flags)
+            try:
+                root_metadata = os.fstat(root_fd)
+                if stat.S_IMODE(root_metadata.st_mode) != 0o700:
+                    raise LifecycleConfigError("PORTFOLIO_AGENT_HOME must have mode 0700")
+                directory_fd = os.open("positions", flags, dir_fd=root_fd)
+                try:
+                    metadata = os.fstat(directory_fd)
+                    if (
+                        not stat.S_ISDIR(metadata.st_mode)
+                        or stat.S_IMODE(metadata.st_mode) != 0o700
+                    ):
+                        raise LifecycleConfigError("positions directory must have mode 0700")
+                finally:
+                    os.close(directory_fd)
+            finally:
+                os.close(root_fd)
+        except OSError as exc:
+            raise LifecycleConfigError("positions directory is unavailable or unsafe") from exc
