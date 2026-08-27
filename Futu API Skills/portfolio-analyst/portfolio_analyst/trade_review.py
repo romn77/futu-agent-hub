@@ -32,7 +32,7 @@ class TradePolicyConfigError(ValueError):
 
 MAX_ANALYSIS_ROWS = 20_000
 MAX_ANALYSIS_GROUPS = 20_000
-MAX_ANALYSIS_TRIPS = 40_000
+MAX_ANALYSIS_TRIPS = MAX_ANALYSIS_ROWS
 
 
 class AnalysisBudget:

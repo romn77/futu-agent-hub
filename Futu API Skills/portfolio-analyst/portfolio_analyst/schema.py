@@ -31,10 +31,10 @@ _TRADE_ARRAY_LIMITS = {
     "normalized_orders": 20_000,
     "normalized_fills": 20_000,
     "order_groups": 20_000,
-    "round_trips": 40_000,
+    "round_trips": 20_000,
     "open_lots": 20_000,
     "policy_checks": 6,
-    "behavior_findings": 20_000,
+    "behavior_findings": 10_007,
     "unverified_interpretations": 16,
     "quality_issues": 19,
     "data_quality_notes": 19,
@@ -78,10 +78,11 @@ _TRADE_ITEM_MAP_LIMITS = {
     "quality_issues[]": 2,
 }
 _TRADE_MAX_TOTAL_NODES = 1_500_000
-_TRADE_MAX_TOTAL_ARRAY_ITEMS = 120_000
+_TRADE_MAX_TOTAL_ARRAY_ITEMS = 450_000
+_TRADE_MAX_SINGLE_ARRAY_ITEMS = 120_000
 _TRADE_MAX_TOTAL_MAP_ENTRIES = 1_500_000
-_TRADE_MAX_TOTAL_STRING_BYTES = 32 * 1024 * 1024
-_TRADE_MAX_NORMALIZED_BYTES = 64 * 1024 * 1024
+_TRADE_MAX_TOTAL_STRING_BYTES = 64 * 1024 * 1024
+_TRADE_MAX_NORMALIZED_BYTES = 80 * 1024 * 1024
 _TRADE_MAX_STRING_BYTES = 1024 * 1024
 _TRADE_MAX_DEPTH = 64
 
@@ -124,6 +125,41 @@ def _normalized_json_string_bytes(value: str, remaining: int) -> tuple[int, int]
 def _preflight_trade_review_shape(payload: Any) -> None:
     """Bound the complete untrusted JSON shape before invoking JSON Schema."""
 
+    if isinstance(payload, dict):
+        orders = payload.get("normalized_orders")
+        fills = payload.get("normalized_fills")
+        groups = payload.get("order_groups")
+        trips = payload.get("round_trips")
+        open_lots = payload.get("open_lots")
+        findings = payload.get("behavior_findings")
+        if all(isinstance(rows, list) for rows in (orders, fills, groups, trips, open_lots)):
+            assert isinstance(orders, list)
+            assert isinstance(fills, list)
+            assert isinstance(groups, list)
+            assert isinstance(trips, list)
+            assert isinstance(open_lots, list)
+            if len(orders) > 20_000 or len(fills) > 20_000 or len(orders) + len(fills) > 20_000:
+                raise ReportSemanticError("VALIDATION_ROW_LIMIT_EXCEEDED")
+            if len(groups) > len(fills) or len(trips) > len(fills) or len(open_lots) > len(fills):
+                raise ReportSemanticError("VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED")
+            if isinstance(findings, list):
+                if len(findings) > len(groups) // 2 + 7:
+                    raise ReportSemanticError("VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED")
+                event_references = 0
+                symbol_references = 0
+                for finding in findings:
+                    if not isinstance(finding, dict):
+                        continue
+                    events = finding.get("affected_events")
+                    symbols = finding.get("affected_symbols")
+                    if isinstance(events, list) and isinstance(symbols, list):
+                        if len(events) > len(groups) or len(symbols) > len(events):
+                            raise ReportSemanticError("VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED")
+                        event_references += len(events)
+                        symbol_references += len(symbols)
+                if event_references > 8 * len(groups) or symbol_references > 8 * len(groups):
+                    raise ReportSemanticError("VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED")
+
     nodes = 0
     array_items = 0
     map_entries = 0
@@ -161,6 +197,8 @@ def _preflight_trade_review_shape(payload: Any) -> None:
             business_limit = _TRADE_ARRAY_LIMITS.get(path)
             if business_limit is None and path.endswith((".affected_events", ".affected_symbols")):
                 business_limit = 20_000
+            if business_limit is None and items > _TRADE_MAX_SINGLE_ARRAY_ITEMS:
+                raise ReportSemanticError(f"VALIDATION_SHAPE_LIMIT_EXCEEDED: {path}")
             if business_limit is not None and items > business_limit:
                 code = (
                     "VALIDATION_ROW_LIMIT_EXCEEDED"
@@ -653,14 +691,7 @@ def validate_trade_review_document(
         ):
             raise ReportSemanticError("VALIDATION_BUDGET_EXCEEDED")
 
-    bounded_arrays = {
-        "normalized_orders": 20_000,
-        "normalized_fills": 20_000,
-        "order_groups": 20_000,
-        "round_trips": 40_000,
-        "open_lots": 20_000,
-        "behavior_findings": 20_000,
-    }
+    bounded_arrays = {name: limit for name, limit in _TRADE_ARRAY_LIMITS.items() if "." not in name}
     if any(
         isinstance(payload.get(name), list) and len(payload[name]) > limit
         for name, limit in bounded_arrays.items()

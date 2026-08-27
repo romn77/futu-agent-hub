@@ -731,6 +731,43 @@ def test_twenty_thousand_valid_rows_complete_within_default_analysis_budget():
     assert report.metrics.trade_count == 20_000
 
 
+def test_ten_thousand_symbol_sell_buy_review_self_validates_at_public_row_cap():
+    deals = []
+    for index in range(10_000):
+        sell = _deal(
+            f"sell-{index}",
+            f"sell-order-{index}",
+            "SELL",
+            "1",
+            "10",
+            "2026-08-03 09:31:00",
+        )
+        buy = _deal(
+            f"buy-{index}",
+            f"buy-order-{index}",
+            "BUY",
+            "1",
+            "9",
+            "2026-08-03 10:01:00",
+        )
+        sell["code"] = f"US.S{index}"
+        buy["code"] = f"US.S{index}"
+        deals.extend((sell, buy))
+
+    report = build_trade_review(
+        orders=[],
+        deals=deals,
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        acquired_at=datetime(2026, 8, 28, 16, tzinfo=timezone.utc),
+    )
+
+    assert report.metrics.fill_count == 20_000
+    assert report.metrics.trade_count == 20_000
+    assert len(report.behavior_findings) == 10_003
+    validate_trade_review_document(report.to_dict())
+
+
 def test_direct_trade_analysis_rejects_rows_above_hard_cap_before_normalization():
     row = _deal("duplicate", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")
     with pytest.raises(Exception, match="ANALYSIS_ROW_LIMIT_EXCEEDED"):
@@ -776,8 +813,13 @@ def test_trade_review_schema_publishes_business_collection_limits():
     properties = schema["properties"]
     definitions = schema["$defs"]
 
+    assert properties["normalized_orders"]["maxItems"] == 20_000
+    assert properties["normalized_fills"]["maxItems"] == 20_000
+    assert properties["order_groups"]["maxItems"] == 20_000
+    assert properties["round_trips"]["maxItems"] == 20_000
+    assert properties["open_lots"]["maxItems"] == 20_000
     assert properties["policy_checks"]["maxItems"] == 6
-    assert properties["behavior_findings"]["maxItems"] == 20_000
+    assert properties["behavior_findings"]["maxItems"] == 10_007
     assert properties["unverified_interpretations"]["maxItems"] == 16
     assert properties["quality_issues"]["maxItems"] == 19
     assert properties["data_quality_notes"]["maxItems"] == 19
@@ -874,7 +916,44 @@ def test_trade_semantic_validation_preflights_nested_behavior_event_array():
         }
     ]
 
-    with pytest.raises(Exception, match="VALIDATION_SHAPE_LIMIT_EXCEEDED"):
+    with pytest.raises(Exception, match="VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_preflight_rejects_cartesian_behavior_evidence_explosion():
+    deals = []
+    for index in range(8):
+        deal = _deal(
+            f"d{index}",
+            f"o{index}",
+            "BUY",
+            "1",
+            "10",
+            "2026-08-03 10:00:00",
+        )
+        deal["code"] = f"US.S{index}"
+        deals.append(deal)
+    report = build_trade_review(
+        orders=[],
+        deals=deals,
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    event_refs = [group["group_ref"] for group in report["order_groups"]]
+    symbol_refs = [group["identity"] for group in report["order_groups"]]
+    oversized_finding = {
+        "type": "SAME_DAY_REVERSAL",
+        "severity": "INFORMATIONAL",
+        "evidence": "observed",
+        "verified": True,
+        "affected_events": event_refs,
+        "affected_symbols": symbol_refs,
+        "period_start": "2026-08-03T14:00:00Z",
+        "period_end": "2026-08-03T14:00:00Z",
+    }
+    report["behavior_findings"] = [oversized_finding] * 11
+
+    with pytest.raises(Exception, match="VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED"):
         validate_trade_review_document(report)
 
 
@@ -981,7 +1060,7 @@ def test_trade_semantic_preflight_bounds_normalized_document_bytes_without_canon
         start=date(2026, 8, 1),
         end=date(2026, 8, 27),
     ).to_dict()
-    escaped_chunk = "\x00" * 700_000
+    escaped_chunk = "\x00" * 900_000
     report["unverified_interpretations"] = [escaped_chunk] * 16
 
     with pytest.raises(Exception, match="VALIDATION_DOCUMENT_SIZE_EXCEEDED"):

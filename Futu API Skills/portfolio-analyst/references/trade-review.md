@@ -89,7 +89,7 @@ Analysis uses indexed account/order/security/day maps and explicit operation and
 Budget exhaustion fails closed with `ANALYSIS_BUDGET_EXCEEDED`; no partial metric body is fabricated.
 Snapshot recency and current-session checks use every requested market's exchange-local date, so a
 valid UTC cross-midnight snapshot is not rejected.
-Direct analysis accepts at most 20,000 combined normalized input rows, 20,000 groups, and 40,000 FIFO
+Direct analysis accepts at most 20,000 combined normalized input rows, 20,000 groups, and 20,000 FIFO
 trip rows. Its cumulative budget is charged during normalization, grouping, FIFO, reconciliation,
 metrics, and behavior phases; FIFO uses a deque. Semantic validation independently rejects oversized
 documents before JSON Schema traversal or report-ID canonicalization. Its iterative whole-body
@@ -97,7 +97,17 @@ preflight caps nesting depth, total nodes, total array items, total map entries,
 string bytes, and normalized JSON bytes. Business caps cover requested/successful/failed/omitted
 contexts, policy checks, quality issues/notes, behavior findings and their event/symbol evidence,
 unverified interpretations, currency/P&L buckets, symbol turnover, and provenance maps; every schema
-array/map publishes a matching `maxItems`/`maxProperties`. Validation then applies its own cumulative
+array/map publishes a matching `maxItems`/`maxProperties`.
+
+The derived shape budget follows the builder rather than multiplying independent public maxima:
+orders plus fills are at most 20,000; groups, trips, and open lots are each no larger than fills;
+behavior findings are at most `floor(groups / 2) + 7` (10,007 at the row cap); each finding's event
+evidence is no larger than groups, symbols are no larger than its events, and cumulative event and
+symbol references are each at most eight times groups. Therefore a valid worst-case body stays below
+450,000 array items, 1,500,000 nodes/map entries, 64 MiB aggregate string content, and 80 MiB compact
+normalized JSON (with depth 64 and 1 MiB per string). A 10,000-symbol SELL-to-BUY reproduction has
+20,000 fills/groups and 10,003 findings and must validate; Cartesian findings-by-evidence payloads
+fail early with `VALIDATION_RELATIONSHIP_LIMIT_EXCEEDED`. Validation then applies its own cumulative
 operation/wall budget and rebuilds FIFO and indexed evidence in linear time. The 20,000-row acceptance
 test uses the generous default budget rather than a fragile machine-specific elapsed-time threshold.
 

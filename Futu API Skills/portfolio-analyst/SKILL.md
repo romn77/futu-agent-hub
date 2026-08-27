@@ -173,7 +173,11 @@ deque and indexed validation remains linear for the documented 20,000-row bounda
 Schema or report-ID canonicalization, semantic validation iteratively preflights the entire untrusted
 body for bounded depth, nodes, array items, map entries, strings, and normalized document bytes. The
 published schema also caps every array/map, including contexts, policy/quality/behavior evidence,
-currency buckets, symbol turnover, and provenance maps.
+currency buckets, symbol turnover, and provenance maps. Shape relationships follow the builder:
+orders plus fills are at most 20,000; groups/trips/open lots cannot exceed fills; findings cannot
+exceed `floor(groups / 2) + 7`; and per-finding/cumulative affected evidence is bounded by groups and
+the eight finding types. This admits the documented 10,000-symbol SELL-to-BUY boundary without
+permitting Cartesian findings-by-evidence expansion.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
