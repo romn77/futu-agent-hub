@@ -78,7 +78,15 @@ def test_run_masks_sensitive_json_fields_in_stdout_and_stderr(monkeypatch, tmp_p
 
 def test_run_masks_official_human_account_output(monkeypatch, tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
-    raw = "账户 ID: 123456789\n订单 ID: 99887766\n密码: should-never-escape\n"
+    raw = (
+        "账户 ID: 123456789\n"
+        "比赛账户名称: private-competition\n"
+        "账户 88776655 | REAL | MARGIN\n"
+        "account_name: private-account\n"
+        "competition_acc_name=private-api-name\n"
+        "订单 ID: 99887766\n"
+        "密码: should-never-escape\n"
+    )
     monkeypatch.setattr(
         subprocess,
         "run",
@@ -89,6 +97,40 @@ def test_run_masks_official_human_account_output(monkeypatch, tmp_path):
 
     result = adapter.run("get_accounts", [])
 
-    assert "123456789" not in result.stdout
-    assert "99887766" not in result.stdout
-    assert "should-never-escape" not in result.stdout
+    for secret in (
+        "123456789",
+        "private-competition",
+        "88776655",
+        "private-account",
+        "private-api-name",
+        "99887766",
+        "should-never-escape",
+    ):
+        assert secret not in result.stdout
+
+
+def test_run_keeps_invocation_args_but_redacts_returned_process_args(monkeypatch, tmp_path):
+    adapter = FutuAdapter(_skill(tmp_path))
+    observed = {}
+
+    def fake_run(args, **_kwargs):
+        observed["args"] = args
+        exposed_args = [
+            *args,
+            "--order-id=ORDER-7788",
+            "--api-token",
+            "token-secret",
+            "--credential-file",
+            "/private/trading.env",
+        ]
+        return subprocess.CompletedProcess(args=exposed_args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = adapter.run("get_portfolio", ["--acc-id", "123456789", "--json"])
+
+    assert observed["args"][-3:] == ["--acc-id", "123456789", "--json"]
+    exposed = " ".join(result.args)
+    for secret in ("123456789", "ORDER-7788", "token-secret", "/private/trading.env"):
+        assert secret not in exposed
+    assert exposed.count("[REDACTED]") == 4

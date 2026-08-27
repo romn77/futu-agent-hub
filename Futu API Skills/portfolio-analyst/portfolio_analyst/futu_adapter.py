@@ -59,9 +59,14 @@ class FutuAdapter:
     _TEXT_SENSITIVE_VALUE = re.compile(
         r"(?ix)"
         r"(?P<label>"
-        r"(?:[\"']?(?:acc(?:ount)?_?id|order_?id|deal_?id|card_?num|login_?account|"
-        r"password|passwd|pwd|token|credentials?)[\"']?|账户\s*ID|订单\s*ID|成交\s*ID|账号|密码)"
-        r"\s*[:=]\s*)"
+        r"(?:"
+        r"(?:[\"']?(?:acc(?:ount)?[ _-]?id|order[ _-]?id|deal[ _-]?id|card[ _-]?num|"
+        r"login[ _-]?account|acc(?:ount)?[ _-]?name|competition[ _-]?acc[ _-]?name|"
+        r"password|passwd|pwd|token|credentials?)[\"']?|账户\s*ID|订单\s*ID|成交\s*ID|"
+        r"比赛账户名称|账户名称|账户名|账号|密码)\s*[:=]\s*"
+        r"|账户\s+(?=\d)"
+        r")"
+        r")"
         r"(?P<value>[\"'][^\"'\r\n]*[\"']|[^\s,}\]\r\n]+)"
     )
 
@@ -103,7 +108,7 @@ class FutuAdapter:
             timeout=timeout,
         )
         return subprocess.CompletedProcess(
-            args=completed.args,
+            args=self._sanitize_args(completed.args),
             returncode=completed.returncode,
             stdout=self.sanitize_output(completed.stdout),
             stderr=self.sanitize_output(completed.stderr),
@@ -135,8 +140,9 @@ class FutuAdapter:
     @classmethod
     def _is_sensitive_json_key(cls, key: object) -> bool:
         normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
-        return normalized in cls.SENSITIVE_JSON_KEYS or normalized.endswith(
-            ("password", "passwd", "token", "secret", "credential")
+        return normalized in cls.SENSITIVE_JSON_KEYS or any(
+            marker in normalized
+            for marker in ("password", "passwd", "token", "secret", "credential", "apikey")
         )
 
     @classmethod
@@ -144,3 +150,26 @@ class FutuAdapter:
         return cls._TEXT_SENSITIVE_VALUE.sub(
             lambda match: f"{match.group('label')}{cls.REDACTION}", output
         )
+
+    @classmethod
+    def _sanitize_args(cls, arguments):
+        if isinstance(arguments, (str, bytes)):
+            return cls.REDACTION
+        sanitized = []
+        redact_next = False
+        for argument in arguments:
+            text = str(argument)
+            if redact_next:
+                sanitized.append(cls.REDACTION)
+                redact_next = False
+                continue
+            option, separator, _value = text.partition("=")
+            if option.startswith("-") and cls._is_sensitive_json_key(option.lstrip("-")):
+                if separator:
+                    sanitized.append(f"{option}={cls.REDACTION}")
+                else:
+                    sanitized.append(text)
+                    redact_next = True
+            else:
+                sanitized.append(text)
+        return sanitized
