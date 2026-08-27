@@ -1327,9 +1327,9 @@ def test_trade_external_source_evidence_scrubs_secrets_and_unicode_controls_ever
 @pytest.mark.parametrize(
     ("raw", "secret"),
     [
-        ("password hunter2", "hunter2"),
-        ("secret private-value", "private-value"),
-        ("api key key-material", "key-material"),
+        ("password: hunter2", "hunter2"),
+        ("secret=private-value", "private-value"),
+        ("api key: key-material", "key-material"),
         ("Bearer bearer-material", "bearer-material"),
         ("standalone sk-private-material", "sk-private-material"),
     ],
@@ -1393,7 +1393,7 @@ def test_trade_external_source_evidence_rejects_million_character_raw_before_san
         "pass\nword: password-suffix",
         "to\u2028ken: token-suffix",
         "api\u2029key: api-key-suffix",
-        "Bear\ter: bear\x85er-suffix",
+        "Bear\ter bear\x85er-suffix",
         "sk-\u200bpri\tvate-suffix",
         "creden\u2066tial: credential-suffix",
     ],
@@ -1414,3 +1414,55 @@ def test_trade_external_source_credential_detection_collapses_all_separators_and
     assert detail == "[REDACTED_EXTERNAL_CREDENTIAL]"
     assert "suffix" not in rendered
     validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "bearer shares transfer",
+        "tokenized asset",
+        "secretary reported",
+        "token count unavailable",
+        "password policy reviewed",
+    ],
+)
+def test_trade_external_source_credential_detection_preserves_benign_words(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+
+    assert report.external_source_evidence[0]["detail"] == raw
+    validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "account 12345678 suffix-must-not-survive",
+        "account 1234 5678 suffix-must-not-survive",
+        "account 1234\n5678 suffix-must-not-survive",
+        "account 1234\u20285678 suffix-must-not-survive",
+    ],
+)
+def test_trade_external_source_identifier_detection_rejoins_digits_and_redacts_whole_note(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+
+    assert report.external_source_evidence[0]["detail"] == ("[REDACTED_EXTERNAL_IDENTIFIER]")
+    assert "suffix-must-not-survive" not in json.dumps(report.to_dict())
+    validate_trade_review_document(report.to_dict())
+
+    forged = report.to_dict()
+    forged["external_source_evidence"][0]["detail"] = raw
+    _rehash_trade(forged)
+    with pytest.raises(Exception):
+        validate_trade_review_document(forged)

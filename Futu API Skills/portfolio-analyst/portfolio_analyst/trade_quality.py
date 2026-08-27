@@ -12,15 +12,24 @@ from .futu_adapter import FutuAdapter
 MAX_EXTERNAL_SOURCE_NOTES = 20
 MAX_EXTERNAL_SOURCE_NOTE_CHARS = 512
 
-_STANDALONE_SECRET = re.compile(r"(?i)(?:\bbearer\s+\S+|\bsk-[a-z0-9._-]+|\b\d{8,}\b)")
 _LABELLED_CREDENTIAL = re.compile(
-    r"(?ix)\b(?P<label>api[ _-]?key|secret|password|passwd|pwd|"
-    r"(?:(?:access|refresh)[ _-]?)?token|credentials?)\b"
-    r"(?P<separator>\s*(?:[:=]\s*|\s+))(?P<value>\S+)"
+    r"(?ix)(?<!\w)(?:password|passwd|pwd|secret|token|api[-_ ]?key|credential)"
+    r"(?!\w)\s*[:=]\s*\S"
 )
-_COLLAPSED_CREDENTIAL = re.compile(
-    r"(?i)(?:password|passwd|pwd|secret|token|api[-_]?key|bearer|sk-|credential)"
-)
+_BEARER_CREDENTIAL = re.compile(r"(?i)(?<!\w)bearer(?!\w)\s+(?P<value>\S+)")
+_SK_CREDENTIAL = re.compile(r"(?i)(?<!\w)sk-(?P<suffix>[a-z0-9._-]{8,})(?![a-z0-9._-])")
+_DIGIT_WHITESPACE = re.compile(r"(?<=\d)\s+(?=\d)")
+_LONG_IDENTIFIER = re.compile(r"(?<!\d)\d{8,}(?!\d)")
+
+
+def _has_credential_syntax(text: str) -> bool:
+    if _LABELLED_CREDENTIAL.search(text) or _SK_CREDENTIAL.search(text):
+        return True
+    for match in _BEARER_CREDENTIAL.finditer(text):
+        value = match.group("value")
+        if len(value) >= 8 and any(not character.isalpha() for character in value):
+            return True
+    return False
 
 
 QUALITY_DETAILS = {
@@ -68,13 +77,17 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
         if len(normalized) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
             raise ValueError("EXTERNAL_SOURCE_EVIDENCE_TOO_LONG")
         detection = "".join(
-            character
+            ""
+            if unicodedata.category(character).startswith("C")
+            or unicodedata.category(character) in {"Zl", "Zp"}
+            else character
             for character in normalized
-            if not unicodedata.category(character).startswith(("C", "Z"))
-            and not character.isspace()
         )
-        if _COLLAPSED_CREDENTIAL.search(detection):
+        identifier_detection = _DIGIT_WHITESPACE.sub("", detection)
+        if _has_credential_syntax(detection):
             detail = "[REDACTED_EXTERNAL_CREDENTIAL]"
+        elif _LONG_IDENTIFIER.search(identifier_detection):
+            detail = "[REDACTED_EXTERNAL_IDENTIFIER]"
         else:
             normalized = "".join(
                 " "
@@ -87,13 +100,6 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
                 for character in normalized
             )
             detail = FutuAdapter.sanitize_output(normalized)
-            detail = _LABELLED_CREDENTIAL.sub(
-                lambda match: (
-                    f"{match.group('label')}{match.group('separator')}{FutuAdapter.REDACTION}"
-                ),
-                detail,
-            )
-            detail = _STANDALONE_SECRET.sub(FutuAdapter.REDACTION, detail)
         detail = " ".join(detail.split())
         if not detail:
             raise ValueError("source note must contain safe text")

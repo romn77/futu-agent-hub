@@ -182,9 +182,12 @@ Externally supplied source notes are preserved in bounded `external_source_evide
 `EXTERNAL_SOURCE_NOTE` and `UNVERIFIED_EXTERNAL`; they are escaped in Markdown/terminal output and
 are ambiguity evidence only, not independently verified facts or inferred motives. Before becoming
 authoritative JSON, its raw Python string is type/length checked at 512 characters before any
-normalization or scan. A bounded NFKC detection copy removes every Unicode C*/Z*/whitespace separator;
-if this rejoins any credential pattern, the whole note becomes `[REDACTED_EXTERNAL_CREDENTIAL]` so no
-suffix survives. Otherwise the display copy safely becomes one line and passes the shared account
+normalization or scan. A bounded NFKC detection copy deletes C* controls and Zl/Zp separators while
+retaining ordinary word spaces. Boundary-aware credential syntax requires labelled `:`/`=` values,
+a sufficiently token-like Bearer value, or a sufficiently long `sk-` suffix; matches replace the
+whole note with `[REDACTED_EXTERNAL_CREDENTIAL]`. A separate copy folds whitespace only between
+digits, and any rejoined 8+-digit identifier replaces the whole note with
+`[REDACTED_EXTERNAL_IDENTIFIER]`. Otherwise the display copy safely becomes one line and passes the shared account
 scrub. Oversize input fails with `EXTERNAL_SOURCE_EVIDENCE_TOO_LONG`; runtime
 validation reapplies the same sanitizer. Internal row-cap, turnover, failure, and budget evidence is
 derived only from coverage/status codes and never enters `external_source_evidence`.
