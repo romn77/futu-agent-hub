@@ -2,39 +2,62 @@
 
 from __future__ import annotations
 
-import importlib.util
-import socket
+import importlib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from .settings import discover_futuapi_skill
 
 
-SdkProbe = Callable[[], tuple[bool, str | None, str]]
-OpenDProbe = Callable[[str, int], tuple[bool, str]]
+class FutuSdk(Protocol):
+    RET_OK: int
+    OpenQuoteContext: object
 
 
-def probe_sdk() -> tuple[bool, str | None, str]:
-    """Report SDK availability without importing account-facing code."""
-
-    if importlib.util.find_spec("futu") is None:
-        return False, None, "futu module is not installed"
-    try:
-        sdk_version = version("futu-api")
-    except PackageNotFoundError:
-        sdk_version = "unknown"
-    return True, sdk_version, "futu module is importable"
+SdkProbe = Callable[[], tuple[FutuSdk | None, str | None, str]]
+OpenDProbe = Callable[[FutuSdk, str, int], tuple[bool, str]]
 
 
-def probe_opend(host: str, port: int) -> tuple[bool, str]:
-    """Test only whether the configured OpenD TCP endpoint accepts a connection."""
+def probe_sdk() -> tuple[FutuSdk | None, str | None, str]:
+    """Import the SDK and verify the API needed for the read-only handshake."""
 
     try:
-        with socket.create_connection((host, port), timeout=0.75):
-            return True, "TCP connection succeeded"
-    except OSError as exc:
-        return False, f"TCP connection failed: {type(exc).__name__}"
+        sdk = importlib.import_module("futu")
+    except Exception as exc:
+        return None, None, f"futu SDK import failed: {type(exc).__name__}"
+    if not callable(getattr(sdk, "OpenQuoteContext", None)) or not hasattr(sdk, "RET_OK"):
+        return None, None, "futu SDK import succeeded but required quote APIs are missing"
+    sdk_version = getattr(sdk, "__version__", None)
+    if not sdk_version:
+        try:
+            sdk_version = version("futu-api")
+        except PackageNotFoundError:
+            sdk_version = "unknown"
+    return sdk, str(sdk_version), "futu SDK imported and required quote APIs are present"
+
+
+def probe_opend(sdk: FutuSdk, host: str, port: int) -> tuple[bool, str]:
+    """Verify OpenD with a non-trading quote API handshake."""
+
+    context = None
+    try:
+        context = sdk.OpenQuoteContext(host=host, port=port)
+        response = context.get_global_state()
+        if not isinstance(response, tuple) or len(response) != 2:
+            return False, "OpenD handshake failed: unexpected API response"
+        ret, _data = response
+        if ret != sdk.RET_OK:
+            return False, "OpenD handshake failed: quote API rejected the request"
+        return True, "OpenD quote API handshake succeeded"
+    except Exception as exc:
+        return False, f"OpenD handshake failed: {type(exc).__name__}"
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
 
 
 def run_doctor(
@@ -49,8 +72,13 @@ def run_doctor(
 
     discovered = skill_dir.resolve() if skill_dir else discover_futuapi_skill()
     skill_available = discovered is not None and (discovered / "SKILL.md").is_file()
-    sdk_available, sdk_version, sdk_detail = sdk_probe()
-    opend_available, opend_detail = opend_probe(host, port)
+    sdk, sdk_version, sdk_detail = sdk_probe()
+    sdk_available = sdk is not None
+    if sdk is None:
+        opend_available = False
+        opend_detail = "OpenD handshake not attempted because the futu SDK is unavailable"
+    else:
+        opend_available, opend_detail = opend_probe(sdk, host, port)
     checks = {
         "futuapi_skill": {
             "available": skill_available,

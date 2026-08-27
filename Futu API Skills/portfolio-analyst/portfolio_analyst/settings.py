@@ -65,24 +65,25 @@ def discover_futuapi_skill(
     """Find the official futuapi Skill without accepting user-selected scripts."""
 
     explicit = os.environ.get("FUTUAPI_SKILL_DIR")
-    if explicit:
-        path = Path(explicit).expanduser().resolve()
-        return path if _valid_skill_dir(path) else None
-
     here = Path(__file__).resolve()
     inferred_repo = here.parents[3]
     root = (repo_root or inferred_repo).resolve()
     current = (cwd or Path.cwd()).resolve()
-    candidates = [
-        root / "Futu API Skills" / "futuapi",
-        root / "futuapi",
-        current / "Futu API Skills" / "futuapi",
-        current / "futuapi",
-        current / "skills" / "futuapi",
-        Path.home() / ".claude" / "skills" / "futuapi",
-        Path.home() / ".codex" / "skills" / "futuapi",
-        Path.home() / ".agents" / "skills" / "futuapi",
-    ]
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit))
+    candidates.extend(
+        [
+            root / "Futu API Skills" / "futuapi",
+            root / "futuapi",
+            current / "Futu API Skills" / "futuapi",
+            current / "futuapi",
+            current / "skills" / "futuapi",
+            Path.home() / ".claude" / "skills" / "futuapi",
+            Path.home() / ".codex" / "skills" / "futuapi",
+            Path.home() / ".agents" / "skills" / "futuapi",
+        ]
+    )
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
         if _valid_skill_dir(resolved):

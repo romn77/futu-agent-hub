@@ -57,3 +57,9 @@ Futu API Skills/portfolio-analyst/reports/
 Futu API Skills/portfolio-analyst/output/
 Futu API Skills/portfolio-analyst/*.account.json
 Futu API Skills/portfolio-analyst/*.snapshot.json
+Futu API Skills/portfolio-analyst/account_ids.json
+Futu API Skills/portfolio-analyst/snapshot.json
+Futu API Skills/portfolio-analyst/trades.json
+Futu API Skills/portfolio-analyst/credentials.json
+Futu API Skills/portfolio-analyst/personal_rules.yaml
+Futu API Skills/portfolio-analyst/report.json

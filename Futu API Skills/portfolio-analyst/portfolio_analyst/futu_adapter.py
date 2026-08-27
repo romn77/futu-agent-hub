@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,36 @@ class FutuAdapter:
         }
     )
     CREDENTIAL_FLAG_TERMS = frozenset({"password", "passwd", "pwd", "unlock"})
+    SENSITIVE_JSON_KEYS = frozenset(
+        {
+            "accid",
+            "accountid",
+            "orderid",
+            "dealid",
+            "cardnum",
+            "loginaccount",
+            "accname",
+            "accountname",
+            "competitionaccname",
+            "password",
+            "passwd",
+            "pwd",
+            "token",
+            "secret",
+            "apikey",
+            "credential",
+            "credentials",
+        }
+    )
+    REDACTION = "[REDACTED]"
+    _TEXT_SENSITIVE_VALUE = re.compile(
+        r"(?ix)"
+        r"(?P<label>"
+        r"(?:[\"']?(?:acc(?:ount)?_?id|order_?id|deal_?id|card_?num|login_?account|"
+        r"password|passwd|pwd|token|credentials?)[\"']?|账户\s*ID|订单\s*ID|成交\s*ID|账号|密码)"
+        r"\s*[:=]\s*)"
+        r"(?P<value>[\"'][^\"'\r\n]*[\"']|[^\s,}\]\r\n]+)"
+    )
 
     def __init__(self, skill_dir: Path, *, python_executable: str | None = None) -> None:
         self.skill_dir = skill_dir.expanduser().resolve()
@@ -63,10 +95,52 @@ class FutuAdapter:
     ) -> subprocess.CompletedProcess[str]:
         """Run an approved read-only command without a shell."""
 
-        return subprocess.run(
+        completed = subprocess.run(
             self.command(name, arguments),
             capture_output=True,
             check=False,
             text=True,
             timeout=timeout,
+        )
+        return subprocess.CompletedProcess(
+            args=completed.args,
+            returncode=completed.returncode,
+            stdout=self.sanitize_output(completed.stdout),
+            stderr=self.sanitize_output(completed.stderr),
+        )
+
+    @classmethod
+    def sanitize_output(cls, output: str | None) -> str:
+        """Mask sensitive identifiers and credentials in JSON or human-readable output."""
+
+        if not output:
+            return ""
+        try:
+            payload = json.loads(output)
+        except (json.JSONDecodeError, TypeError):
+            return cls._mask_text(output)
+        return json.dumps(cls._mask_json(payload), ensure_ascii=False)
+
+    @classmethod
+    def _mask_json(cls, value):
+        if isinstance(value, dict):
+            return {
+                key: cls.REDACTION if cls._is_sensitive_json_key(key) else cls._mask_json(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._mask_json(item) for item in value]
+        return value
+
+    @classmethod
+    def _is_sensitive_json_key(cls, key: object) -> bool:
+        normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        return normalized in cls.SENSITIVE_JSON_KEYS or normalized.endswith(
+            ("password", "passwd", "token", "secret", "credential")
+        )
+
+    @classmethod
+    def _mask_text(cls, output: str) -> str:
+        return cls._TEXT_SENSITIVE_VALUE.sub(
+            lambda match: f"{match.group('label')}{cls.REDACTION}", output
         )
