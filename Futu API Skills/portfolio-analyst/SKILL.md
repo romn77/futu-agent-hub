@@ -3,7 +3,7 @@ name: portfolio-analyst
 description: Read-only portfolio snapshots, risk and trade review, plus non-executable rebalance simulation using the official futuapi Skill.
 allowed-tools: Bash Read
 metadata:
-  version: 0.3.0
+  version: 0.4.0
 ---
 
 # Portfolio Analyst
@@ -227,3 +227,34 @@ relative tolerance while cash-plus-positions and NAV remain exact.
 Coverage binds `source_positions` exactly to the embedded snapshot position-row count, including a
 valid explicit zero for an all-cash portfolio. Source quality status and canonical prefixed notes are
 rebuilt exactly from embedded warnings, missing fields, errors, and simulation warnings.
+
+Review user-authored position lifecycle facts without inferring a thesis:
+
+```bash
+python scripts/portfolio.py lifecycle list --json
+python scripts/portfolio.py lifecycle inspect US.MU --json
+python scripts/portfolio.py lifecycle validate --latest --json --no-save
+```
+
+Lifecycle records live only in the private `positions/` directory and follow the strict example at
+`config/position-lifecycle.example.yaml`. The home and positions directory must be `0700`; records
+must be `0600` non-linked files. Missing records produce `UNCONFIGURED`, and missing history makes
+persistent role-drift evidence unavailable rather than guessed. Weight boundaries are inclusive.
+Holding horizons support bounded days, weeks, months, or years and use the documented deterministic
+upper bound. Thesis status changes only from an explicit user review; price and performance never
+create a thesis fact. See [references/position-lifecycle.md](references/position-lifecycle.md).
+
+Journal writes are explicit, append-only operations:
+
+```bash
+python scripts/portfolio.py journal record-decision --source-snapshot-id ps-... \
+  --decision ACCEPTED --summary "User-authored decision" --json
+python scripts/portfolio.py journal list decisions --json
+```
+
+Decision and analysis streams are bounded, credential-scrubbed, hash chained, locked, fsynced JSONL.
+Truncation, duplicate identities, chain corruption, unsafe links, and oversized records fail closed.
+No analysis command writes a journal event as a side effect. Content-addressed snapshot history uses
+`snapshots/YYYY/MM/<snapshot_id>.json`; exact duplicates are idempotent and conflicting bodies fail.
+POSIX persistence uses anchored no-follow descriptors and inode revalidation. The documented Windows
+fallback rejects reparse points and revalidates file identity, but cannot provide POSIX dirfd strength.

@@ -1,0 +1,16 @@
+schema_version: "1.0"
+symbol: US.MU
+role: CORE
+status: ACTIVE
+opened_at: 2026-04-10
+holding_horizon: 12-24 months
+target_weight:
+  min: 0.05
+  max: 0.08
+original_thesis: User-authored investment thesis; the agent never invents this field.
+invalidation_conditions:
+  - User-authored invalidation condition
+review_triggers:
+  - Next quarterly report
+notes: []
+last_reviewed_at: 2026-08-01

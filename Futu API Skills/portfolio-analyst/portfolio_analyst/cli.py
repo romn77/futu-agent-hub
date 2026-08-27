@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -14,6 +14,7 @@ from .doctor import run_doctor
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
+from .private_home import PrivateHomeError, ensure_private_home
 from .reporting import build_portfolio_report
 from .rendering import terminal_text
 from .repository import SourceDataError
@@ -27,10 +28,15 @@ from .risk import (
     load_portfolio_policy,
 )
 from .schema import (
+    validate_lifecycle_document,
     validate_portfolio_report_document,
     validate_rebalance_result_document,
     validate_risk_document,
 )
+from .journal_repository import JournalError, JournalRepository
+from .lifecycle import LifecycleInputError, analyze_lifecycle, unavailable_lifecycle_report
+from .lifecycle_repository import LifecycleConfigError, LifecycleRepository, record_from_document
+from .snapshot_repository import SnapshotRepository, SnapshotRepositoryError
 from .service import ConfigError, generate_snapshot
 from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
 from .snapshot import UnsafeAggregationError
@@ -123,6 +129,85 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     trades.add_argument("--output", help="relative output directory under data home")
     trades.add_argument("--no-save", action="store_true")
     trades.add_argument("--verbose", action="store_true")
+
+    lifecycle = subparsers.add_parser("lifecycle", help="inspect or validate local lifecycle facts")
+    lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
+    lifecycle_init = lifecycle_actions.add_parser("init", help="explicitly create one user record")
+    lifecycle_init.add_argument("symbol")
+    lifecycle_init.add_argument(
+        "--role",
+        required=True,
+        choices=[
+            "CORE",
+            "SATELLITE",
+            "TRADING",
+            "DEFENSIVE",
+            "HEDGE",
+            "CASH_ALTERNATIVE",
+            "UNCLASSIFIED",
+        ],
+    )
+    lifecycle_init.add_argument("--status", default="ACTIVE", choices=["ACTIVE", "EXITED"])
+    lifecycle_init.add_argument("--opened-at", required=True)
+    lifecycle_init.add_argument("--holding-horizon", required=True)
+    lifecycle_init.add_argument("--target-min", required=True)
+    lifecycle_init.add_argument("--target-max", required=True)
+    lifecycle_init.add_argument("--original-thesis", required=True)
+    lifecycle_init.add_argument("--invalidation-condition", action="append", required=True)
+    lifecycle_init.add_argument("--review-trigger", action="append", required=True)
+    lifecycle_init.add_argument("--note", action="append", default=[])
+    lifecycle_init.add_argument("--last-reviewed-at", required=True)
+    lifecycle_init.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    lifecycle_list = lifecycle_actions.add_parser("list", help="list configured lifecycle records")
+    lifecycle_list.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    lifecycle_inspect = lifecycle_actions.add_parser(
+        "inspect", help="inspect one configured record"
+    )
+    lifecycle_inspect.add_argument("symbol")
+    lifecycle_inspect.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    lifecycle_validate = lifecycle_actions.add_parser(
+        "validate", help="compare records with a snapshot"
+    )
+    lifecycle_source = lifecycle_validate.add_mutually_exclusive_group(required=True)
+    lifecycle_source.add_argument("--latest", action="store_true")
+    lifecycle_source.add_argument("--snapshot")
+    lifecycle_validate.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    lifecycle_validate.add_argument("--output", help="relative bundle directory under data home")
+    lifecycle_validate.add_argument("--no-save", action="store_true")
+
+    journal = subparsers.add_parser("journal", help="explicit append-only journal operations")
+    journal_actions = journal.add_subparsers(dest="journal_action", required=True)
+    journal_list = journal_actions.add_parser("list", help="list one journal stream")
+    journal_list.add_argument("stream", choices=["decisions", "analyses"])
+    journal_list.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    journal_decision = journal_actions.add_parser("record-decision", help="append a user decision")
+    journal_decision.add_argument("--source-snapshot-id", required=True)
+    journal_decision.add_argument(
+        "--decision", required=True, choices=["ACCEPTED", "REJECTED", "DEFERRED", "SUPERSEDED"]
+    )
+    journal_decision.add_argument("--summary", required=True)
+    journal_decision.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    journal_analysis = journal_actions.add_parser(
+        "record-analysis", help="append an analysis reference"
+    )
+    journal_analysis.add_argument("--source-snapshot-id", required=True)
+    journal_analysis.add_argument("--artifact-path", required=True)
+    journal_analysis.add_argument("--summary", required=True)
+    journal_analysis.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
     return parser
 
 
@@ -238,6 +323,105 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         settings = Settings.from_env()
+        if args.command == "journal":
+            repository = JournalRepository(settings.data_home)
+            if args.journal_action == "list":
+                records = (
+                    repository.list_decisions()
+                    if args.stream == "decisions"
+                    else repository.list_analyses()
+                )
+                payload = [item.to_dict() for item in records]
+            elif args.journal_action == "record-decision":
+                payload = repository.append_decision(
+                    timestamp=datetime.now(timezone.utc),
+                    source_snapshot_id=args.source_snapshot_id,
+                    summary=args.summary,
+                    decision=args.decision,
+                    metadata={},
+                ).to_dict()
+            else:
+                payload = repository.append_analysis(
+                    timestamp=datetime.now(timezone.utc),
+                    source_snapshot_id=args.source_snapshot_id,
+                    artifact_path=args.artifact_path,
+                    summary=args.summary,
+                    metadata={},
+                ).to_dict()
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            print(rendered if args.as_json else terminal_text(rendered))
+            return 0
+
+        if args.command == "lifecycle":
+            repository = LifecycleRepository(settings.data_home)
+            if args.lifecycle_action == "init":
+                record = record_from_document(
+                    {
+                        "schema_version": "1.0",
+                        "symbol": args.symbol,
+                        "role": args.role,
+                        "status": args.status,
+                        "opened_at": args.opened_at,
+                        "holding_horizon": args.holding_horizon,
+                        "target_weight": {"min": args.target_min, "max": args.target_max},
+                        "original_thesis": args.original_thesis,
+                        "invalidation_conditions": args.invalidation_condition,
+                        "review_triggers": args.review_trigger,
+                        "notes": args.note,
+                        "last_reviewed_at": args.last_reviewed_at,
+                    }
+                )
+                destination = repository.create(record)
+                payload = {"created": True, "record": record.to_dict()}
+                print(
+                    json.dumps(payload, ensure_ascii=False, indent=2)
+                    if args.as_json
+                    else f"Created {terminal_text(destination.relative_to(settings.data_home))}"
+                )
+                return 0
+            if args.lifecycle_action == "list":
+                records = [item.to_dict() for item in repository.list()]
+                print(
+                    json.dumps(records, ensure_ascii=False, indent=2)
+                    if args.as_json
+                    else "\n".join(item["symbol"] for item in records)
+                )
+                return 0
+            if args.lifecycle_action == "inspect":
+                record = repository.read(args.symbol)
+                payload = record.to_dict()
+                print(
+                    json.dumps(payload, ensure_ascii=False, indent=2)
+                    if args.as_json
+                    else terminal_text(json.dumps(payload, ensure_ascii=False))
+                )
+                return 0
+            source_snapshot = (
+                load_latest_snapshot(settings.data_home)
+                if args.latest
+                else load_snapshot(settings.data_home, args.snapshot)
+            )
+            try:
+                history = SnapshotRepository(settings.data_home).list(end=source_snapshot.as_of)
+            except SnapshotRepositoryError:
+                history = ()
+            lifecycle_report = analyze_lifecycle(source_snapshot, repository, history=history)
+            payload = lifecycle_report.to_dict()
+            validate_lifecycle_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                SnapshotStore(settings.data_home).save_bundle(
+                    args.output,
+                    {
+                        "lifecycle_report.json": rendered + "\n",
+                        "lifecycle_report.md": lifecycle_report.to_markdown(
+                            json_artifact="lifecycle_report.json"
+                        ),
+                    },
+                )
+            print(rendered if args.as_json else lifecycle_report.to_human())
+            return 0
+
         if args.command == "doctor":
             report = run_doctor(host=settings.opend_host, port=settings.opend_port)
             rendered = (
@@ -245,12 +429,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.as_json
                 else _human_report(report, args.verbose)
             )
-            print(rendered)
-
             if args.output and not args.no_save:
-                destination = resolve_output_path(settings.data_home, Path(args.output))
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(rendered + "\n", encoding="utf-8")
+                private_home = ensure_private_home(settings.data_home, create=True)
+                resolve_output_path(private_home, Path(args.output))
+                SnapshotStore(private_home).save(args.output, rendered + "\n")
+            print(rendered)
             return 0 if report["ok"] else 1
 
         if args.command in {"risk", "analyze"}:
@@ -282,7 +465,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     print(_human_risk_report(payload))
                 return 0
-            report = build_portfolio_report(source_snapshot, risk)
+            try:
+                lifecycle_repository = LifecycleRepository(settings.data_home)
+                try:
+                    lifecycle_history = SnapshotRepository(settings.data_home).list(
+                        end=source_snapshot.as_of
+                    )
+                except SnapshotRepositoryError:
+                    lifecycle_history = ()
+                lifecycle_report = analyze_lifecycle(
+                    source_snapshot, lifecycle_repository, history=lifecycle_history
+                )
+            except (LifecycleConfigError, LifecycleInputError):
+                lifecycle_report = unavailable_lifecycle_report(
+                    source_snapshot, "lifecycle configuration unavailable or invalid"
+                )
+            validate_lifecycle_document(lifecycle_report.to_dict())
+            report = build_portfolio_report(source_snapshot, risk, lifecycle_report)
             payload = report.to_dict()
             validate_portfolio_report_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -290,13 +489,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output = Path(args.output)
                 # Validate before writing either sibling so unsafe paths are side-effect free.
                 resolve_output_path(settings.data_home, output / "portfolio_report.json")
+                artifact_files = {
+                    "portfolio_snapshot.json": json.dumps(
+                        source_snapshot.to_dict(), ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "risk_report.json": json.dumps(risk.to_dict(), ensure_ascii=False, indent=2)
+                    + "\n",
+                    "lifecycle_report.json": json.dumps(
+                        lifecycle_report.to_dict(), ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "lifecycle_report.md": lifecycle_report.to_markdown(
+                        json_artifact="lifecycle_report.json"
+                    ),
+                    "portfolio_report.json": rendered + "\n",
+                    "portfolio_report.md": report.to_markdown(
+                        json_artifact="portfolio_report.json"
+                    ),
+                }
+                manifest = {
+                    "schema_version": "1.0",
+                    "source_snapshot_id": source_snapshot.snapshot_id,
+                    "artifacts": {
+                        name: hashlib.sha256(content.encode("utf-8")).hexdigest()
+                        for name, content in sorted(artifact_files.items())
+                    },
+                }
                 SnapshotStore(settings.data_home).save_bundle(
                     output,
                     {
-                        "portfolio_report.json": rendered + "\n",
-                        "portfolio_report.md": report.to_markdown(
-                            json_artifact="portfolio_report.json"
-                        ),
+                        **artifact_files,
+                        "manifest.json": json.dumps(
+                            manifest, ensure_ascii=False, indent=2, sort_keys=True
+                        )
+                        + "\n",
                     },
                 )
             print(
@@ -433,6 +660,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except SettingsError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except PrivateHomeError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
     except InvalidSnapshot as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except UnsupportedRiskError as exc:
@@ -455,6 +684,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except TradeReviewInputError as exc:
         return _emit_error(args, "INVALID_TRADE_HISTORY", str(exc))
+    except LifecycleConfigError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except LifecycleInputError as exc:
+        return _emit_error(args, "INVALID_LIFECYCLE", str(exc))
+    except JournalError as exc:
+        return _emit_error(args, "INVALID_JOURNAL", str(exc))
+    except SnapshotRepositoryError as exc:
+        return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except UnsafeAggregationError as exc:
         return _emit_error(args, "UNSAFE_AGGREGATION", str(exc))
     except (FutuReadError, SourceDataError) as exc:

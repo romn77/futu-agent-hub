@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "lifecycle_report_id", "as_of", "source_snapshot_id", "status", "coverage", "positions", "findings", "data_quality_notes"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "lifecycle_report_id": {"type": "string", "pattern": "^lr-[0-9a-f]{20}$"},
+    "as_of": {"type": "string", "format": "date-time"},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-"},
+    "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+    "coverage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["current_positions", "configured_records", "assessed_positions", "unconfigured_positions", "history_snapshots"],
+      "properties": {
+        "current_positions": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "configured_records": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "assessed_positions": {"type": "integer", "minimum": 0, "maximum": 20000},
+        "unconfigured_positions": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000}
+      }
+    },
+    "positions": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/assessment"}},
+    "findings": {"type": "array", "maxItems": 80000, "items": {"$ref": "#/$defs/finding"}},
+    "data_quality_notes": {"type": "array", "maxItems": 20000, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+  },
+  "$defs": {
+    "decimal": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "symbol", "summary", "evidence", "review_priority"],
+      "properties": {
+        "type": {"enum": ["UNCONFIGURED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN", "ROLE_DRIFT", "WEIGHT_DRIFT", "HORIZON_DRIFT", "EXITED"]},
+        "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "evidence": {"type": "object", "maxProperties": 16},
+        "review_priority": {"enum": ["P0", "P1", "P2", "P3"]}
+      }
+    },
+    "assessment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["symbol", "role", "record_status", "lifecycle_status", "current_weight", "target_weight", "thesis_status", "original_thesis", "invalidation_conditions", "review_triggers", "notes", "opened_at", "holding_horizon", "last_reviewed_at", "findings", "review_priority", "data_quality_notes"],
+      "properties": {
+        "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
+        "role": {"enum": ["CORE", "SATELLITE", "TRADING", "DEFENSIVE", "HEDGE", "CASH_ALTERNATIVE", "UNCLASSIFIED"]},
+        "record_status": {"type": ["string", "null"], "enum": ["ACTIVE", "EXITED", null]},
+        "lifecycle_status": {"enum": ["UNCONFIGURED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN", "ROLE_DRIFT", "WEIGHT_DRIFT", "HORIZON_DRIFT", "EXITED"]},
+        "current_weight": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+        "target_weight": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["min", "max"], "properties": {"min": {"$ref": "#/$defs/decimal"}, "max": {"$ref": "#/$defs/decimal"}}}, {"type": "null"}]},
+        "thesis_status": {"enum": ["UNREVIEWED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN"]},
+        "original_thesis": {"type": ["string", "null"], "maxLength": 8192},
+        "invalidation_conditions": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "review_triggers": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "notes": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "opened_at": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
+        "holding_horizon": {"type": ["string", "null"], "maxLength": 128},
+        "last_reviewed_at": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
+        "findings": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/finding"}},
+        "review_priority": {"enum": ["P0", "P1", "P2", "P3"]},
+        "data_quality_notes": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+      }
+    }
+  }
+}

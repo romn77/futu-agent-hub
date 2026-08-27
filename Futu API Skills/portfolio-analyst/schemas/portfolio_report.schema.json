@@ -20,7 +20,7 @@
     "concentration": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration"},
     "exposures": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/exposures"},
     "correlation": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/correlation"},
-    "lifecycle": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_4"}}},
+    "lifecycle": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_4"}}}, {"$ref": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json"}]},
     "performance": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_5"}}},
     "options": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "NOT_RUN_PHASE_6"}}},
     "hypothetical_simulation_candidates": {"type": "array", "items": {"type": "string", "pattern": "^Hypothetical only:", "minLength": 20}},

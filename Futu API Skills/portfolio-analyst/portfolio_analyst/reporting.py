@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from .models import PortfolioSnapshot, _deep_freeze, _json_value
 from .rendering import markdown_text
 from .risk import RiskReport, aggregate_economic_positions
+from .lifecycle import LifecycleReport
 
 
 @dataclass(frozen=True)
@@ -186,12 +187,31 @@ class PortfolioReport:
                 *[f"- {md(note)}" for note in data["data_quality_notes"]],
             ]
         )
+        if data["lifecycle"]["status"] != "UNAVAILABLE_UNTIL_PHASE_4":
+            lifecycle = data["lifecycle"]
+            lines.extend(["", "## Lifecycle findings", ""])
+            lines.extend(
+                [
+                    f"- {md(item['symbol'])}: {item['lifecycle_status']} "
+                    f"({item['review_priority']}); thesis={item['thesis_status']}"
+                    for item in lifecycle["positions"]
+                ]
+                or ["- None"]
+            )
         return "\n".join(lines) + "\n"
 
 
-def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> PortfolioReport:
+def build_portfolio_report(
+    snapshot: PortfolioSnapshot,
+    risk: RiskReport,
+    lifecycle: LifecycleReport | None = None,
+) -> PortfolioReport:
     if risk.source_snapshot_id != snapshot.snapshot_id or risk.as_of != snapshot.as_of:
         raise ValueError("risk and portfolio report inputs must reference the same snapshot")
+    if lifecycle is not None and (
+        lifecycle.source_snapshot_id != snapshot.snapshot_id or lifecycle.as_of != snapshot.as_of
+    ):
+        raise ValueError("lifecycle and portfolio report inputs must reference the same snapshot")
     economic_positions = aggregate_economic_positions(snapshot)
     top_holdings = sorted(
         economic_positions, key=lambda position: (-abs(position.weight), position.identity)
@@ -225,7 +245,9 @@ def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> Por
         "concentration": risk.concentration,
         "exposures": risk.to_dict()["exposures"],
         "correlation": risk.correlation,
-        "lifecycle": {"status": "UNAVAILABLE_UNTIL_PHASE_4"},
+        "lifecycle": (
+            {"status": "UNAVAILABLE_UNTIL_PHASE_4"} if lifecycle is None else lifecycle.to_dict()
+        ),
         "performance": {"status": "UNAVAILABLE_UNTIL_PHASE_5"},
         "options": {"status": "NOT_RUN_PHASE_6"},
         "hypothetical_simulation_candidates": [

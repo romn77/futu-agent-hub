@@ -42,9 +42,12 @@ class Settings:
     def from_env(cls) -> "Settings":
         raw_home = os.environ.get("PORTFOLIO_AGENT_HOME", str(DEFAULT_DATA_HOME))
         try:
-            data_home = Path(raw_home).expanduser().resolve()
+            requested_home = Path(raw_home).expanduser().absolute()
+            data_home = requested_home.resolve()
         except (OSError, RuntimeError) as exc:
             raise SettingsError("PORTFOLIO_AGENT_HOME is invalid") from exc
+        if requested_home != data_home:
+            raise SettingsError("PORTFOLIO_AGENT_HOME must not contain symlink components")
         try:
             repository = _repository_root()
         except (OSError, RuntimeError) as exc:

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-analyst.local/schemas/lifecycle_record.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "symbol", "role", "status", "opened_at", "holding_horizon", "target_weight", "original_thesis", "invalidation_conditions", "review_triggers", "notes", "last_reviewed_at"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\.[A-Z0-9]+([.-][A-Z0-9]+)*$"},
+    "role": {"enum": ["CORE", "SATELLITE", "TRADING", "DEFENSIVE", "HEDGE", "CASH_ALTERNATIVE", "UNCLASSIFIED"]},
+    "status": {"enum": ["ACTIVE", "EXITED"]},
+    "opened_at": {"type": "string", "format": "date"},
+    "holding_horizon": {"type": "string", "pattern": "^[0-9]+( *- *[0-9]+)? +(day|days|week|weeks|month|months|year|years)$", "maxLength": 128},
+    "target_weight": {
+      "type": "object", "additionalProperties": false, "required": ["min", "max"],
+      "properties": {
+        "min": {"type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$"},
+        "max": {"type": "string", "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$"}
+      }
+    },
+    "original_thesis": {"type": "string", "minLength": 1, "maxLength": 8192},
+    "invalidation_conditions": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+    "review_triggers": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+    "notes": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+    "last_reviewed_at": {"type": "string", "format": "date"}
+  }
+}

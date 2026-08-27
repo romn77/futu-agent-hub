@@ -296,7 +296,8 @@ def load_latest_snapshot(data_home: Path) -> PortfolioSnapshot:
     if not directory.is_dir() or directory.is_symlink():
         raise InvalidSnapshot("no confined snapshots directory is available")
     candidates: list[tuple[datetime, str, str, PortfolioSnapshot]] = []
-    for path in sorted(directory.glob("*.json")):
+    # Phase 1 flat paths remain readable; Phase 4 repositories add UTC year/month levels.
+    for path in sorted(directory.rglob("*.json")):
         try:
             loaded = load_snapshot(data_home, path.relative_to(data_home))
         except InvalidSnapshot:

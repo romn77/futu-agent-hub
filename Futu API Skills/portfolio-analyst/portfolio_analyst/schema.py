@@ -8,7 +8,7 @@ import re
 import sys
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, NoReturn
@@ -261,6 +261,9 @@ def _validate(payload: dict[str, Any], name: str) -> None:
     portfolio_snapshot_schema = json.loads(
         _schema_path("portfolio_snapshot.schema.json").read_text(encoding="utf-8")
     )
+    lifecycle_schema = json.loads(
+        _schema_path("position_lifecycle.schema.json").read_text(encoding="utf-8")
+    )
     registry = Registry().with_resources(
         [
             (definitions["$id"], Resource.from_contents(definitions)),
@@ -273,6 +276,7 @@ def _validate(payload: dict[str, Any], name: str) -> None:
                 portfolio_snapshot_schema["$id"],
                 Resource.from_contents(portfolio_snapshot_schema),
             ),
+            (lifecycle_schema["$id"], Resource.from_contents(lifecycle_schema)),
         ]
     )
     validator = jsonschema.Draft202012Validator(
@@ -669,6 +673,296 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             raise ReportSemanticError(
                 f"embedded risk report does not match portfolio field {portfolio_field}"
             )
+    lifecycle = payload["lifecycle"]
+    if lifecycle.get("status") != "UNAVAILABLE_UNTIL_PHASE_4":
+        validate_lifecycle_document(lifecycle)
+        if lifecycle["source_snapshot_id"] != payload["source_snapshot_id"]:
+            raise ReportSemanticError("lifecycle and risk modules reference different snapshots")
+
+
+def validate_lifecycle_document(payload: dict[str, Any]) -> None:
+    """Validate shape, complete identity, coverage, ordering, and flattened findings."""
+
+    _validate(payload, "position_lifecycle.schema.json")
+    body = dict(payload)
+    claimed = body.pop("lifecycle_report_id")
+    expected = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(
+                body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+    )
+    if claimed != expected:
+        raise ReportSemanticError("lifecycle report complete-body identity is invalid")
+    positions = payload["positions"]
+    if payload["status"] == "UNAVAILABLE" and (
+        positions or payload["findings"] or not payload["data_quality_notes"]
+    ):
+        raise ReportSemanticError("unavailable lifecycle report must contain only quality evidence")
+    if [item["symbol"] for item in positions] != sorted(item["symbol"] for item in positions):
+        raise ReportSemanticError("lifecycle positions must use stable symbol ordering")
+    coverage = payload["coverage"]
+    if coverage["assessed_positions"] != len(positions):
+        raise ReportSemanticError("lifecycle assessment coverage is inconsistent")
+    if coverage["unconfigured_positions"] != sum(
+        item["lifecycle_status"] == "UNCONFIGURED" for item in positions
+    ):
+        raise ReportSemanticError("lifecycle unconfigured coverage is inconsistent")
+    flattened = [finding for item in positions for finding in item["findings"]]
+    ordered = sorted(
+        flattened, key=lambda item: (item["review_priority"], item["type"], item["symbol"])
+    )
+    if payload["findings"] != ordered:
+        raise ReportSemanticError("lifecycle findings are incomplete or non-deterministic")
+    if payload["status"] != "UNAVAILABLE" and (
+        coverage["current_positions"]
+        != sum(item["current_weight"] is not None for item in positions)
+        or coverage["configured_records"]
+        != sum(item["record_status"] is not None for item in positions)
+    ):
+        raise ReportSemanticError("lifecycle source coverage is inconsistent")
+    precedence = (
+        "BROKEN",
+        "ROLE_DRIFT",
+        "WEIGHT_DRIFT",
+        "HORIZON_DRIFT",
+        "WEAKENING",
+        "STRENGTHENING",
+    )
+    report_date = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00")).date()
+    for item in positions:
+        types = {finding["type"] for finding in item["findings"]}
+        if any(finding["symbol"] != item["symbol"] for finding in item["findings"]):
+            raise ReportSemanticError("lifecycle finding symbol is inconsistent")
+        if item["record_status"] is None:
+            expected_status = "UNCONFIGURED"
+            if (
+                item["target_weight"] is not None
+                or item["original_thesis"] is not None
+                or item["opened_at"] is not None
+                or item["holding_horizon"] is not None
+                or item["last_reviewed_at"] is not None
+                or item["invalidation_conditions"]
+                or item["review_triggers"]
+                or item["notes"]
+                or types != {"UNCONFIGURED"}
+                or item["thesis_status"] != "UNREVIEWED"
+            ):
+                raise ReportSemanticError("unconfigured lifecycle assessment fabricated user facts")
+            only = item["findings"][0]
+            if (
+                only["summary"] != "Current position has no user lifecycle record"
+                or only["evidence"] != {"current_weight": item["current_weight"]}
+                or only["review_priority"] != "P2"
+            ):
+                raise ReportSemanticError("unconfigured lifecycle evidence is inconsistent")
+        elif item["current_weight"] is None:
+            expected_status = "EXITED"
+            if types != {"EXITED"} or item["thesis_status"] != "UNREVIEWED":
+                raise ReportSemanticError("exited lifecycle assessment is inconsistent")
+            only = item["findings"][0]
+            if (
+                only["summary"] != "Recorded position is absent from the current economic portfolio"
+                or only["evidence"] != {"record_status": item["record_status"]}
+                or only["review_priority"] != "P3"
+            ):
+                raise ReportSemanticError("exited lifecycle evidence is inconsistent")
+        else:
+            if types & {"UNCONFIGURED", "EXITED", "INTACT"}:
+                raise ReportSemanticError("configured current lifecycle findings are invalid")
+            expected_status = next((state for state in precedence if state in types), "INTACT")
+            if any(
+                item[field] is None
+                for field in (
+                    "target_weight",
+                    "original_thesis",
+                    "opened_at",
+                    "holding_horizon",
+                    "last_reviewed_at",
+                )
+            ):
+                raise ReportSemanticError("configured lifecycle assessment omitted user facts")
+        if item["lifecycle_status"] != expected_status:
+            raise ReportSemanticError("lifecycle status does not match deterministic precedence")
+        expected_priority = min(
+            (finding["review_priority"] for finding in item["findings"]), default="P3"
+        )
+        if item["review_priority"] != expected_priority:
+            raise ReportSemanticError("lifecycle review priority is inconsistent")
+        target = item["target_weight"]
+        current = item["current_weight"]
+        if target is not None and current is not None:
+            drift = not Decimal(target["min"]) <= Decimal(current) <= Decimal(target["max"])
+            if drift != ("WEIGHT_DRIFT" in types):
+                raise ReportSemanticError("lifecycle weight-drift evidence is inconsistent")
+            opened = datetime.fromisoformat(item["opened_at"]).date()
+            reviewed = datetime.fromisoformat(item["last_reviewed_at"]).date()
+            if reviewed < opened or reviewed > report_date or opened > report_date:
+                raise ReportSemanticError("lifecycle record dates are inconsistent")
+            horizon = re.fullmatch(
+                r"(\d+)(?:\s*-\s*(\d+))?\s*(day|days|week|weeks|month|months|year|years)",
+                item["holding_horizon"],
+                flags=re.IGNORECASE,
+            )
+            if horizon is None:
+                raise ReportSemanticError("lifecycle holding horizon is unsupported")
+            maximum = int(horizon.group(2) or horizon.group(1))
+            if not 1 <= maximum <= 1200:
+                raise ReportSemanticError("lifecycle holding horizon is outside the bound")
+            factor = {
+                "day": 1,
+                "days": 1,
+                "week": 7,
+                "weeks": 7,
+                "month": 30,
+                "months": 30,
+                "year": 365,
+                "years": 365,
+            }[horizon.group(3).lower()]
+            horizon_drift = (report_date - opened).days > maximum * factor
+            if horizon_drift != ("HORIZON_DRIFT" in types):
+                raise ReportSemanticError("lifecycle horizon-drift evidence is inconsistent")
+            expected_by_type: dict[str, list[tuple[str, dict[str, Any], str]]] = {
+                "WEIGHT_DRIFT": [
+                    (
+                        "Current weight is outside the user-authored target interval",
+                        {
+                            "current_weight": current,
+                            "target_min": target["min"],
+                            "target_max": target["max"],
+                        },
+                        "P1",
+                    )
+                ]
+                if drift
+                else [],
+                "HORIZON_DRIFT": [
+                    (
+                        "Holding age exceeds the deterministic upper horizon",
+                        {
+                            "held_days": (report_date - opened).days,
+                            "upper_horizon_days": maximum * factor,
+                        },
+                        "P1",
+                    )
+                ]
+                if horizon_drift
+                else [],
+                "ROLE_DRIFT": [
+                    (
+                        "SATELLITE weight remained at or above the documented 10% core-level threshold",
+                        {
+                            "threshold": "0.1",
+                            "minimum_snapshots": 3,
+                            "minimum_span_days": 30,
+                        },
+                        "P1",
+                    )
+                ]
+                if "ROLE_DRIFT" in types
+                else [],
+                "WEAKENING": [
+                    (
+                        "User review explicitly marked the thesis WEAKENING",
+                        {"thesis_status": "WEAKENING"},
+                        "P2",
+                    )
+                ]
+                if item["thesis_status"] == "WEAKENING"
+                else [],
+                "STRENGTHENING": [
+                    (
+                        "User review explicitly marked the thesis STRENGTHENING",
+                        {"thesis_status": "STRENGTHENING"},
+                        "P2",
+                    )
+                ]
+                if item["thesis_status"] == "STRENGTHENING"
+                else [],
+            }
+            broken_expected: list[tuple[str, dict[str, Any], str]] = []
+            if item["record_status"] == "EXITED":
+                broken_expected.append(
+                    (
+                        "Position is present although its user record is EXITED",
+                        {"record_status": "EXITED", "current_weight": current},
+                        "P0",
+                    )
+                )
+            if item["thesis_status"] == "BROKEN":
+                broken_expected.append(
+                    (
+                        "User review explicitly marked the thesis BROKEN",
+                        {"thesis_status": "BROKEN"},
+                        "P0",
+                    )
+                )
+            expected_by_type["BROKEN"] = broken_expected
+            for finding_type, expected in expected_by_type.items():
+                actual = [
+                    (finding["summary"], finding["evidence"], finding["review_priority"])
+                    for finding in item["findings"]
+                    if finding["type"] == finding_type
+                ]
+                if actual != expected:
+                    raise ReportSemanticError(
+                        f"lifecycle {finding_type.lower()} evidence is inconsistent"
+                    )
+            if "ROLE_DRIFT" in types and coverage["history_snapshots"] < 3:
+                raise ReportSemanticError("lifecycle role drift lacks sufficient history coverage")
+            if "ROLE_DRIFT" in types and (
+                item["role"] != "SATELLITE" or Decimal(current) < Decimal("0.10")
+            ):
+                raise ReportSemanticError("lifecycle role drift conflicts with role or weight")
+            thesis = item["thesis_status"]
+            for state in ("BROKEN", "WEAKENING", "STRENGTHENING"):
+                if (thesis == state) != (state in types):
+                    # BROKEN may also be caused solely by an EXITED/current conflict.
+                    if not (
+                        state == "BROKEN"
+                        and thesis != "BROKEN"
+                        and item["record_status"] == "EXITED"
+                        and "BROKEN" in types
+                    ):
+                        raise ReportSemanticError("lifecycle thesis evidence is inconsistent")
+            if (item["record_status"] == "EXITED") != (
+                "BROKEN" in types
+                and any(
+                    finding["evidence"].get("record_status") == "EXITED"
+                    for finding in item["findings"]
+                )
+            ):
+                raise ReportSemanticError(
+                    "lifecycle current/exited conflict evidence is inconsistent"
+                )
+    expected_report_status = (
+        "PARTIAL"
+        if coverage["unconfigured_positions"] or payload["data_quality_notes"]
+        else "COMPLETE"
+    )
+    if payload["status"] != "UNAVAILABLE" and payload["status"] != expected_report_status:
+        raise ReportSemanticError("lifecycle report quality status is inconsistent")
+
+
+def validate_lifecycle_record_document(payload: dict[str, Any]) -> None:
+    _validate(payload, "lifecycle_record.schema.json")
+    target = payload["target_weight"]
+    if Decimal(target["min"]) > Decimal(target["max"]):
+        raise ReportSemanticError("lifecycle target min cannot exceed max")
+    opened = date.fromisoformat(payload["opened_at"])
+    reviewed = date.fromisoformat(payload["last_reviewed_at"])
+    if reviewed < opened:
+        raise ReportSemanticError("lifecycle review date cannot precede opened date")
+
+
+def validate_journal_document(payload: dict[str, Any]) -> None:
+    _validate(payload, "journal_event.schema.json")
+    if (payload["event_type"] == "USER_DECISION") != (payload["decision"] is not None):
+        raise ReportSemanticError("journal decision semantics are inconsistent")
+    if (payload["event_type"] == "PORTFOLIO_ANALYSIS") != (payload["artifact_path"] is not None):
+        raise ReportSemanticError("journal artifact semantics are inconsistent")
 
 
 def validate_trade_review_document(

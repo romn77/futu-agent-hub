@@ -11,3 +11,7 @@ output and supplies exact-code currency/security metadata without market-prefix 
 `fx_rates.json`, `account_currencies.json`, and `classifications.json` are likewise synthetic
 user-configuration fixtures. The FX source label and timestamp describe test evidence only; they are
 not a claim about a live rate provider. Account-currency IDs are invented and remain private inputs.
+# Phase 4
+
+Lifecycle examples are synthetic and contain no account identifiers or real investment theses.
+All persistence and concurrency tests write only below pytest temporary directories.

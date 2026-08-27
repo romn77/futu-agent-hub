@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-analyst.local/schemas/journal_event.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "record_hash", "previous_hash", "timestamp", "event_type", "source_snapshot_id", "artifact_path", "summary", "decision", "metadata"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "event_id": {"type": "string", "pattern": "^evt-[0-9a-f]{24}$"},
+    "record_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "previous_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "event_type": {"enum": ["USER_DECISION", "PORTFOLIO_ANALYSIS"]},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$", "maxLength": 256},
+    "artifact_path": {"type": ["string", "null"], "minLength": 1, "maxLength": 4096},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "decision": {"type": ["string", "null"], "enum": ["ACCEPTED", "REJECTED", "DEFERRED", "SUPERSEDED", null]},
+    "metadata": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}
+    }
+  }
+}
