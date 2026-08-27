@@ -107,6 +107,45 @@ def test_preserved_environment_account_id_is_masked_if_a_script_echoes_it():
     assert "123456789" not in sanitized
 
 
+@pytest.mark.parametrize("invalid", ["abc", "0", "1234", " 12345", "12345x"])
+def test_invalid_environment_account_id_fails_before_subprocess(monkeypatch, tmp_path, invalid):
+    adapter = FutuAdapter(_skill(tmp_path))
+    monkeypatch.setenv("FUTU_ACC_ID", invalid)
+
+    def must_not_run(*_args, **_kwargs):
+        pytest.fail("subprocess must not run for an invalid account ID")
+
+    monkeypatch.setattr(subprocess, "run", must_not_run)
+
+    with pytest.raises(ValueError) as caught:
+        adapter.run("get_portfolio", ["--json"])
+
+    assert invalid not in str(caught.value)
+
+
+def test_known_environment_account_id_is_redacted_when_unlabeled(monkeypatch, tmp_path):
+    account_id = "281756475296104250"
+    adapter = FutuAdapter(_skill(tmp_path))
+    monkeypatch.setenv("FUTU_ACC_ID", account_id)
+
+    def fake_run(args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=[*args, f"trace-{account_id}"],
+            returncode=1,
+            stdout=f"selected {account_id}\n",
+            stderr=json.dumps({"message": f"failed for {account_id}"}),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = adapter.run("get_portfolio", ["--json"])
+
+    assert account_id not in result.stdout
+    assert account_id not in result.stderr
+    assert account_id not in " ".join(result.args)
+    assert "[REDACTED]" in f"{result.stdout} {result.stderr} {result.args}"
+
+
 @pytest.mark.parametrize(
     ("label", "value", "fragments"),
     [
@@ -283,6 +322,7 @@ def test_run_uses_controlled_environment_without_credentials_or_python_injection
 def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
     monkeypatch.setenv("FUTU_LOGIN_PWD", "parent-trade-password")
+    monkeypatch.setenv("FUTU_ACC_ID", "281756475296104250")
     observed = {}
 
     def time_out(args, **kwargs):
@@ -291,7 +331,7 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
             cmd=args,
             timeout=1,
             output=b'{"error":"account_id=123456789 token=secret-token"}',
-            stderr=b"order_id=ORDER-7788 credential=private-file",
+            stderr=b"order_id=ORDER-7788 credential=private-file account 281756475296104250",
         )
 
     monkeypatch.setattr(subprocess, "run", time_out)
@@ -302,7 +342,13 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
     exposed = (
         f"{caught.value.cmd} {caught.value.output} {caught.value.stdout} {caught.value.stderr}"
     )
-    for secret in ("123456789", "secret-token", "ORDER-7788", "private-file"):
+    for secret in (
+        "123456789",
+        "281756475296104250",
+        "secret-token",
+        "ORDER-7788",
+        "private-file",
+    ):
         assert secret not in exposed
     assert "FUTU_LOGIN_PWD" not in observed["env"]
     assert "parent-trade-password" not in exposed

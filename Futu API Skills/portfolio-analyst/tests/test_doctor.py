@@ -158,7 +158,10 @@ def test_environment_probe_uses_shared_controlled_environment(monkeypatch):
 
     child_env = observed["env"]
     for key, value in safe_parent.items():
+        if key == "FUTU_ACC_ID":
+            continue
         assert child_env[key] == value
+    assert "FUTU_ACC_ID" not in child_env
     assert child_env["PYTHONNOUSERSITE"] == "1"
     assert unsafe_parent.keys().isdisjoint(child_env)
 
@@ -183,7 +186,9 @@ def test_worker_launch_succeeds_from_unrelated_cwd(monkeypatch, tmp_path):
 def test_real_worker_ignores_parent_pythonpath_injection_from_unrelated_cwd(monkeypatch, tmp_path):
     injected = tmp_path / "injected"
     injected.mkdir()
+    marker = tmp_path / "injected-futu-imported"
     fake_futu = (
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n"
         "__version__ = 'injected-user-code'\n"
         "RET_OK = 0\n"
         "class OpenQuoteContext:\n"
@@ -216,8 +221,7 @@ def test_real_worker_ignores_parent_pythonpath_injection_from_unrelated_cwd(monk
 
     result = probe_environment("127.0.0.1", 11111, timeout=2)
 
-    assert result["sdk"]["available"] is False
-    assert result["sdk"]["version"] is None
+    assert marker.exists() is False
     assert "injected-user-code" not in json.dumps(result)
 
 

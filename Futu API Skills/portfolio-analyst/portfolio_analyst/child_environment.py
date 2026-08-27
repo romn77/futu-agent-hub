@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Literal
 
 
 # Paths, home/temp locations, locale, and core Windows process settings are the
@@ -33,25 +35,31 @@ _SAFE_RUNTIME_KEYS = (
 # This is the complete non-login configuration read by the audited common.py.
 # FUTU_ACC_ID is sensitive but required for deterministic multi-account selection;
 # it is passed only to the child and is covered by adapter output sanitization.
-_SAFE_FUTU_KEYS = (
+_SAFE_QUERY_FUTU_KEYS = (
     "FUTU_OPEND_HOST",
     "FUTU_OPEND_PORT",
     "FUTU_TRD_ENV",
     "FUTU_DEFAULT_MARKET",
     "FUTU_SECURITY_FIRM",
-    "FUTU_ACC_ID",
 )
 
 
 def controlled_child_environment(
     source: Mapping[str, str] | None = None,
+    *,
+    purpose: Literal["adapter", "doctor"],
 ) -> dict[str, str]:
     """Return an allowlisted environment with credentials and import hooks omitted."""
 
     parent = source if source is not None else os.environ
     environment = {
-        key: parent[key] for key in (*_SAFE_RUNTIME_KEYS, *_SAFE_FUTU_KEYS) if key in parent
+        key: parent[key] for key in (*_SAFE_RUNTIME_KEYS, *_SAFE_QUERY_FUTU_KEYS) if key in parent
     }
+    if purpose == "adapter" and "FUTU_ACC_ID" in parent:
+        account_id = parent["FUTU_ACC_ID"]
+        if re.fullmatch(r"[1-9][0-9]{4,19}", account_id) is None:
+            raise ValueError("FUTU_ACC_ID must be a valid positive decimal account ID")
+        environment["FUTU_ACC_ID"] = account_id
     environment.setdefault("FUTU_OPEND_HOST", "127.0.0.1")
     environment.setdefault("FUTU_OPEND_PORT", "11111")
     environment.update(

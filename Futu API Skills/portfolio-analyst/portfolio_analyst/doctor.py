@@ -53,7 +53,7 @@ def probe_environment(
             check=False,
             encoding="utf-8",
             errors="replace",
-            env=controlled_child_environment(),
+            env=controlled_child_environment(purpose="doctor"),
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:

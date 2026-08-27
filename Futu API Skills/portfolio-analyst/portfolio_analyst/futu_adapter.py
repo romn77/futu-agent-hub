@@ -108,6 +108,10 @@ class FutuAdapter:
         """Run an approved read-only command without a shell."""
 
         request = self.validate_request(name, arguments)
+        child_environment = controlled_child_environment(purpose="adapter")
+        sensitive_values = tuple(
+            value for key, value in child_environment.items() if key == "FUTU_ACC_ID"
+        )
         audited, detail = load_audited_skill(self.skill_dir)
         if audited is None:
             raise ValueError(f"audited futuapi Skill required: {detail}")
@@ -132,25 +136,27 @@ class FutuAdapter:
                     check=False,
                     encoding="utf-8",
                     errors="replace",
-                    env=controlled_child_environment(),
+                    env=child_environment,
                     timeout=timeout,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise subprocess.TimeoutExpired(
-                    cmd=self._sanitize_args(exc.cmd),
+                    cmd=self._sanitize_args(exc.cmd, sensitive_values=sensitive_values),
                     timeout=exc.timeout,
-                    output=self.sanitize_output(exc.output),
-                    stderr=self.sanitize_output(exc.stderr),
+                    output=self.sanitize_output(exc.output, sensitive_values=sensitive_values),
+                    stderr=self.sanitize_output(exc.stderr, sensitive_values=sensitive_values),
                 ) from None
         return subprocess.CompletedProcess(
-            args=self._sanitize_args(completed.args),
+            args=self._sanitize_args(completed.args, sensitive_values=sensitive_values),
             returncode=completed.returncode,
-            stdout=self.sanitize_output(completed.stdout),
-            stderr=self.sanitize_output(completed.stderr),
+            stdout=self.sanitize_output(completed.stdout, sensitive_values=sensitive_values),
+            stderr=self.sanitize_output(completed.stderr, sensitive_values=sensitive_values),
         )
 
     @classmethod
-    def sanitize_output(cls, output: str | bytes | None) -> str:
+    def sanitize_output(
+        cls, output: str | bytes | None, *, sensitive_values: Sequence[str] = ()
+    ) -> str:
         """Mask sensitive identifiers and credentials in JSON or human-readable output."""
 
         if not output:
@@ -160,20 +166,26 @@ class FutuAdapter:
         try:
             payload = json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            return cls._mask_text(output)
-        return json.dumps(cls._mask_json(payload), ensure_ascii=False)
+            return cls._mask_text(output, sensitive_values=sensitive_values)
+        return json.dumps(
+            cls._mask_json(payload, sensitive_values=sensitive_values), ensure_ascii=False
+        )
 
     @classmethod
-    def _mask_json(cls, value):
+    def _mask_json(cls, value, *, sensitive_values: Sequence[str] = ()):
         if isinstance(value, dict):
             return {
-                key: cls.REDACTION if cls._is_sensitive_json_key(key) else cls._mask_json(item)
+                key: cls.REDACTION
+                if cls._is_sensitive_json_key(key)
+                else cls._mask_json(item, sensitive_values=sensitive_values)
                 for key, item in value.items()
             }
         if isinstance(value, list):
-            return [cls._mask_json(item) for item in value]
+            return [cls._mask_json(item, sensitive_values=sensitive_values) for item in value]
         if isinstance(value, str):
-            return cls._mask_text(value)
+            return cls._mask_text(value, sensitive_values=sensitive_values)
+        if str(value) in sensitive_values:
+            return cls.REDACTION
         return value
 
     @classmethod
@@ -185,13 +197,16 @@ class FutuAdapter:
         )
 
     @classmethod
-    def _mask_text(cls, output: str) -> str:
-        return cls._TEXT_SENSITIVE_VALUE.sub(
+    def _mask_text(cls, output: str, *, sensitive_values: Sequence[str] = ()) -> str:
+        masked = cls._TEXT_SENSITIVE_VALUE.sub(
             lambda match: f"{match.group('label')}{cls.REDACTION}", output
         )
+        for sensitive in sensitive_values:
+            masked = re.sub(rf"(?<!\d){re.escape(sensitive)}(?!\d)", cls.REDACTION, masked)
+        return masked
 
     @classmethod
-    def _sanitize_args(cls, arguments):
+    def _sanitize_args(cls, arguments, *, sensitive_values: Sequence[str] = ()):
         if isinstance(arguments, (str, bytes)):
             return cls.REDACTION
         sanitized = []
@@ -210,5 +225,5 @@ class FutuAdapter:
                     sanitized.append(text)
                     redact_next = True
             else:
-                sanitized.append(text)
+                sanitized.append(cls._mask_text(text, sensitive_values=sensitive_values))
         return sanitized
