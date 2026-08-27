@@ -12,6 +12,10 @@ from .skill_trust import validate_futuapi_skill
 DEFAULT_DATA_HOME = Path("~/.moomoo-portfolio-agent")
 
 
+class SettingsError(ValueError):
+    """Invalid runtime configuration before command execution."""
+
+
 @dataclass(frozen=True)
 class FutuSkillSource:
     path: Path | None
@@ -37,17 +41,23 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         raw_home = os.environ.get("PORTFOLIO_AGENT_HOME", str(DEFAULT_DATA_HOME))
-        data_home = Path(raw_home).expanduser().resolve()
-        repository = _repository_root()
+        try:
+            data_home = Path(raw_home).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise SettingsError("PORTFOLIO_AGENT_HOME is invalid") from exc
+        try:
+            repository = _repository_root()
+        except (OSError, RuntimeError) as exc:
+            raise SettingsError("repository path configuration is invalid") from exc
         if repository is not None and data_home.is_relative_to(repository):
-            raise ValueError("PORTFOLIO_AGENT_HOME must be outside the Git repository")
+            raise SettingsError("PORTFOLIO_AGENT_HOME must be outside the Git repository")
         host = os.environ.get("FUTU_OPEND_HOST", "127.0.0.1")
         try:
             port = int(os.environ.get("FUTU_OPEND_PORT", "11111"))
         except ValueError as exc:
-            raise ValueError("FUTU_OPEND_PORT must be an integer") from exc
+            raise SettingsError("FUTU_OPEND_PORT must be an integer") from exc
         if not 1 <= port <= 65535:
-            raise ValueError("FUTU_OPEND_PORT must be between 1 and 65535")
+            raise SettingsError("FUTU_OPEND_PORT must be between 1 and 65535")
         return cls(data_home=data_home, opend_host=host, opend_port=port)
 
 

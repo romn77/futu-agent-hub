@@ -13,7 +13,7 @@ from .futu_adapter import FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
 from .repository import SourceDataError
 from .service import ConfigError, generate_snapshot
-from .settings import Settings, resolve_output_path
+from .settings import Settings, SettingsError, resolve_output_path
 from .snapshot import UnsafeAggregationError
 
 
@@ -138,6 +138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Data quality: {snapshot.data_quality.status}"
             )
         return 0
+    except SettingsError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
     except SnapshotAlreadyExists as exc:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))
     except ConfigError as exc:

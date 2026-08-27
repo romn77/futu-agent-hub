@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from portfolio_analyst.settings import Settings, resolve_output_path
+from portfolio_analyst.settings import Settings, SettingsError, resolve_output_path
 
 
 def test_data_home_defaults_outside_repository(monkeypatch, tmp_path):
@@ -27,6 +27,14 @@ def test_data_home_rejects_location_inside_git_repository(monkeypatch):
     monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(project_root / "reports"))
 
     with pytest.raises(ValueError, match="Git repository"):
+        Settings.from_env()
+
+
+def test_data_home_resolution_failure_is_a_settings_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(tmp_path / "private"))
+    monkeypatch.setattr(Path, "resolve", lambda _self: (_ for _ in ()).throw(OSError("bad")))
+
+    with pytest.raises(SettingsError, match="PORTFOLIO_AGENT_HOME"):
         Settings.from_env()
 
 

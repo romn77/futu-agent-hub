@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +18,11 @@ from portfolio_analyst.snapshot import PortfolioBuilder, UnsafeAggregationError,
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCHEMA = Path(__file__).parents[1] / "schemas" / "portfolio_snapshot.schema.json"
+FX_EFFECTIVE_AT = datetime(2026, 8, 27, tzinfo=timezone.utc)
+
+
+def _converter(rates):
+    return StaticCurrencyConverter(rates, source="TEST_FIXTURE", effective_at=FX_EFFECTIVE_AT)
 
 
 def _account(ref: str = "acct-0001") -> Account:
@@ -48,7 +55,7 @@ def test_security_normalization_preserves_symbol_and_market_without_guessing_cur
 def test_builder_converts_every_currency_before_aggregation_and_weights_close():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({("HKD", "USD"): Decimal("0.125")}),
+        converter=_converter({("HKD", "USD"): Decimal("0.125")}),
         classifications=ClassificationMapper(
             {
                 "US.AAPL": Classification(
@@ -134,7 +141,7 @@ def test_builder_converts_every_currency_before_aggregation_and_weights_close():
 def test_builder_uses_signed_short_market_value_and_explicit_nav_semantics():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper({}),
     )
     snapshot = builder.build(
@@ -171,13 +178,14 @@ def test_builder_uses_signed_short_market_value_and_explicit_nav_semantics():
     assert snapshot.nav_base == Decimal("100")
     assert snapshot.positions[0].weight == Decimal("-2")
     assert snapshot.cash_weight == Decimal("3")
-    assert snapshot.data_quality.status == "RECONSTRUCTED"
+    assert snapshot.data_quality.status == "PARTIAL"
+    assert "classification" in snapshot.data_quality.missing_fields
 
 
 def test_builder_stops_cross_currency_aggregation_when_fx_is_missing():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper({}),
     )
 
@@ -196,7 +204,7 @@ def test_builder_stops_cross_currency_aggregation_when_fx_is_missing():
 def test_builder_refuses_position_currency_inference_from_market_prefix():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper({}),
     )
 
@@ -231,7 +239,7 @@ def test_builder_refuses_position_currency_inference_from_market_prefix():
 def test_builder_refuses_currency_without_auditable_provenance():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper({}),
     )
 
@@ -266,7 +274,7 @@ def test_builder_refuses_currency_without_auditable_provenance():
 def test_exact_security_metadata_uses_audited_source_code_before_market_normalization():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({("CNH", "USD"): Decimal("0.14")}),
+        converter=_converter({("CNH", "USD"): Decimal("0.14")}),
         classifications=ClassificationMapper({}),
         security_metadata=SecurityMetadataMapper(
             {
@@ -309,7 +317,7 @@ def test_exact_security_metadata_uses_audited_source_code_before_market_normaliz
 def test_realized_pl_base_uses_verified_non_base_fx_and_preserves_null():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({("HKD", "USD"): Decimal("0.125")}),
+        converter=_converter({("HKD", "USD"): Decimal("0.125")}),
         classifications=ClassificationMapper({}),
     )
     common = dict(
@@ -353,7 +361,7 @@ def test_unknown_classification_is_literal_and_never_name_guessed():
 def test_builder_rejects_orphan_source_records_before_aggregation():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper({}),
     )
 
@@ -372,7 +380,7 @@ def test_builder_rejects_orphan_source_records_before_aggregation():
 def test_unknown_security_type_degrades_quality_explicitly():
     builder = PortfolioBuilder(
         base_currency="USD",
-        converter=StaticCurrencyConverter({}),
+        converter=_converter({}),
         classifications=ClassificationMapper(
             {
                 "US.AAPL": Classification(
@@ -421,6 +429,8 @@ def test_snapshot_store_is_atomic_confined_and_never_overwrites(tmp_path):
 
     destination = store.save("snapshots/example.json", content)
     assert destination.read_text(encoding="utf-8") == content
+    if os.name == "posix":
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
     with pytest.raises(SnapshotAlreadyExists):
         store.save("snapshots/example.json", "changed")

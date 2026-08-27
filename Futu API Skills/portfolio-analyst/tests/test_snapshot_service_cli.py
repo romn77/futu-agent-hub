@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst import cli
+from portfolio_analyst.account_alias import AccountAliaser
 from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
 from portfolio_analyst.repository import FutuPortfolioRepository, SourceDataError
 from portfolio_analyst.service import ConfigError, generate_snapshot, load_currency_converter
@@ -38,6 +39,7 @@ def _configured_home(tmp_path):
     shutil.copy2(FIXTURES / "fx_rates.json", config / "fx_rates.json")
     shutil.copy2(FIXTURES / "classifications.json", config / "classifications.json")
     shutil.copy2(FIXTURES / "security_metadata.json", config / "security_metadata.json")
+    shutil.copy2(FIXTURES / "account_currencies.json", config / "account_currencies.json")
     return home
 
 
@@ -48,6 +50,8 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
         trd_env="REAL",
         base_currency="USD",
         adapter=FixtureAdapter(),
+        aliaser=AccountAliaser.from_key(b"a" * 32),
+        discovery_complete=True,
         as_of=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc),
     )
 
@@ -56,10 +60,29 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
     assert snapshot.cash_base == 150
     assert snapshot.gross_exposure_base == 1100
     assert snapshot.data_quality.status == "COMPLETE"
-    assert snapshot.data_quality.coverage == {"accounts_expected": 2, "accounts_read": 2}
+    assert snapshot.data_quality.coverage == {
+        "accounts_returned": 2,
+        "accounts_returned_read": 2,
+        "discovery_status": "COMPLETE",
+    }
     assert snapshot.positions[1].currency == "HKD"
     assert snapshot.positions[1].currency_provenance == "USER_CONFIG"
     assert snapshot.positions[1].realized_pl_base == 10
+    assert snapshot.fx_evidence[0].source == "SANITIZED_TEST_FIXTURE"
+
+
+def test_snapshot_with_production_discovery_contract_never_overclaims_complete(tmp_path):
+    home = _configured_home(tmp_path)
+    snapshot = generate_snapshot(
+        Settings(data_home=home),
+        adapter=FixtureAdapter(),
+        aliaser=AccountAliaser.from_key(b"a" * 32),
+        discovery_complete=False,
+        as_of=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert snapshot.data_quality.status == "PARTIAL"
+    assert snapshot.data_quality.coverage["discovery_status"] == "UNVERIFIED"
 
 
 def test_service_stops_when_no_discovered_account_portfolio_was_read(tmp_path):
@@ -84,6 +107,27 @@ def test_missing_fx_config_fails_closed_instead_of_inventing_rates(tmp_path):
         load_currency_converter(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"effective_at": "2026-08-27T00:00:00+00:00", "max_age_hours": 96, "rates": {}},
+        {"source": "TEST", "max_age_hours": 96, "rates": {}},
+        {
+            "source": "TEST",
+            "effective_at": "2026-08-27T00:00:00+00:00",
+            "rates": {},
+        },
+    ],
+)
+def test_fx_config_requires_source_timestamp_and_freshness_policy(tmp_path, payload):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "fx_rates.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        load_currency_converter(tmp_path)
+
+
 def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
     home = _configured_home(tmp_path)
     monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
@@ -95,6 +139,8 @@ def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
             trd_env="REAL",
             base_currency="USD",
             adapter=FixtureAdapter(),
+            aliaser=AccountAliaser.from_key(b"a" * 32),
+            discovery_complete=True,
             as_of=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc),
         ),
     )
@@ -118,6 +164,8 @@ def test_snapshot_cli_save_uses_immutable_default_name(monkeypatch, tmp_path, ca
             trd_env="REAL",
             base_currency="USD",
             adapter=FixtureAdapter(),
+            aliaser=AccountAliaser.from_key(b"a" * 32),
+            discovery_complete=True,
             as_of=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc),
         ),
     )
@@ -170,7 +218,11 @@ def test_snapshot_cli_source_error_redacts_account_id_before_discovery(
     monkeypatch.setattr(
         cli,
         "generate_snapshot",
-        lambda *_args, **_kwargs: FutuPortfolioRepository(adapter).read(trd_env="REAL"),
+        lambda *_args, **_kwargs: FutuPortfolioRepository(
+            adapter,
+            aliaser=AccountAliaser.from_key(b"a" * 32),
+            account_currencies={},
+        ).read(trd_env="REAL"),
     )
 
     assert cli.main(["snapshot", "--json", "--no-save"]) == 2
@@ -209,7 +261,11 @@ def test_output_escape_is_rejected_as_structured_json(monkeypatch, tmp_path, cap
         cli,
         "generate_snapshot",
         lambda *_args, **_kwargs: generate_snapshot(
-            Settings(data_home=home), adapter=FixtureAdapter(), as_of=datetime.now(timezone.utc)
+            Settings(data_home=home),
+            adapter=FixtureAdapter(),
+            aliaser=AccountAliaser.from_key(b"a" * 32),
+            discovery_complete=True,
+            as_of=datetime.now(timezone.utc),
         ),
     )
 
@@ -256,3 +312,19 @@ def test_json_option_is_accepted_before_or_after_subcommand(monkeypatch, tmp_pat
     assert cli.main(argv) == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "CONFIG_ERROR"
+
+
+@pytest.mark.parametrize("as_json", [True, False])
+def test_invalid_runtime_settings_are_dedicated_config_errors(monkeypatch, capsys, as_json):
+    monkeypatch.setenv("FUTU_OPEND_PORT", "not-a-port")
+    argv = ["snapshot", "--no-save"] + (["--json"] if as_json else [])
+
+    assert cli.main(argv) == 2
+    captured = capsys.readouterr()
+    if as_json:
+        payload = json.loads(captured.out)
+        assert payload["error"]["code"] == "CONFIG_ERROR"
+        assert captured.err == ""
+    else:
+        assert "Error [CONFIG_ERROR]" in captured.err
+        assert captured.out == ""

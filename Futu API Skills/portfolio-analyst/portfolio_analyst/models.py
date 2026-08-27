@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 
@@ -24,13 +25,23 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return _decimal_text(value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(value, tuple):
         return [_json_value(item) for item in value]
     if isinstance(value, list):
         return [_json_value(item) for item in value]
-    if isinstance(value, dict):
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: _json_value(getattr(value, item.name)) for item in fields(value)}
+    if isinstance(value, dict) or isinstance(value, MappingProxyType):
         return {str(key): _json_value(item) for key, item in value.items()}
+    return value
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, dict) or isinstance(value, MappingProxyType):
+        return MappingProxyType({str(key): _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
     return value
 
 
@@ -45,6 +56,9 @@ class Account:
     context_type: str = "SEC"
     security_firm: str = "UNKNOWN"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "markets", tuple(self.markets))
+
 
 @dataclass(frozen=True)
 class CashBalance:
@@ -55,6 +69,9 @@ class CashBalance:
     amount_base: Decimal | None = None
     weight: Decimal | None = None
     data_quality_notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,9 @@ class Position:
     realized_pl_local: Decimal | None
     position_role: str | None = None
     data_quality_notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
 
 @dataclass(frozen=True)
@@ -107,6 +127,10 @@ class NormalizedPosition:
     position_role: str | None = None
     data_quality_notes: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "themes", tuple(self.themes))
+        object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
+
 
 @dataclass(frozen=True)
 class DataQuality:
@@ -119,6 +143,19 @@ class DataQuality:
     def __post_init__(self) -> None:
         if self.status not in QUALITY_STATES:
             raise ValueError(f"unsupported data-quality status: {self.status}")
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "missing_fields", tuple(self.missing_fields))
+        object.__setattr__(self, "source_errors", tuple(self.source_errors))
+        object.__setattr__(self, "coverage", _deep_freeze(self.coverage))
+
+
+@dataclass(frozen=True)
+class FxRateEvidence:
+    source_currency: str
+    target_currency: str
+    rate: Decimal
+    source: str
+    effective_at: datetime
 
 
 @dataclass(frozen=True)
@@ -130,6 +167,7 @@ class PortfolioSnapshot:
     source_version: str
     trd_env: str
     base_currency: str
+    fx_evidence: tuple[FxRateEvidence, ...]
     accounts: tuple[Account, ...]
     cash_balances: tuple[CashBalance, ...]
     positions: tuple[NormalizedPosition, ...]
@@ -143,5 +181,12 @@ class PortfolioSnapshot:
     exposures: dict[str, dict[str, Decimal]]
     data_quality: DataQuality
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fx_evidence", tuple(self.fx_evidence))
+        object.__setattr__(self, "accounts", tuple(self.accounts))
+        object.__setattr__(self, "cash_balances", tuple(self.cash_balances))
+        object.__setattr__(self, "positions", tuple(self.positions))
+        object.__setattr__(self, "exposures", _deep_freeze(self.exposures))
+
     def to_dict(self) -> dict[str, Any]:
-        return _json_value(asdict(self))
+        return _json_value(self)

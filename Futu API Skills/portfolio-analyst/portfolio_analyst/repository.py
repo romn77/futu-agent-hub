@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Mapping, Protocol, Sequence
 
+from .account_alias import AccountAliaser
 from .models import Account, CashBalance, DataQuality, Position
 from .skill_trust import audited_files
 
@@ -38,6 +39,7 @@ class _SelectedAccount:
     public: Account
     query_market: str | None
     security_firm: str | None
+    query_currency: str | None
 
 
 def _decimal(value: object, field: str) -> Decimal:
@@ -59,11 +61,6 @@ def _account_key(value: object) -> str:
     return text
 
 
-def _masked_ref(account_id: str) -> str:
-    digest = hashlib.sha256(f"portfolio-account:{account_id}".encode("ascii")).hexdigest()[:8]
-    return f"acct-{digest}-***{account_id[-4:]}"
-
-
 def _source_version() -> str:
     identity = "|".join(f"{item.relative_path}:{item.sha256}" for item in audited_files())
     return f"futuapi-audited-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
@@ -72,8 +69,21 @@ def _source_version() -> str:
 class FutuPortfolioRepository:
     QUERY_MARKETS = frozenset({"US", "HK", "HKCC", "CN", "SG", "MY", "JP"})
 
-    def __init__(self, adapter: PrivateJsonReader) -> None:
+    def __init__(
+        self,
+        adapter: PrivateJsonReader,
+        *,
+        aliaser: AccountAliaser,
+        account_currencies: Mapping[str, str],
+        discovery_complete: bool = False,
+    ) -> None:
         self.adapter = adapter
+        self.aliaser = aliaser
+        self.account_currencies = {
+            str(account_id): str(currency).upper()
+            for account_id, currency in account_currencies.items()
+        }
+        self.discovery_complete = discovery_complete
 
     def read(self, *, trd_env: str = "REAL", timeout: float = 30) -> PortfolioInputs:
         environment = trd_env.upper()
@@ -113,7 +123,7 @@ class FutuPortfolioRepository:
                 _SelectedAccount(
                     private_id=account_id,
                     public=Account(
-                        account_ref=_masked_ref(account_id),
+                        account_ref=self.aliaser.alias(account_id),
                         trd_env=environment,
                         account_type=str(raw.get("acc_type", "UNKNOWN")) or "UNKNOWN",
                         account_role=str(raw.get("acc_role", "UNKNOWN")) or "UNKNOWN",
@@ -124,6 +134,7 @@ class FutuPortfolioRepository:
                     ),
                     query_market=query_market,
                     security_firm=firm,
+                    query_currency=self.account_currencies.get(account_id),
                 )
             )
 
@@ -134,7 +145,11 @@ class FutuPortfolioRepository:
         accounts_read = 0
         for account in selected:
             try:
-                if account.query_market is None or account.security_firm is None:
+                if (
+                    account.query_market is None
+                    or account.security_firm is None
+                    or account.query_currency is None
+                ):
                     raise SourceDataError("account query metadata is incomplete")
                 arguments = [
                     "--acc-id",
@@ -143,6 +158,8 @@ class FutuPortfolioRepository:
                     account.query_market,
                     "--trd-env",
                     environment,
+                    "--currency",
+                    account.query_currency,
                     "--security-firm",
                     account.security_firm,
                     "--ctx-type",
@@ -179,16 +196,28 @@ class FutuPortfolioRepository:
             status = "UNAVAILABLE"
         elif accounts_read < expected:
             status = "PARTIAL"
+        elif not self.discovery_complete:
+            status = "PARTIAL"
         else:
             status = "COMPLETE"
+        warnings = ()
+        if not self.discovery_complete:
+            warnings = (
+                "account discovery is UNVERIFIED because the audited source suppresses context errors",
+            )
         return PortfolioInputs(
             accounts=tuple(account.public for account in selected),
             cash_balances=tuple(cash_balances),
             positions=tuple(positions),
             data_quality=DataQuality(
                 status=status,
+                warnings=warnings,
                 source_errors=tuple(source_errors),
-                coverage={"accounts_expected": expected, "accounts_read": accounts_read},
+                coverage={
+                    "accounts_returned": expected,
+                    "accounts_returned_read": accounts_read,
+                    "discovery_status": "COMPLETE" if self.discovery_complete else "UNVERIFIED",
+                },
             ),
             source_version=_source_version(),
         )

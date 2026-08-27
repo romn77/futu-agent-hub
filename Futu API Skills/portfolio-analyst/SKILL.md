@@ -41,8 +41,34 @@ never replaced.
 Currency rates are manual facts loaded from `config/fx_rates.json` under the data home:
 
 ```json
-{"rates": {"HKD/USD": "0.125"}}
+{
+  "source": "YOUR_VERIFIABLE_RATE_SOURCE",
+  "effective_at": "2026-08-27T00:00:00+00:00",
+  "max_age_hours": 96,
+  "rates": {"HKD/USD": "0.125"}
+}
 ```
+
+The source and timezone-aware effective timestamp are mandatory. The maximum age is explicit and
+capped at 96 hours so a Friday close can cover an ordinary weekend without allowing older evidence.
+Future, stale, missing, non-positive, or provenance-free rates stop valuation. The snapshot records
+only the rate evidence actually used, including deterministic base-currency identity evidence.
+
+Every returned securities account also requires an explicit valuation currency, keyed by the private
+account ID in `config/account_currencies.json`. This is query configuration, not firm or market
+inference, and supports Canadian accounts configured as either USD or CAD:
+
+```json
+{
+  "provenance": "USER_CONFIG",
+  "accounts": {"YOUR_PRIVATE_ACCOUNT_ID": "CAD"}
+}
+```
+
+Raw account IDs remain private. Public snapshots use installation-private HMAC aliases backed by a
+0600 key created atomically below the data home. Because the audited account-list command suppresses
+individual context discovery failures, normal production snapshots mark discovery `UNVERIFIED` and
+cannot claim `COMPLETE` merely because every returned account was read.
 
 The audited portfolio response does not contain per-position currency. Provide exact-code facts in
 `config/security_metadata.json`; a market prefix is never treated as currency evidence:
@@ -62,3 +88,4 @@ data quality. The snapshot uses signed position market values: long exposure is 
 exposure is the absolute value of negative positions, NAV is `cash + long - short`, gross exposure
 is `long + short`, and net exposure is `long - short`. In ordinary long-only portfolios, position
 weights plus cash weight must reconcile to 1 within `0.00000001`.
+Non-positive NAV stops snapshot generation because portfolio weights would be misleading.

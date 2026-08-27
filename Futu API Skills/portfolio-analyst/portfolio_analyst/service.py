@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .classification import Classification, ClassificationMapper
 from .futu_adapter import FutuAdapter
-from .fx import StaticCurrencyConverter
+from .fx import FxEvidenceError, StaticCurrencyConverter
 from .models import PortfolioSnapshot
 from .repository import FutuPortfolioRepository, PrivateJsonReader, SourceDataError
 from .schema import validate_snapshot_document
@@ -41,10 +42,23 @@ def load_currency_converter(data_home: Path) -> StaticCurrencyConverter:
     raw_rates = payload.get("rates")
     if not isinstance(raw_rates, dict):
         raise ConfigError("fx_rates.json requires an object named rates")
+    source_label = payload.get("source")
+    effective_at_raw = payload.get("effective_at")
+    max_age_hours = payload.get("max_age_hours")
+    if not isinstance(source_label, str) or not source_label.strip():
+        raise ConfigError("fx_rates.json requires explicit source provenance")
+    if not isinstance(effective_at_raw, str):
+        raise ConfigError("fx_rates.json requires effective_at")
+    try:
+        effective_at = datetime.fromisoformat(effective_at_raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ConfigError("fx_rates.json effective_at must be an ISO date-time") from exc
+    if not isinstance(max_age_hours, int) or isinstance(max_age_hours, bool):
+        raise ConfigError("fx_rates.json max_age_hours must be an integer")
     rates: dict[tuple[str, str], Decimal] = {}
     for pair, raw_rate in raw_rates.items():
-        source, separator, target = str(pair).upper().partition("/")
-        if not separator or len(source) != 3 or len(target) != 3:
+        source_currency, separator, target_currency = str(pair).upper().partition("/")
+        if not separator or len(source_currency) != 3 or len(target_currency) != 3:
             raise ConfigError(f"invalid FX pair in fx_rates.json: {pair}")
         try:
             rate = Decimal(str(raw_rate))
@@ -52,8 +66,16 @@ def load_currency_converter(data_home: Path) -> StaticCurrencyConverter:
             raise ConfigError(f"invalid FX rate in fx_rates.json: {pair}") from exc
         if not rate.is_finite() or rate <= 0:
             raise ConfigError(f"FX rate must be finite and positive: {pair}")
-        rates[(source, target)] = rate
-    return StaticCurrencyConverter(rates)
+        rates[(source_currency, target_currency)] = rate
+    try:
+        return StaticCurrencyConverter(
+            rates,
+            source=source_label,
+            effective_at=effective_at,
+            max_age=timedelta(hours=max_age_hours),
+        )
+    except FxEvidenceError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def load_classifications(data_home: Path) -> ClassificationMapper:
@@ -104,6 +126,27 @@ def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
     return SecurityMetadataMapper(mappings)
 
 
+def load_account_currencies(data_home: Path) -> dict[str, str]:
+    path = data_home / "config" / "account_currencies.json"
+    payload = _load_json_object(path)
+    if payload.get("provenance") != "USER_CONFIG":
+        raise ConfigError("account_currencies.json provenance must be USER_CONFIG")
+    raw_accounts = payload.get("accounts")
+    if not isinstance(raw_accounts, dict):
+        raise ConfigError("account_currencies.json requires an object named accounts")
+    supported = {"HKD", "USD", "CNH", "JPY", "AUD", "CAD", "MYR", "SGD"}
+    mappings: dict[str, str] = {}
+    for raw_id, raw_currency in raw_accounts.items():
+        account_id = str(raw_id)
+        currency = str(raw_currency).upper()
+        if not account_id.isdigit() or len(account_id) < 5:
+            raise ConfigError("account_currencies.json contains an invalid private account ID")
+        if currency not in supported:
+            raise ConfigError("account_currencies.json contains an unsupported currency")
+        mappings[account_id] = currency
+    return mappings
+
+
 def generate_snapshot(
     settings: Settings,
     *,
@@ -111,6 +154,8 @@ def generate_snapshot(
     base_currency: str = "USD",
     adapter: PrivateJsonReader | None = None,
     as_of: datetime | None = None,
+    aliaser: AccountAliaser | None = None,
+    discovery_complete: bool = False,
 ) -> PortfolioSnapshot:
     reader = adapter
     if reader is None:
@@ -118,7 +163,17 @@ def generate_snapshot(
         if skill_dir is None:
             raise ConfigError("audited-compatible futuapi Skill is unavailable")
         reader = FutuAdapter(skill_dir)
-    inputs = FutuPortfolioRepository(reader).read(trd_env=trd_env)
+    account_currencies = load_account_currencies(settings.data_home)
+    try:
+        private_aliaser = aliaser or AccountAliasStore(settings.data_home).load_or_create()
+    except AccountAliasError as exc:
+        raise ConfigError(str(exc)) from exc
+    inputs = FutuPortfolioRepository(
+        reader,
+        aliaser=private_aliaser,
+        account_currencies=account_currencies,
+        discovery_complete=discovery_complete,
+    ).read(trd_env=trd_env)
     if not inputs.accounts:
         raise SourceDataError(inputs.data_quality.source_errors[0])
     if inputs.data_quality.status == "UNAVAILABLE":

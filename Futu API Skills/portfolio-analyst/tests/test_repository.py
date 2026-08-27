@@ -4,12 +4,24 @@ from pathlib import Path
 
 import pytest
 
+from portfolio_analyst.account_alias import AccountAliaser
 from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
 from portfolio_analyst.repository import FutuPortfolioRepository
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ACCOUNT_IDS = ("90000001", "90000002")
+
+
+def _repository(adapter, *, discovery_complete=True, currencies=None):
+    return FutuPortfolioRepository(
+        adapter,
+        aliaser=AccountAliaser.from_key(b"a" * 32),
+        account_currencies=(
+            {account_id: "USD" for account_id in ACCOUNT_IDS} if currencies is None else currencies
+        ),
+        discovery_complete=discovery_complete,
+    )
 
 
 class FixtureAdapter:
@@ -34,7 +46,7 @@ class FixtureAdapter:
 def test_repository_queries_each_real_securities_account_with_exact_firm_and_market():
     adapter = FixtureAdapter()
 
-    result = FutuPortfolioRepository(adapter).read(trd_env="REAL")
+    result = _repository(adapter).read(trd_env="REAL")
 
     assert adapter.protected == ACCOUNT_IDS
     assert adapter.calls == [
@@ -48,6 +60,8 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
                 "US",
                 "--trd-env",
                 "REAL",
+                "--currency",
+                "USD",
                 "--security-firm",
                 "FUTUINC",
                 "--ctx-type",
@@ -65,6 +79,8 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
                 "US",
                 "--trd-env",
                 "REAL",
+                "--currency",
+                "USD",
                 "--security-firm",
                 "FUTUSECURITIES",
                 "--ctx-type",
@@ -84,7 +100,11 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
     assert result.positions[0].security_type == "UNKNOWN"
     assert result.positions[0].realized_pl_local == 25
     assert result.data_quality.status == "COMPLETE"
-    assert result.data_quality.coverage == {"accounts_expected": 2, "accounts_read": 2}
+    assert result.data_quality.coverage == {
+        "accounts_returned": 2,
+        "accounts_returned_read": 2,
+        "discovery_status": "COMPLETE",
+    }
     serialized = json.dumps(result, default=str)
     assert all(account_id not in serialized for account_id in ACCOUNT_IDS)
 
@@ -98,10 +118,10 @@ def test_per_account_failure_is_partial_and_never_echoes_any_discovered_id():
                 )
             return super().read_private_json(name, arguments, timeout=timeout)
 
-    result = FutuPortfolioRepository(PartialAdapter()).read(trd_env="REAL")
+    result = _repository(PartialAdapter()).read(trd_env="REAL")
 
     assert result.data_quality.status == "PARTIAL"
-    assert result.data_quality.coverage == {"accounts_expected": 2, "accounts_read": 1}
+    assert result.data_quality.coverage["accounts_returned_read"] == 1
     exposed = json.dumps(result.data_quality.__dict__, default=str)
     assert all(account_id not in exposed for account_id in ACCOUNT_IDS)
     assert "masked account" in exposed
@@ -114,10 +134,10 @@ def test_all_per_account_failures_are_explicitly_unavailable():
                 raise FutuReadError("portfolio unavailable")
             return super().read_private_json(name, arguments, timeout=timeout)
 
-    result = FutuPortfolioRepository(UnavailableAdapter()).read(trd_env="REAL")
+    result = _repository(UnavailableAdapter()).read(trd_env="REAL")
 
     assert result.data_quality.status == "UNAVAILABLE"
-    assert result.data_quality.coverage == {"accounts_expected": 2, "accounts_read": 0}
+    assert result.data_quality.coverage["accounts_returned_read"] == 0
     assert not result.cash_balances
     assert not result.positions
 
@@ -186,7 +206,69 @@ def test_initial_account_list_failure_redacts_ids_before_discovery(monkeypatch, 
     monkeypatch.setattr(adapter, "_run_unsanitized", lambda *_args, **_kwargs: raw)
 
     with pytest.raises(FutuReadError) as caught:
-        FutuPortfolioRepository(adapter).read(trd_env="REAL")
+        _repository(adapter).read(trd_env="REAL")
 
     assert "90000001" not in str(caught.value)
     assert "[REDACTED]" in str(caught.value)
+
+
+def test_live_repository_never_claims_complete_discovery():
+    result = _repository(FixtureAdapter(), discovery_complete=False).read(trd_env="REAL")
+
+    assert result.data_quality.status == "PARTIAL"
+    assert result.data_quality.coverage["discovery_status"] == "UNVERIFIED"
+    assert result.data_quality.coverage["accounts_returned_read"] == 2
+    assert any("discovery" in warning for warning in result.data_quality.warnings)
+
+
+@pytest.mark.parametrize("valuation_currency", ["USD", "CAD"])
+def test_futuca_account_uses_explicit_per_account_valuation_currency(valuation_currency):
+    account_id = "90000003"
+
+    class FutuCaAdapter(FixtureAdapter):
+        def read_private_json(self, name, arguments, *, timeout=30):
+            self.calls.append((name, tuple(arguments), timeout))
+            if name == "get_accounts":
+                return {
+                    "accounts": [
+                        {
+                            "acc_id": 90000003,
+                            "acc_type": "MARGIN",
+                            "acc_role": "NORMAL",
+                            "trd_env": "REAL",
+                            "card_num": "SANITIZED",
+                            "security_firm": "FUTUCA",
+                            "trdmarket_auth": ["US"],
+                            "acc_status": "ACTIVE",
+                            "sim_acc_type": "NONE",
+                            "competition_acc_name": "N/A",
+                            "ctx_type": "SEC",
+                        }
+                    ]
+                }
+            return {
+                "funds": {"currency": valuation_currency, "cash": 100},
+                "positions": [],
+            }
+
+    adapter = FutuCaAdapter()
+    result = _repository(
+        adapter, currencies={account_id: valuation_currency}, discovery_complete=True
+    ).read(trd_env="REAL")
+
+    portfolio_call = adapter.calls[1][1]
+    assert portfolio_call[portfolio_call.index("--currency") + 1] == valuation_currency
+    assert portfolio_call[portfolio_call.index("--security-firm") + 1] == "FUTUCA"
+    assert result.cash_balances[0].currency == valuation_currency
+    assert account_id not in json.dumps(result, default=str)
+
+
+def test_missing_required_account_currency_is_explicitly_unavailable():
+    result = _repository(FixtureAdapter(), currencies={}, discovery_complete=True).read(
+        trd_env="REAL"
+    )
+
+    assert result.data_quality.status == "UNAVAILABLE"
+    assert result.data_quality.coverage["accounts_returned_read"] == 0
+    assert not result.cash_balances
+    assert not result.positions

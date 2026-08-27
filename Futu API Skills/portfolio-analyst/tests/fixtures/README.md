@@ -8,4 +8,6 @@ fields because the audited production command does not return them.
 
 `security_metadata.json` is a synthetic `USER_CONFIG` fixture. It is separate from audited command
 output and supplies exact-code currency/security metadata without market-prefix or name inference.
-`fx_rates.json` and `classifications.json` are likewise synthetic user-configuration fixtures.
+`fx_rates.json`, `account_currencies.json`, and `classifications.json` are likewise synthetic
+user-configuration fixtures. The FX source label and timestamp describe test evidence only; they are
+not a claim about a live rate provider. Account-currency IDs are invented and remain private inputs.

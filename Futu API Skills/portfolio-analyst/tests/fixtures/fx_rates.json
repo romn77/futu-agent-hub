@@ -1,4 +1,7 @@
 {
+  "source": "SANITIZED_TEST_FIXTURE",
+  "effective_at": "2026-08-27T00:00:00+00:00",
+  "max_age_hours": 96,
   "rates": {
     "HKD/USD": "0.125"
   }

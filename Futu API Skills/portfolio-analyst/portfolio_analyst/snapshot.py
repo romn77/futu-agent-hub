@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Iterable
 
 from .classification import Classification, ClassificationMapper
-from .fx import CurrencyConverter
+from .fx import CurrencyConverter, FxEvidenceError
+from .identity import snapshot_identity
 from .models import (
     Account,
     CashBalance,
     DataQuality,
+    FxRateEvidence,
     NormalizedPosition,
     PortfolioSnapshot,
     Position,
 )
+from .quality import compose_quality
 from .security_metadata import SecurityMetadataMapper
 
 
@@ -55,13 +56,6 @@ def normalize_security(code: str) -> tuple[str, str]:
     return symbol, market
 
 
-def _snapshot_id(as_of: datetime, trd_env: str, base_currency: str, payload: object) -> str:
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-    timestamp = as_of.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"ps-{timestamp}-{trd_env.lower()}-{base_currency.lower()}-{digest}"
-
-
 class PortfolioBuilder:
     WEIGHT_TOLERANCE = Decimal("0.00000001")
 
@@ -78,13 +72,16 @@ class PortfolioBuilder:
         self.classifications = classifications
         self.security_metadata = security_metadata or SecurityMetadataMapper({})
 
-    def _rate(self, currency: str, as_of: datetime) -> Decimal:
-        rate = self.converter.rate(currency.upper(), self.base_currency, as_of)
-        if rate is None or rate <= 0:
+    def _quote(self, currency: str, as_of: datetime) -> FxRateEvidence:
+        try:
+            evidence = self.converter.quote(currency.upper(), self.base_currency, as_of)
+        except FxEvidenceError as exc:
+            raise UnsafeAggregationError(str(exc)) from exc
+        if evidence is None or evidence.rate <= 0:
             raise UnsafeAggregationError(
                 f"missing positive FX rate for {currency.upper()} to {self.base_currency}"
             )
-        return rate
+        return evidence
 
     def build(
         self,
@@ -99,6 +96,10 @@ class PortfolioBuilder:
     ) -> PortfolioSnapshot:
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("as_of must be timezone-aware")
+        try:
+            self.converter.validate(as_of)
+        except FxEvidenceError as exc:
+            raise UnsafeAggregationError(str(exc)) from exc
         accounts_tuple = tuple(accounts)
         cash_input = tuple(cash_balances)
         position_input = tuple(positions)
@@ -116,9 +117,12 @@ class PortfolioBuilder:
             raise UnsafeAggregationError("source record references an unknown masked account")
 
         converted_cash: list[CashBalance] = []
+        used_fx: dict[tuple[str, str], FxRateEvidence] = {}
         cash_base = Decimal("0")
         for cash in cash_input:
-            rate = self._rate(cash.currency, as_of)
+            evidence = self._quote(cash.currency, as_of)
+            rate = evidence.rate
+            used_fx[(evidence.source_currency, evidence.target_currency)] = evidence
             amount_base = cash.amount_local * rate
             cash_base += amount_base
             converted_cash.append(
@@ -154,7 +158,9 @@ class PortfolioBuilder:
                 if metadata and metadata.security_type
                 else position.security_type
             )
-            rate = self._rate(currency, as_of)
+            evidence = self._quote(currency, as_of)
+            rate = evidence.rate
+            used_fx[(evidence.source_currency, evidence.target_currency)] = evidence
             classification = self.classifications.classify(source_code, position.name)
             market_value_base = position.market_value_local * rate
             unrealized_base = (
@@ -194,8 +200,8 @@ class PortfolioBuilder:
         gross_exposure = long_exposure + short_exposure
         net_exposure = long_exposure - short_exposure
         nav = cash_base + net_exposure
-        if nav == 0:
-            raise UnsafeAggregationError("NAV is zero; weights are undefined")
+        if nav <= 0:
+            raise UnsafeAggregationError("NAV must be positive; weights are undefined")
 
         normalized_positions: list[NormalizedPosition] = []
         exposure_maps: dict[str, dict[str, Decimal]] = {
@@ -241,13 +247,21 @@ class PortfolioBuilder:
                     data_quality_notes=position.data_quality_notes,
                 )
             )
-            unknown_classifications |= "UNKNOWN" in {
-                classification.sector,
-                classification.industry,
-                classification.region,
-                classification.asset_class,
+            unknown_classifications |= any(
+                label.upper() == "UNKNOWN"
+                for label in (
+                    classification.sector,
+                    classification.industry,
+                    classification.region,
+                    classification.asset_class,
+                    *classification.themes,
+                )
+            )
+            unknown_security_types |= item.security_type.strip().upper() in {
+                "",
+                "UNKNOWN",
+                "N/A",
             }
-            unknown_security_types |= item.security_type in {"", "UNKNOWN", "N/A"}
             for dimension, labels in (
                 ("sector", (classification.sector,)),
                 ("region", (classification.region,)),
@@ -266,67 +280,36 @@ class PortfolioBuilder:
             if abs(weight_total + cash_weight - Decimal("1")) > self.WEIGHT_TOLERANCE:
                 raise UnsafeAggregationError("long-only portfolio weights do not reconcile to NAV")
 
-        quality = data_quality
         reconstructed_signs = any(
             any("sign normalized" in note for note in position.data_quality_notes)
             for position in normalized_positions
         )
-        if reconstructed_signs:
-            warnings = tuple(
-                dict.fromkeys((*quality.warnings, "short market-value signs were reconstructed"))
-            )
-            quality = replace(
-                quality,
-                status="RECONSTRUCTED" if quality.status == "COMPLETE" else quality.status,
-                warnings=warnings,
-            )
+        missing_fields: list[str] = []
+        warnings: list[str] = []
         if unknown_classifications:
-            missing = tuple(dict.fromkeys((*quality.missing_fields, "classification")))
-            warnings = tuple(
-                dict.fromkeys((*quality.warnings, "one or more classifications are UNKNOWN"))
-            )
-            quality = replace(
-                quality,
-                status="PARTIAL" if quality.status == "COMPLETE" else quality.status,
-                missing_fields=missing,
-                warnings=warnings,
-            )
+            missing_fields.append("classification")
+            warnings.append("one or more classifications are UNKNOWN")
         if unknown_security_types:
-            missing = tuple(dict.fromkeys((*quality.missing_fields, "security_type")))
-            warnings = tuple(
-                dict.fromkeys((*quality.warnings, "one or more security types are UNKNOWN"))
-            )
-            quality = replace(
-                quality,
-                status="PARTIAL" if quality.status == "COMPLETE" else quality.status,
-                missing_fields=missing,
-                warnings=warnings,
-            )
+            missing_fields.append("security_type")
+            warnings.append("one or more security types are UNKNOWN")
+        if reconstructed_signs:
+            warnings.append("short market-value signs were reconstructed")
+        quality = compose_quality(
+            data_quality,
+            reconstructed=reconstructed_signs,
+            missing_fields=missing_fields,
+            warnings=warnings,
+        )
 
-        identity_payload = {
-            "as_of": as_of.isoformat(),
-            "accounts": [account.account_ref for account in accounts_tuple],
-            "cash": [
-                (cash.account_ref, cash.currency, str(cash.amount_local)) for cash in cash_input
-            ],
-            "positions": [
-                (
-                    position.account_ref,
-                    position.code,
-                    str(position.quantity),
-                    str(position.market_value_local),
-                )
-                for position in position_input
-            ],
-        }
-        return PortfolioSnapshot(
+        snapshot = PortfolioSnapshot(
             schema_version="1.0",
-            snapshot_id=_snapshot_id(as_of, trd_env, self.base_currency, identity_payload),
+            snapshot_id="",
             as_of=as_of,
             source="futuapi",
             source_version=source_version,
             trd_env=trd_env,
             base_currency=self.base_currency,
+            fx_evidence=tuple(used_fx[key] for key in sorted(used_fx)),
             accounts=accounts_tuple,
             cash_balances=tuple(converted_cash),
             positions=tuple(normalized_positions),
@@ -340,3 +323,4 @@ class PortfolioBuilder:
             exposures=exposure_maps,
             data_quality=quality,
         )
+        return replace(snapshot, snapshot_id=snapshot_identity(snapshot))
