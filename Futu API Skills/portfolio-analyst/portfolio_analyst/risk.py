@@ -1051,7 +1051,9 @@ def analyze_risk(
         )
     )
     quality_status = snapshot.data_quality.status
-    if quality_status == "COMPLETE" and (correlation.status != "COMPLETE" or budget_reasons):
+    if quality_status == "COMPLETE" and (
+        correlation.status != "COMPLETE" or budget_reasons or pnl_evidence_status == "PARTIAL"
+    ):
         quality_status = "PARTIAL"
     return RiskReport(
         "1.0",

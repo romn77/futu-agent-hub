@@ -228,6 +228,15 @@ def test_pnl_schema_and_semantics_reject_fake_totals_shares_and_partial_coverage
         validate_risk_document(partial)
 
 
+def test_runtime_validation_rejects_partial_pnl_with_complete_top_level_quality():
+    payload = _complete_risk()
+    assert payload["coverage"]["pnl_evidence_status"] == "PARTIAL"
+    payload["data_quality_status"] = "COMPLETE"
+
+    with pytest.raises(ValueError, match="P&L semantic"):
+        validate_risk_document(payload)
+
+
 def test_runtime_validation_rejects_noncanonical_or_negative_exposure_evidence():
     sentinel = _risk()
     sentinel["exposures"]["sector"]["weights"]["N/A"] = sentinel["exposures"]["sector"][

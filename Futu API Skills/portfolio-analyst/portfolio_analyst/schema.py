@@ -224,6 +224,10 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
     if correlation["coverage"]["requested"] > payload["coverage"]["positions"]:
         _semantic_error("requested histories cannot exceed economic-position coverage")
     pnl_status = coverage["pnl_evidence_status"]
+    if pnl_status == "PARTIAL" and payload["data_quality_status"] == "COMPLETE":
+        raise ReportSemanticError(
+            "P&L semantic validation failed: partial evidence requires partial top-level quality"
+        )
     exposure_totals: dict[str, Decimal] = {}
     for view_name in ("sector", "region", "theme_full", "theme_split"):
         total = Decimal("0")

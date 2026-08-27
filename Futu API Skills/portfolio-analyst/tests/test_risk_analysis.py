@@ -387,6 +387,20 @@ def test_incomplete_pnl_evidence_is_partial_and_does_not_emit_concentration():
     assert any("P&L" in note and "incomplete" in note for note in report.data_quality_notes)
 
 
+def test_partial_pnl_evidence_downgrades_otherwise_complete_report_quality():
+    class CompletePrices(CorrelatedPrices):
+        def history(self, symbol, *, market, lookback, as_of):
+            return super().history("AAA", market=market, lookback=lookback, as_of=as_of)
+
+    source = replace(snapshot(), data_quality=DataQuality("COMPLETE"))
+
+    report = analyze_risk(source, price_provider=CompletePrices())
+
+    assert report.correlation.status == "COMPLETE"
+    assert report.coverage["pnl_evidence_status"] == "PARTIAL"
+    assert report.data_quality_status == "PARTIAL"
+
+
 def test_nonfinite_pnl_evidence_is_partial_not_serialized_as_a_finding():
     source = snapshot()
     positions = tuple(
