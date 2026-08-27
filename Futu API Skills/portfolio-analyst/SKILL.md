@@ -142,7 +142,12 @@ source order/deal identifiers, separates accounts and market-qualified securitie
 fills by order, and reconstructs only evidenced long-stock FIFO matches. Sells without opening
 inventory in the selected window and the upstream 200-order cap are explicit `PARTIAL` quality
 notes, never fabricated round trips. Market-open checks use exchange-local IANA timezones (including
-DST), and findings describe observed patterns while motive remains `UNVERIFIED`. The optional
+DST). Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
+complete base-currency, NAV, security-currency, and FX evidence; missing evidence makes base
+aggregates `null`, never mixed-currency totals. Orders and fills are reconciled, unsupported
+corporate-action/transfer/cost-adjustment fields are disclosed, and structured verified behavior
+findings remain separate from `unverified_interpretations`. With no cooldown/open-window policy,
+those policy counts/rates are `null`. The optional
 private `config/trade-policy.yaml` follows `config/trade-policy.example.yaml` and requires a real
 0700 config directory plus a regular 0600 file. See
 [references/trade-review.md](references/trade-review.md).
@@ -157,7 +162,8 @@ python scripts/portfolio.py simulate \
 ```
 
 The strict request supports `TARGET_WEIGHT`, `AMOUNT_DELTA`, and `SHARE_DELTA`, plus explicit new
-cash, sell-only, new-cash-only, margin, and short constraints. Every result says `HYPOTHETICAL` and
+cash (`new_cash_base`), sell-only, new-cash-only, margin, and short constraints. Results carry
+`as_of`, `base_currency`, coverage and quality notes. Every result says `HYPOTHETICAL` and
 `execution_disabled=true`; there is no order generation or trading-write path. `--output DIR`
 transactionally saves `request.json`, `result.json`, and `summary.md` without replacement. See
 [references/rebalance-simulation.md](references/rebalance-simulation.md).

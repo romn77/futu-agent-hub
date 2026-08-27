@@ -1,5 +1,7 @@
 # Trade review contract
 
+The authoritative report contract is version `1.1`; pre-currency-bucket `1.0` reports are rejected.
+
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
 must not end in the future, and is capped at 90 days. At most 20 securities account contexts and 40
 history requests are attempted, with 10-second call and 60-second wall budgets plus a three-failure
@@ -15,11 +17,23 @@ Kong, CN Shanghai, JP Tokyo, SG Singapore, MY Kuala Lumpur, CA Toronto, and AU S
 rules provide DST handling. This is a regular-session approximation, not a full exchange holiday or
 auction calendar.
 
-Stock fills are grouped by masked account and masked order ID. FIFO matching is isolated by account
+Orders are normalized with masked account/order identity, canonical security, status, side,
+quantity, dealt quantity, price, and exchange-local timestamps, then reconciled to normalized fills.
+Partial fills, missing/orphan fills, quantity mismatches, and status conflicts are explicit coverage
+and quality evidence. Stock fills are grouped by masked account and masked order ID. FIFO matching is isolated by account
 and canonical `MARKET.SYMBOL`. Open lots do not enter closed-trip win rate. A sell without evidenced
 opening inventory is omitted from FIFO metrics and marks the review partial. Corporate actions,
 transfers, cost adjustments, incomplete history, or externally supplied ambiguity notes remain
-quality evidence rather than inferred trades.
+quality evidence rather than inferred trades. The audited upstream history fields do not identify
+corporate actions, transfers, or cost adjustments, so reports say `UNSUPPORTED_EVIDENCE`; they never
+claim those events are absent. Explicitly identified non-trade events remain normalized evidence but
+are excluded from FIFO and trade metrics.
+
+Every fill is currency-qualified. Local monetary metrics are emitted only as currency buckets.
+Base-currency notional, realized P&L statistics, payoff/profit factor/expectancy, and NAV turnover are
+computed only when one immutable source snapshot supplies base currency, NAV, security currency,
+and FX for every analyzed fill. Otherwise those base aggregates are `null`, turnover maps are empty,
+and monetary coverage is `PARTIAL`; currencies are never added together directly.
 
 `trade-policy.yaml` uses this strict shape:
 
@@ -41,8 +55,12 @@ position_management:
 ```
 
 Unknown keys, aliases, collections, negative limits, unsafe modes, symlinks, and replacement during
-read fail as `CONFIG_ERROR`. Reports identify observed reversal, reentry, open-window, repeat, and
-add-to-position patterns. They never claim fear, revenge, conviction, or any other motive.
+read fail as `CONFIG_ERROR`. Reports use structured verified findings with affected event IDs,
+symbols, and time bounds. Reversal, same-day sell-then-reentry, a fixed informational first-30-minute
+session observation, repeat, and add-to-position patterns are reported even without policy. Policy
+changes only breach/severity. Interpretations are separate and explicitly unverified; reports never
+claim fear, revenge, conviction, or any other motive. Without a configured cooldown or open-window
+rule, the corresponding policy metric count and rate are `null`, not zero.
 Same-day reversal and configured open-window rates use total fill count as their denominator.
 Cost-proximity evidence means an evidenced FIFO exit within 1% of its matched entry price; this is
 an observable fixed diagnostic definition, not a claim about intent. Add `--latest` or
@@ -51,4 +69,5 @@ turnover is unavailable; with it, the report remains partial because period-aver
 
 No-save is the default. `--output DIR` writes the four immutable artifacts as one transaction:
 `normalized_trades.json`, `trade_metrics.json`, `trade_review.json`, and escaped
-`trade_review.md`.
+`trade_review.md`. JSON, Markdown, and terminal output include as-of, range, account/context
+coverage, currency/quality, and pinned read-command provenance.

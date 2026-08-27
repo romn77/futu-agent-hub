@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 import hashlib
 import json
@@ -55,11 +56,11 @@ class RebalanceRequest:
     allow_short: bool = False
     sell_only: bool = False
     new_cash_only: bool = False
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "changes", tuple(self.changes))
-        if self.schema_version != "1.0" or not self.snapshot_id:
+        if self.schema_version != "1.1" or not self.snapshot_id:
             raise RebalanceError("request identity/version is invalid")
         if re.fullmatch(r"[A-Z]{3}", self.base_currency) is None:
             raise RebalanceError("request base currency must be an uppercase ISO-style code")
@@ -106,6 +107,8 @@ class RebalanceResult:
     schema_version: str
     simulation_id: str
     source_snapshot_id: str
+    as_of: datetime
+    base_currency: str
     status: str
     execution_disabled: bool
     feasible: bool
@@ -116,12 +119,16 @@ class RebalanceResult:
     risk_changes: Mapping[str, Any]
     warnings: tuple[str, ...]
     data_quality_status: str
+    coverage: Mapping[str, Any]
+    data_quality_notes: tuple[str, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "constraints", MappingProxyType(dict(self.constraints)))
         object.__setattr__(self, "changes", tuple(MappingProxyType(dict(x)) for x in self.changes))
         object.__setattr__(self, "risk_changes", MappingProxyType(dict(self.risk_changes)))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "coverage", MappingProxyType(dict(self.coverage)))
+        object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
@@ -134,10 +141,14 @@ class RebalanceResult:
             "- Execution disabled: true",
             f"- Simulation ID: {safe(self.simulation_id)}",
             f"- Source snapshot: {safe(self.source_snapshot_id)}",
+            f"- As of: {self.as_of.isoformat()}",
+            f"- Base currency: {safe(self.base_currency)}",
             f"- Feasible: {str(self.feasible).lower()}",
             f"- Before cash: {self.before.cash_base}",
             f"- After cash: {self.after.cash_base}",
             f"- Risk comparison status: {safe(self.risk_changes['status'])}",
+            f"- Coverage: {self.coverage['changes_applied']} of {self.coverage['changes_requested']} changes; {self.coverage['price_evidence']} price and {self.coverage['fx_evidence']} FX evidence records",
+            f"- Data quality: {safe(self.data_quality_status)}",
             "\n## Hypothetical changes\n",
         ]
         lines.extend(
@@ -145,6 +156,12 @@ class RebalanceResult:
             for change in self.changes
         )
         lines.extend(["\n## Warnings\n", *([f"- {safe(x)}" for x in self.warnings] or ["- None"])])
+        lines.extend(
+            [
+                "\n## Data quality notes\n",
+                *([f"- {safe(x)}" for x in self.data_quality_notes] or ["- None"]),
+            ]
+        )
         lines.append(
             "\nThis artifact is analysis only and cannot be converted into an executable order.\n"
         )
@@ -156,12 +173,17 @@ class RebalanceResult:
                 "Hypothetical rebalance simulation",
                 f"Simulation: {terminal_text(self.simulation_id)}",
                 f"Source snapshot: {terminal_text(self.source_snapshot_id)}",
+                f"As of: {self.as_of.isoformat()}",
+                f"Base currency: {terminal_text(self.base_currency)}",
                 f"Feasible: {self.feasible}",
                 "Execution disabled: True",
                 f"Before cash: {self.before.cash_base}",
                 f"After cash: {self.after.cash_base}",
                 f"Risk comparison: {terminal_text(self.risk_changes['status'])}",
+                f"Coverage: {self.coverage['changes_applied']}/{self.coverage['changes_requested']} changes, {self.coverage['price_evidence']} price, {self.coverage['fx_evidence']} FX",
+                f"Data quality: {terminal_text(self.data_quality_status)}",
                 *[f"Warning: {terminal_text(item)}" for item in self.warnings],
+                *[f"Quality note: {terminal_text(item)}" for item in self.data_quality_notes],
             ]
         )
 
@@ -176,7 +198,7 @@ def request_from_document(payload: dict[str, Any]) -> RebalanceRequest:
                 RebalanceChange(item["symbol"], item["operation"], Decimal(item["value"]))
                 for item in payload["changes"]
             ),
-            new_cash=Decimal(payload["new_cash"]),
+            new_cash=Decimal(payload["new_cash_base"]),
             allow_margin=payload["allow_margin"],
             allow_short=payload["allow_short"],
             sell_only=payload["sell_only"],
@@ -399,12 +421,24 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         "allow_short": request.allow_short,
         "sell_only": request.sell_only,
         "new_cash_only": request.new_cash_only,
-        "new_cash": request.new_cash,
+        "new_cash_base": request.new_cash,
     }
+    source_quality_notes = tuple(
+        dict.fromkeys(
+            (
+                *snapshot.data_quality.warnings,
+                *(f"missing source field: {item}" for item in snapshot.data_quality.missing_fields),
+                *snapshot.data_quality.source_errors,
+            )
+        )
+    )
+    quality_notes = tuple(dict.fromkeys((*source_quality_notes, *warnings)))
     return RebalanceResult(
-        "1.0",
+        "1.1",
         simulation_id,
         snapshot.snapshot_id,
+        snapshot.as_of,
+        snapshot.base_currency,
         "HYPOTHETICAL",
         True,
         feasible,
@@ -414,5 +448,15 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         tuple(applied),
         risk_changes,
         tuple(warnings),
-        "PARTIAL" if warnings else "COMPLETE",
+        "PARTIAL" if quality_notes else "COMPLETE",
+        {
+            "source_positions": len(snapshot.positions),
+            "hypothetical_positions": len(after.positions),
+            "changes_requested": len(request.changes),
+            "changes_applied": len(applied),
+            "price_evidence": len(metadata),
+            "fx_evidence": len(metadata),
+            "source_data_quality_status": snapshot.data_quality.status,
+        },
+        quality_notes,
     )

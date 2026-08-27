@@ -363,8 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 end=end,
                 trd_env=args.trd_env,
                 policy=load_trade_policy(settings.data_home),
-                portfolio_nav=nav_snapshot.nav_base if nav_snapshot else None,
-                source_snapshot_id=nav_snapshot.snapshot_id if nav_snapshot else None,
+                portfolio_snapshot=nav_snapshot,
             )
             payload = review.to_dict()
             from .schema import validate_trade_review_document
@@ -378,6 +377,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "normalized_trades.json": json.dumps(
                             {
+                                "normalized_orders": payload["normalized_orders"],
+                                "normalized_fills": payload["normalized_fills"],
                                 "order_groups": payload["order_groups"],
                                 "round_trips": payload["round_trips"],
                                 "open_lots": payload["open_lots"],

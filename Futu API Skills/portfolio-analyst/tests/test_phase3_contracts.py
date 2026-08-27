@@ -131,14 +131,14 @@ def test_simulate_cli_reads_confined_request_and_transactionally_saves_bundle(
     home.mkdir()
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
     request = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "snapshot_id": snapshot().snapshot_id,
         "base_currency": "USD",
         "allow_margin": False,
         "allow_short": False,
         "sell_only": False,
         "new_cash_only": False,
-        "new_cash": "0",
+        "new_cash_base": "0",
         "changes": [{"symbol": "US.AAA", "operation": "AMOUNT_DELTA", "value": "-10"}],
     }
     SnapshotStore(home).save("requests/rebalance.json", json.dumps(request))

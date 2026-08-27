@@ -8,6 +8,8 @@ from decimal import Decimal
 from typing import Any, Mapping, Protocol, Sequence
 
 from .account_alias import AccountAliaser
+from .models import PortfolioSnapshot
+from .skill_trust import audited_files
 from .trade_review import TradePolicy, TradeReview, TradeReviewInputError, build_trade_review
 
 
@@ -41,8 +43,11 @@ class FutuTradeHistoryService:
         timeout: float = 10,
         portfolio_nav: Decimal | None = None,
         source_snapshot_id: str | None = None,
+        portfolio_snapshot: PortfolioSnapshot | None = None,
     ) -> TradeReview:
         environment = trd_env.strip().upper()
+        if portfolio_snapshot is not None and portfolio_snapshot.as_of.date() < end:
+            raise TradeReviewInputError("turnover snapshot as-of precedes the review end")
         payload = self.adapter.read_private_json("get_accounts", ["--json"], timeout=timeout)
         raw_accounts = payload.get("accounts")
         if not isinstance(raw_accounts, list):
@@ -90,12 +95,25 @@ class FutuTradeHistoryService:
             if selected
             else []
         )
-        if portfolio_nav is not None:
+        if portfolio_snapshot is not None:
             notes.append(
                 "turnover uses one explicitly selected snapshot NAV rather than average period NAV"
             )
+        elif portfolio_nav is not None or source_snapshot_id is not None:
+            raise TradeReviewInputError(
+                "base monetary analysis requires the complete immutable source snapshot"
+            )
+        monetary_evidence: dict[str, tuple[str, Decimal]] = {}
+        if portfolio_snapshot is not None:
+            for position in portfolio_snapshot.positions:
+                identity = f"{position.market}.{position.symbol}".upper()
+                evidence = (position.currency.upper(), position.fx_to_base)
+                if identity in monetary_evidence and monetary_evidence[identity] != evidence:
+                    raise TradeReviewInputError("snapshot monetary evidence conflicts by identity")
+                monetary_evidence[identity] = evidence
         deadline = time.monotonic() + self.MAX_WALL_SECONDS
         consecutive_failures = 0
+        contexts_read = 0
         for account_id, market, firm in selected:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
@@ -147,8 +165,11 @@ class FutuTradeHistoryService:
                     raw_id: f"ord-{market.lower()}-{index:06d}"
                     for index, raw_id in enumerate(sorted(raw_order_ids), 1)
                 }
-                orders.extend(self._orders(account_orders, alias, order_aliases))
-                deals.extend(self._deals(account_deals, alias, order_aliases, market))
+                orders.extend(self._orders(account_orders, alias, order_aliases, monetary_evidence))
+                deals.extend(
+                    self._deals(account_deals, alias, order_aliases, market, monetary_evidence)
+                )
+                contexts_read += 1
                 consecutive_failures = 0
             except Exception as exc:
                 consecutive_failures += 1
@@ -169,13 +190,36 @@ class FutuTradeHistoryService:
             end=end,
             policy=policy,
             source_notes=notes,
-            portfolio_nav=portfolio_nav,
-            source_snapshot_id=source_snapshot_id,
+            base_currency=portfolio_snapshot.base_currency if portfolio_snapshot else None,
+            portfolio_nav_base=portfolio_snapshot.nav_base if portfolio_snapshot else None,
+            source_snapshot_id=(portfolio_snapshot.snapshot_id if portfolio_snapshot else None),
+            as_of=portfolio_snapshot.as_of if portfolio_snapshot else None,
+            coverage_context={
+                "contexts_requested": len(selected),
+                "contexts_read": contexts_read,
+            },
+            corporate_action_evidence_status="UNSUPPORTED_EVIDENCE",
+            provenance_context={
+                "audited_source_version": "futuapi-content-manifest-v1",
+                "audited_source_digests": {
+                    str(record.relative_path): record.sha256
+                    for record in audited_files()
+                    if record.relative_path.name
+                    in {
+                        "common.py",
+                        "get_history_orders.py",
+                        "get_history_order_fill_list.py",
+                    }
+                },
+            },
         )
 
     @staticmethod
     def _orders(
-        rows: Sequence[Any], account_ref: str, order_aliases: Mapping[str, str]
+        rows: Sequence[Any],
+        account_ref: str,
+        order_aliases: Mapping[str, str],
+        monetary_evidence: Mapping[str, tuple[str, Decimal]],
     ) -> list[dict[str, Any]]:
         required = {
             "order_id",
@@ -194,11 +238,15 @@ class FutuTradeHistoryService:
                 raise TradeReviewInputError("historical order contract changed")
             if not str(row["order_id"]).strip() or not str(row["code"]).strip():
                 raise TradeReviewInputError("historical order identity is incomplete")
+            currency, _ = monetary_evidence.get(
+                str(row["code"]).strip().upper(), ("UNKNOWN", Decimal(1))
+            )
             result.append(
                 {
                     **dict(row),
                     "order_id": order_aliases[str(row["order_id"])],
                     "account_ref": account_ref,
+                    "currency": currency,
                 }
             )
         return result
@@ -209,6 +257,7 @@ class FutuTradeHistoryService:
         account_ref: str,
         order_aliases: Mapping[str, str],
         market: str,
+        monetary_evidence: Mapping[str, tuple[str, Decimal]],
     ) -> list[dict[str, Any]]:
         required = {"deal_id", "order_id", "code", "qty", "price", "create_time"}
         result = []
@@ -218,6 +267,9 @@ class FutuTradeHistoryService:
             side = row.get("trd_side", row.get("side"))
             if side is None:
                 raise TradeReviewInputError("historical deal side is missing")
+            currency, fx_to_base = monetary_evidence.get(
+                str(row["code"]).strip().upper(), ("UNKNOWN", None)
+            )
             result.append(
                 {
                     "deal_id": (f"fill-{account_ref[-8:]}-{market.lower()}-{len(result) + 1:06d}"),
@@ -228,6 +280,9 @@ class FutuTradeHistoryService:
                     "qty": row["qty"],
                     "price": row["price"],
                     "create_time": row["create_time"],
+                    "currency": currency,
+                    "fx_to_base": fx_to_base,
+                    "event_type": "TRADE",
                 }
             )
         return result

@@ -446,42 +446,250 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
 def validate_trade_review_document(payload: dict[str, Any]) -> None:
     _validate(payload, "trade_review.schema.json")
     try:
+        as_of = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
         start = datetime.fromisoformat(payload["start"]).date()
         end = datetime.fromisoformat(payload["end"]).date()
-        if start > end:
-            raise ValueError("period is reversed")
+        if start > end or as_of.date() < end:
+            raise ValueError("period is reversed or as-of precedes its end")
         metrics = payload["metrics"]
         groups = payload["order_groups"]
         trips = payload["round_trips"]
+        fills = [item for item in payload["normalized_fills"] if item["event_type"] == "TRADE"]
+        orders = payload["normalized_orders"]
+        coverage = payload["coverage"]
+        if coverage["orders_received"] != len(orders) or coverage["deals_received"] != len(
+            payload["normalized_fills"]
+        ):
+            raise ValueError("source row coverage does not match normalized evidence")
+        accounts = {item["account_ref"] for item in (*orders, *payload["normalized_fills"])}
+        if coverage["accounts_covered"] != len(accounts):
+            raise ValueError("account coverage does not match normalized evidence")
+        if not 0 <= coverage["contexts_read"] <= coverage["contexts_requested"]:
+            raise ValueError("context coverage is invalid")
+        excluded = sum(item["event_type"] != "TRADE" for item in payload["normalized_fills"])
+        if coverage["excluded_nontrade_events"] != excluded:
+            raise ValueError("excluded-event coverage does not reconcile")
         if metrics["trade_count"] != len(groups):
             raise ValueError("trade count does not match order groups")
-        if metrics["fill_count"] != sum(item["fill_count"] for item in groups):
-            raise ValueError("fill count does not match grouped fills")
-        if metrics["order_count"] < len(groups):
-            raise ValueError("order count is smaller than evidenced order groups")
-        identities = {item["identity"] for item in groups}
+        if metrics["fill_count"] != len(fills) or metrics["fill_count"] != sum(
+            item["fill_count"] for item in groups
+        ):
+            raise ValueError("fill count does not match normalized/grouped fills")
+        order_keys = {(item["account_ref"], item["order_id"]) for item in orders}
+        fill_order_keys = {(item["account_ref"], item["order_id"]) for item in fills}
+        if metrics["order_count"] != len(order_keys | fill_order_keys):
+            raise ValueError("order count does not match normalized evidence")
+        fills_by_order: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for fill in fills:
+            fills_by_order.setdefault((fill["account_ref"], fill["order_id"]), []).append(fill)
+        partial = missing = quantity_mismatch = status_conflict = 0
+        for order in orders:
+            key = (order["account_ref"], order["order_id"])
+            related = fills_by_order.get(key, [])
+            fill_quantity = sum((Decimal(item["quantity"]) for item in related), Decimal(0))
+            quantity = Decimal(order["quantity"])
+            dealt = Decimal(order["dealt_quantity"])
+            if fill_quantity == 0 and dealt > 0:
+                missing += 1
+            if Decimal(0) < fill_quantity < quantity:
+                partial += 1
+            if fill_quantity != dealt:
+                quantity_mismatch += 1
+            if (
+                (order["status"] == "FILLED_ALL" and fill_quantity != quantity)
+                or (order["status"] == "FILLED_PART" and not Decimal(0) < fill_quantity < quantity)
+                or (order["status"] == "CANCELLED_ALL" and fill_quantity)
+                or any(
+                    item["identity"] != order["identity"] or item["side"] != order["side"]
+                    for item in related
+                )
+            ):
+                status_conflict += 1
+        expected_reconciliation = {
+            "partial_fill_orders": partial,
+            "orders_missing_fills": missing,
+            "orphan_fill_orders": len(fill_order_keys - order_keys),
+            "order_fill_qty_mismatches": quantity_mismatch,
+            "order_status_conflicts": status_conflict,
+        }
+        if any(coverage[name] != value for name, value in expected_reconciliation.items()):
+            raise ValueError("order/fill reconciliation coverage is inconsistent")
+        identities = {item["identity"] for item in fills}
         if metrics["distinct_symbols"] != len(identities):
-            raise ValueError("symbol count does not match order groups")
+            raise ValueError("symbol count does not match normalized fills")
         if metrics["closed_trips"] != len(trips):
             raise ValueError("closed-trip count does not match FIFO evidence")
         expected_win_rate = (
             None
             if not trips
-            else Decimal(sum(Decimal(item["realized_pl"]) > 0 for item in trips)) / len(trips)
+            else Decimal(sum(Decimal(item["realized_pl_local"]) > 0 for item in trips)) / len(trips)
         )
         observed_win_rate = None if metrics["win_rate"] is None else Decimal(metrics["win_rate"])
         if observed_win_rate != expected_win_rate:
             raise ValueError("win rate does not match closed FIFO trips")
         fill_count = metrics["fill_count"]
-        for count_name, rate_name in (
-            ("same_day_reversals", "same_day_reversal_rate"),
-            ("open_window_trades", "open_window_trade_rate"),
-        ):
-            expected_rate = None if not fill_count else Decimal(metrics[count_name]) / fill_count
-            observed_rate = None if metrics[rate_name] is None else Decimal(metrics[rate_name])
+        expected_reversal_rate = (
+            None if not fill_count else Decimal(metrics["same_day_reversals"]) / fill_count
+        )
+        observed_reversal_rate = (
+            None
+            if metrics["same_day_reversal_rate"] is None
+            else Decimal(metrics["same_day_reversal_rate"])
+        )
+        if expected_reversal_rate != observed_reversal_rate:
+            raise ValueError("same-day reversal rate does not reconcile")
+        check_names = {item["name"] for item in payload["policy_checks"]}
+        open_configured = "market_open_no_trade_minutes" in check_names
+        reentry_configured = "reentry_cooldown_minutes" in check_names
+        if (metrics["reentries_within_cooldown"] is not None) != reentry_configured:
+            raise ValueError("cooldown metric availability does not match policy evidence")
+        if (metrics["open_window_trades"] is not None) != open_configured:
+            raise ValueError("open-window metric availability does not match policy evidence")
+        if not open_configured and metrics["open_window_trade_rate"] is not None:
+            raise ValueError("open-window rate must be unavailable without policy evidence")
+        if open_configured:
+            expected_rate = (
+                None if not fill_count else Decimal(metrics["open_window_trades"]) / fill_count
+            )
+            observed_rate = (
+                None
+                if metrics["open_window_trade_rate"] is None
+                else Decimal(metrics["open_window_trade_rate"])
+            )
             if expected_rate != observed_rate:
-                raise ValueError(f"{rate_name} does not reconcile")
+                raise ValueError("open_window_trade_rate does not reconcile")
+        buckets: dict[str, dict[str, Decimal]] = {}
+        for fill in fills:
+            currency = fill["currency"]
+            if currency == "UNKNOWN":
+                continue
+            bucket = buckets.setdefault(currency, {"buy": Decimal(0), "sell": Decimal(0)})
+            bucket[fill["side"].lower()] += Decimal(fill["quantity"]) * Decimal(fill["price"])
+        observed_buckets = {
+            currency: {side: Decimal(value) for side, value in bucket.items()}
+            for currency, bucket in metrics["notional_by_currency"].items()
+        }
+        if observed_buckets != buckets:
+            raise ValueError("local-currency notional buckets do not reconcile")
+        realized_buckets: dict[str, Decimal] = {}
+        for trip in trips:
+            if trip["currency"] != "UNKNOWN":
+                realized_buckets[trip["currency"]] = realized_buckets.get(
+                    trip["currency"], Decimal(0)
+                ) + Decimal(trip["realized_pl_local"])
+        if {
+            currency: Decimal(value)
+            for currency, value in metrics["realized_pl_by_currency"].items()
+        } != realized_buckets:
+            raise ValueError("local-currency realized P&L buckets do not reconcile")
+        base_complete = payload["coverage"]["monetary_base_coverage"] == "COMPLETE"
+        base_fields = (
+            "buy_notional_base",
+            "sell_notional_base",
+            "average_win_base",
+            "average_loss_base",
+            "payoff_ratio_base",
+            "profit_factor_base",
+            "expectancy_base",
+        )
+        if base_complete:
+            if (
+                payload["base_currency"] is None
+                or coverage["source_snapshot_id"] is None
+                or any(
+                    fill["currency"] == "UNKNOWN" or fill["fx_to_base"] is None for fill in fills
+                )
+            ):
+                raise ValueError("complete base coverage lacks currency/FX evidence")
+            for side, name in (("BUY", "buy_notional_base"), ("SELL", "sell_notional_base")):
+                expected = sum(
+                    (
+                        Decimal(fill["quantity"])
+                        * Decimal(fill["price"])
+                        * Decimal(fill["fx_to_base"])
+                        for fill in fills
+                        if fill["side"] == side
+                    ),
+                    Decimal(0),
+                )
+                if Decimal(metrics[name]) != expected:
+                    raise ValueError(f"{name} does not reconcile")
+            base_trip_values = [Decimal(item["realized_pl_base"]) for item in trips]
+            profits = [value for value in base_trip_values if value > 0]
+            losses = [value for value in base_trip_values if value < 0]
+            expected_statistics = {
+                "average_win_base": (
+                    None if not profits else sum(profits, Decimal(0)) / len(profits)
+                ),
+                "average_loss_base": (
+                    None if not losses else sum(losses, Decimal(0)) / len(losses)
+                ),
+                "payoff_ratio_base": (
+                    None
+                    if not profits or not losses
+                    else (sum(profits, Decimal(0)) / len(profits))
+                    / (-sum(losses, Decimal(0)) / len(losses))
+                ),
+                "profit_factor_base": (
+                    None if not losses else sum(profits, Decimal(0)) / -sum(losses, Decimal(0))
+                ),
+                "expectancy_base": (
+                    None
+                    if not base_trip_values
+                    else sum(base_trip_values, Decimal(0)) / len(base_trip_values)
+                ),
+            }
+            for name, expected in expected_statistics.items():
+                observed = None if metrics[name] is None else Decimal(metrics[name])
+                if observed != expected:
+                    raise ValueError(f"{name} does not reconcile")
+        elif any(metrics[name] is not None for name in base_fields):
+            raise ValueError("base monetary metrics require complete FX evidence")
+        nav = (
+            None
+            if payload["portfolio_nav_base"] is None
+            else Decimal(payload["portfolio_nav_base"])
+        )
+        if nav is not None and nav <= 0:
+            raise ValueError("portfolio NAV must be positive")
+        expected_turnover = (
+            None
+            if not base_complete or nav is None
+            else (Decimal(metrics["buy_notional_base"]) + Decimal(metrics["sell_notional_base"]))
+            / (Decimal(2) * nav)
+        )
+        observed_turnover = (
+            None
+            if metrics["portfolio_turnover"] is None
+            else Decimal(metrics["portfolio_turnover"])
+        )
+        if observed_turnover != expected_turnover:
+            raise ValueError("portfolio turnover does not reconcile")
+        expected_symbol_turnover = (
+            {}
+            if not base_complete or nav is None
+            else {
+                identity: sum(
+                    (
+                        Decimal(fill["quantity"])
+                        * Decimal(fill["price"])
+                        * Decimal(fill["fx_to_base"])
+                        for fill in fills
+                        if fill["identity"] == identity
+                    ),
+                    Decimal(0),
+                )
+                / (Decimal(2) * nav)
+                for identity in sorted({fill["identity"] for fill in fills})
+            }
+        )
+        if {
+            identity: Decimal(value) for identity, value in metrics["per_symbol_turnover"].items()
+        } != expected_symbol_turnover:
+            raise ValueError("per-symbol turnover does not reconcile")
         checks = payload["policy_checks"]
+        if len({item["name"] for item in checks}) != len(checks):
+            raise ValueError("policy checks must have unique names")
         expected_policy = (
             "BREACH"
             if any(item["status"] == "BREACH" for item in checks)
@@ -491,6 +699,27 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         )
         if payload["policy_status"] != expected_policy:
             raise ValueError("policy status does not match checks")
+        events_by_id = {item["deal_id"]: item for item in fills}
+        for finding in payload["behavior_findings"]:
+            affected = [events_by_id.get(event_id) for event_id in finding["affected_events"]]
+            if not finding["verified"] or any(item is None for item in affected):
+                raise ValueError("behavior finding lacks normalized-event evidence")
+            expected_symbols = sorted({item["identity"] for item in affected})
+            if finding["affected_symbols"] != expected_symbols:
+                raise ValueError("behavior finding symbols do not match its events")
+            instants = sorted(
+                datetime.fromisoformat(item["executed_at"].replace("Z", "+00:00"))
+                for item in affected
+            )
+            if (
+                datetime.fromisoformat(finding["period_start"].replace("Z", "+00:00"))
+                != instants[0]
+                or datetime.fromisoformat(finding["period_end"].replace("Z", "+00:00"))
+                != instants[-1]
+            ):
+                raise ValueError("behavior finding time bounds do not match its events")
+        if payload["motive_status"] != "UNVERIFIED" or not payload["unverified_interpretations"]:
+            raise ValueError("psychological interpretation must remain explicitly unverified")
         expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
         if payload["data_quality_status"] != expected_quality:
             raise ValueError("quality status does not match notes")
@@ -505,6 +734,7 @@ def validate_rebalance_request_document(payload: dict[str, Any]) -> None:
 def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
     _validate(payload, "rebalance_result.schema.json")
     try:
+        datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
         before = payload["before"]
         after = payload["after"]
         if (
@@ -585,7 +815,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 raise ValueError("quantity deltas do not reconcile")
         nav_delta = decimal(after["nav_base"]) - decimal(before["nav_base"])
         constraints = payload["constraints"]
-        if nav_delta != decimal(constraints["new_cash"]):
+        if nav_delta != decimal(constraints["new_cash_base"]):
             raise ValueError("NAV delta must equal explicitly supplied new cash")
         expected_cash = decimal(before["cash_base"]) + nav_delta - sum(deltas.values(), Decimal(0))
         if decimal(after["cash_base"]) != expected_cash:
@@ -624,15 +854,28 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 and (
                     any(value < 0 for value in deltas.values())
                     or sum((max(value, Decimal(0)) for value in deltas.values()), Decimal(0))
-                    > decimal(constraints["new_cash"])
+                    > decimal(constraints["new_cash_base"])
                 )
             )
         )
         if payload["feasible"] == violations:
             raise ValueError("feasibility does not match declared constraints")
-        expected_quality = "PARTIAL" if payload["warnings"] else "COMPLETE"
+        expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
         if payload["data_quality_status"] != expected_quality:
             raise ValueError("quality status does not match warnings")
+        if not set(payload["warnings"]) <= set(payload["data_quality_notes"]):
+            raise ValueError("quality notes must preserve all simulation limitations")
+        if (
+            payload["coverage"]["source_data_quality_status"] != "COMPLETE"
+            and not payload["data_quality_notes"]
+        ):
+            raise ValueError("partial source quality requires explicit notes")
+        if payload["coverage"]["changes_applied"] != len(payload["changes"]):
+            raise ValueError("change coverage does not reconcile")
+        if payload["coverage"]["changes_requested"] != len(payload["changes"]):
+            raise ValueError("all requested changes must be represented")
+        if payload["coverage"]["source_positions"] <= 0:
+            raise ValueError("source position coverage must be explicit")
         signed = any(value < 0 for value in after_quantities.values())
         expected_risk_status = "STRUCTURAL_ONLY_SIGNED" if signed else "STRUCTURAL_ONLY"
         if payload["risk_changes"]["status"] != expected_risk_status:

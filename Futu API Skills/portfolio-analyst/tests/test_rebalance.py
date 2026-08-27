@@ -37,7 +37,7 @@ def test_target_amount_share_and_new_cash_are_deterministic_without_mutating_sna
     assert first.execution_disabled is True
     assert first.constraints["allow_margin"] is False
     assert first.constraints["allow_short"] is False
-    assert first.constraints["new_cash"] == Decimal("100")
+    assert first.constraints["new_cash_base"] == Decimal("100")
     assert first.feasible is True
     assert first.after.nav_base == Decimal("1100")
     assert first.after.cash_base >= 0

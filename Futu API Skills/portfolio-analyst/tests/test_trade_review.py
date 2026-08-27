@@ -51,7 +51,7 @@ def test_partial_fills_merge_and_fifo_round_trips_stay_account_isolated():
     assert report.metrics.closed_trips == 3
     assert report.metrics.win_rate == Decimal("2") / Decimal("3")
     assert report.round_trips[-1].account_ref == "acct-b"
-    assert report.round_trips[-1].realized_pl == Decimal("-50")
+    assert report.round_trips[-1].realized_pl_local == Decimal("-50")
     assert report.open_lots[0].account_ref == "acct-a"
     assert report.open_lots[0].quantity == Decimal("5")
     assert report.order_groups[0].fill_count == 2
@@ -78,7 +78,7 @@ def test_exchange_timezone_open_window_reversal_reentry_and_observed_language():
     assert report.metrics.reentries_within_cooldown == 1
     assert report.metrics.open_window_trade_rate == Decimal("1") / Decimal("3")
     assert report.policy_status == "BREACH"
-    assert all("motive" not in finding.lower() for finding in report.findings)
+    assert all("motive" not in finding.evidence.lower() for finding in report.behavior_findings)
     assert report.motive_status == "UNVERIFIED"
 
 
