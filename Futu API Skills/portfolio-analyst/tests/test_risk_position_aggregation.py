@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from portfolio_analyst.risk import RiskInputError, analyze_risk
+from portfolio_analyst.risk import RiskInputError, aggregate_economic_positions, analyze_risk
 from portfolio_analyst.reporting import build_portfolio_report
 from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.persistence import SnapshotStore
@@ -124,6 +124,59 @@ def test_duplicate_holding_pnl_is_aggregated_before_contributor_share():
     finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
     assert finding.evidence["largest_absolute_share"] == Decimal("0.9")
     assert finding.affected_positions == ("US.AAA",)
+
+
+@pytest.mark.parametrize(
+    "sentinel", ["", "   ", "UNKNOWN", " unknown ", "N/A", "n/a", "NONE", "null"]
+)
+def test_risk_aggregation_canonicalizes_classification_unknown_sentinels(sentinel):
+    source = snapshot()
+    position = replace(
+        source.positions[0],
+        sector=sentinel,
+        region=sentinel,
+        themes=(sentinel,),
+    )
+
+    report = analyze_risk(replace(source, positions=(position,)))
+
+    assert report.exposures.sector == {"UNKNOWN": position.weight}
+    assert report.exposures.region == {"UNKNOWN": position.weight}
+    assert report.exposures.theme_full == {"UNKNOWN": position.weight}
+    assert report.exposures.theme_split == {"UNKNOWN": position.weight}
+
+
+def test_risk_aggregation_removes_sentinel_themes_and_deduplicates_canonical_themes():
+    source = snapshot()
+    position = replace(
+        source.positions[0],
+        themes=(" AI ", "AI", " ", "unknown", "N/A", "none", "NULL"),
+    )
+
+    economic = aggregate_economic_positions(replace(source, positions=(position,)))
+    report = analyze_risk(replace(source, positions=(position,)))
+
+    assert economic[0].themes == ("AI",)
+    assert report.exposures.theme_full == {"AI": position.weight}
+    assert report.exposures.theme_split == {"AI": position.weight}
+
+
+def test_duplicate_metadata_compares_canonical_classifications_before_conflict_check():
+    source = snapshot()
+    first = replace(source.positions[0], sector=" unknown ", region="n/a", themes=(" AI ", "none"))
+    duplicate = replace(
+        first,
+        account_ref="acct-other",
+        sector="NULL",
+        region="NONE",
+        themes=("AI", "unknown"),
+    )
+
+    economic = aggregate_economic_positions(replace(source, positions=(first, duplicate)))
+
+    assert economic[0].sector == "UNKNOWN"
+    assert economic[0].region == "UNKNOWN"
+    assert economic[0].themes == ("AI",)
 
 
 def test_cli_metadata_conflict_is_structured_invalid_snapshot(monkeypatch, tmp_path, capsys):

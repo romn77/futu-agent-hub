@@ -35,7 +35,8 @@
     "fullThemeView": {"type": "object", "additionalProperties": false, "required": ["view", "basis", "weights"], "properties": {"view": {"const": "OVERLAP_FULL_ALLOCATION"}, "basis": {"const": "NAV"}, "weights": {"$ref": "#/$defs/exposureMap"}}},
     "splitThemeView": {"type": "object", "additionalProperties": false, "required": ["view", "basis", "weights"], "properties": {"view": {"const": "ADDITIVE_SPLIT_ALLOCATION"}, "basis": {"const": "NAV"}, "weights": {"$ref": "#/$defs/exposureMap"}}},
     "exposures": {"type": "object", "additionalProperties": false, "required": ["sector", "region", "theme_full", "theme_split"], "properties": {"sector": {"$ref": "#/$defs/simpleExposureView"}, "region": {"$ref": "#/$defs/simpleExposureView"}, "theme_full": {"$ref": "#/$defs/fullThemeView"}, "theme_split": {"$ref": "#/$defs/splitThemeView"}}},
-    "matrixRow": {"type": "object", "propertyNames": {"$ref": "#/$defs/positionIdentity"}, "additionalProperties": {"$ref": "#/$defs/signedUnitDecimal"}},
+    "nullableSignedUnitDecimal": {"oneOf": [{"$ref": "#/$defs/signedUnitDecimal"}, {"type": "null"}]},
+    "matrixRow": {"type": "object", "propertyNames": {"$ref": "#/$defs/positionIdentity"}, "additionalProperties": {"$ref": "#/$defs/nullableSignedUnitDecimal"}},
     "matrix": {"type": "object", "propertyNames": {"$ref": "#/$defs/positionIdentity"}, "additionalProperties": {"$ref": "#/$defs/matrixRow"}},
     "correlationPair": {
       "type": "object", "additionalProperties": false, "required": ["symbols", "coefficient", "sample_count", "band"],

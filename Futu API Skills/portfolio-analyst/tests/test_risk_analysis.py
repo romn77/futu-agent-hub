@@ -200,6 +200,13 @@ def test_correlation_is_partial_when_all_histories_exist_but_not_all_pairs_have_
     report = analyze_risk(snapshot(), price_provider=UnevenPrices())
     assert report.correlation.coverage == {"requested": 3, "available": 3}
     assert report.correlation.status == "PARTIAL"
+    assert set(report.correlation.matrix) == {"US.AAA", "US.BBB", "US.CCC"}
+    assert all(
+        set(row) == set(report.correlation.matrix) for row in report.correlation.matrix.values()
+    )
+    assert report.correlation.matrix["US.AAA"]["US.CCC"] is None
+    assert report.correlation.matrix["US.CCC"]["US.AAA"] is None
+    validate_risk_document(report.to_dict())
 
 
 @pytest.mark.parametrize(

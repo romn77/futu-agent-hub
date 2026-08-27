@@ -20,8 +20,12 @@ When a snapshot has any signed short/hedge weight or positive short exposure, al
 concentration metrics are `UNAVAILABLE`: signed weights are never silently squared into an HHI.
 The report retains gross/net evidence for review.
 
-Sector and region views add each position's NAV weight. Missing classifications remain the literal
-`UNKNOWN`. Theme exposure always has two separately named views:
+Sector and region views add each position's NAV weight. Aggregation defensively applies the shared
+Phase 1 sentinel normalization: blank values and case-insensitive `UNKNOWN`, `N/A`, `NONE`, and
+`NULL` become the literal `UNKNOWN`. Theme tags use the same normalization, discard sentinel tags
+when a real tag exists, and are deterministically deduplicated; a position with no real tag uses
+only `UNKNOWN`. Empty or alternate-sentinel exposure keys are never emitted. Theme exposure always
+has two separately named views:
 
 - `OVERLAP_FULL_ALLOCATION`: every tag receives the full position weight. Totals may exceed 1.
 - `ADDITIVE_SPLIT_ALLOCATION`: weight is divided equally over unique tags. A position without tags
@@ -50,6 +54,12 @@ strictly increasing and unique; closes must be finite and positive. Constant ser
 rows, duplicate/non-monotonic dates, missing histories, or too little overlap produce
 `PARTIAL`/`UNAVAILABLE` coverage and notes. No value is imputed and no pseudo-correlation is made.
 High-correlation clusters are deterministic connected components of high-correlation pairs.
+The matrix is square over every available canonical identity. A symmetric `null` cell explicitly
+marks a pair without sufficient evidence; it is not an imputed coefficient. Runtime validation in
+both report entry points checks coverage/status consistency, threshold ordering, square symmetric
+matrix identity and diagonal rules, pair uniqueness/count/band agreement, and exact connected
+components for high-correlation clusters. Structurally valid but semantically inconsistent reports
+are rejected with a domain validation error.
 
 The live adapter requires the Futu SDK and OpenD. When either is unavailable, the portfolio report
 still succeeds and states correlation is unavailable. Tests inject deterministic adjusted-price

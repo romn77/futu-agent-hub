@@ -116,4 +116,5 @@ order conclusions. See [references/risk-analysis.md](references/risk-analysis.md
 correlation, optional user-policy, unavailable-data, and Phase 4-6 placeholder contracts.
 Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` identity and metadata
 agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather
-than distorting Top-N, HHI, P&L, role, or correlation evidence.
+than distorting Top-N, HHI, P&L, role, or correlation evidence. Risk aggregation reapplies the
+shared unknown-sentinel canonicalizer to sector, region, and theme tags before that agreement gate.

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date, timedelta
+from decimal import Decimal
 
 import jsonschema
 import pytest
 
 from portfolio_analyst.reporting import build_portfolio_report
-from portfolio_analyst.risk import analyze_risk
+from portfolio_analyst.risk import PricePoint, analyze_risk
 from portfolio_analyst.schema import (
     validate_portfolio_report_document,
     validate_risk_document,
@@ -22,6 +24,27 @@ def _risk():
 def _portfolio():
     source = snapshot()
     risk = analyze_risk(source)
+    return build_portfolio_report(source, risk).to_dict()
+
+
+class _CompletePrices:
+    def history(self, symbol, *, market, lookback, as_of):
+        del symbol, market, lookback, as_of
+        level = Decimal("100")
+        points = []
+        for offset in range(70):
+            level *= Decimal("1.01") if offset % 2 else Decimal("0.99")
+            points.append(PricePoint(date(2026, 1, 1) + timedelta(days=offset), level))
+        return tuple(points)
+
+
+def _complete_risk():
+    return analyze_risk(snapshot(), price_provider=_CompletePrices()).to_dict()
+
+
+def _complete_portfolio():
+    source = snapshot()
+    risk = analyze_risk(source, price_provider=_CompletePrices())
     return build_portfolio_report(source, risk).to_dict()
 
 
@@ -90,4 +113,51 @@ def test_portfolio_schema_rejects_malformed_embedded_structures(mutate):
     payload = deepcopy(original)
     mutate(payload)
     with pytest.raises(jsonschema.ValidationError):
+        validate_portfolio_report_document(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda correlation: correlation.update(
+            {
+                "status": "COMPLETE",
+                "coverage": {"requested": 3, "available": 0},
+                "matrix": {},
+                "pairs": [],
+                "clusters": [],
+            }
+        ),
+        lambda correlation: correlation.update(
+            {"medium_threshold": "0.8", "high_threshold": "0.7"}
+        ),
+        lambda correlation: correlation.update({"minimum_observations": correlation["lookback"]}),
+        lambda correlation: correlation["coverage"].update({"available": 4}),
+        lambda correlation: correlation["matrix"]["US.AAA"].update({"US.BBB": "0.5"}),
+        lambda correlation: correlation["matrix"]["US.AAA"].update({"US.AAA": "0.9"}),
+        lambda correlation: correlation["pairs"][0].update({"band": "MEDIUM"}),
+        lambda correlation: correlation["pairs"][0].update({"sample_count": 120}),
+        lambda correlation: correlation["pairs"][0].update({"coefficient": "0.8"}),
+        lambda correlation: correlation["pairs"][0].update({"symbols": ["US.AAA", "US.AAA"]}),
+        lambda correlation: correlation.update({"clusters": [["US.AAA", "US.BBB"]]}),
+        lambda correlation: correlation.update(
+            {"clusters": [correlation["clusters"][0], list(reversed(correlation["clusters"][0]))]}
+        ),
+    ],
+)
+def test_risk_runtime_validation_rejects_semantically_fake_correlation(mutate):
+    payload = _complete_risk()
+    validate_risk_document(payload)
+    mutate(payload["correlation"])
+
+    with pytest.raises(ValueError, match="correlation semantic"):
+        validate_risk_document(payload)
+
+
+def test_portfolio_runtime_validation_rejects_semantically_fake_embedded_correlation():
+    payload = _complete_portfolio()
+    validate_portfolio_report_document(payload)
+    payload["correlation"]["matrix"]["US.AAA"]["US.BBB"] = "0.5"
+
+    with pytest.raises(ValueError, match="correlation semantic"):
         validate_portfolio_report_document(payload)

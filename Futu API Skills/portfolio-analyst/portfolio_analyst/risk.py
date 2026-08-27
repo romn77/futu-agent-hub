@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence
 
 from .models import NormalizedPosition, PortfolioSnapshot, _json_value
+from .normalization import canonical_unknown
 from .secure_config import load_optional_json_object
 
 
@@ -116,14 +117,24 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
         reference = sources[0]
 
         def metadata(position: NormalizedPosition) -> dict[str, Any]:
-            return {
-                field: (
-                    tuple(sorted(set(position.themes)))
-                    if field == "themes"
-                    else getattr(position, field)
+            canonical_themes = tuple(
+                sorted(
+                    {
+                        canonical
+                        for theme in position.themes
+                        if (canonical := canonical_unknown(theme)) != "UNKNOWN"
+                    }
                 )
-                for field in _ECONOMIC_METADATA_FIELDS
-            }
+            ) or ("UNKNOWN",)
+            values = {field: getattr(position, field) for field in _ECONOMIC_METADATA_FIELDS}
+            values.update(
+                {
+                    "sector": canonical_unknown(position.sector),
+                    "region": canonical_unknown(position.region),
+                    "themes": canonical_themes,
+                }
+            )
+            return values
 
         reference_metadata = metadata(reference)
         if any(metadata(source) != reference_metadata for source in sources[1:]):
@@ -145,9 +156,9 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
                 symbol=symbol,
                 security_type=reference.security_type,
                 currency=reference.currency,
-                sector=reference.sector,
+                sector=reference_metadata["sector"],
                 industry=reference.industry,
-                region=reference.region,
+                region=reference_metadata["region"],
                 themes=reference_metadata["themes"],
                 asset_class=reference.asset_class,
                 position_role=reference.position_role,
@@ -227,7 +238,7 @@ class CorrelationEvidence:
     high_threshold: Decimal
     adjusted_prices: bool
     coverage: Mapping[str, int]
-    matrix: Mapping[str, Mapping[str, Decimal]]
+    matrix: Mapping[str, Mapping[str, Decimal | None]]
     pairs: tuple[CorrelationPair, ...]
     clusters: tuple[tuple[str, ...], ...]
     notes: tuple[str, ...]
@@ -478,11 +489,14 @@ def _correlation(
             invalid.append(identity)
         else:
             histories[identity] = returns
-    matrix: dict[str, dict[str, Decimal]] = {symbol: {symbol: Decimal("1")} for symbol in histories}
+    available_symbols = tuple(sorted(histories))
+    matrix: dict[str, dict[str, Decimal | None]] = {
+        left: {right: Decimal("1") if left == right else None for right in available_symbols}
+        for left in available_symbols
+    }
     pairs: list[CorrelationPair] = []
     high_edges: list[tuple[str, str]] = []
     computed_pairs = 0
-    available_symbols = tuple(sorted(histories))
     for index, left in enumerate(available_symbols):
         for right in available_symbols[index + 1 :]:
             dates = sorted(set(histories[left]) & set(histories[right]))
