@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "portfolio_snapshot.schema.json",
+  "$id": "https://portfolio-analyst.local/schemas/portfolio_snapshot.schema.json",
   "title": "Portfolio Snapshot 1.0",
   "type": "object",
   "additionalProperties": false,

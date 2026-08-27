@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -105,12 +106,58 @@ class EmptyFixtureAdapter(FixtureAdapter):
         return {"orders": []} if name == "get_history_orders" else {"deals": []}
 
 
+class EmptyHongKongAdapter(EmptyFixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_accounts":
+            payload["accounts"] = payload["accounts"][:1]
+            payload["accounts"][0]["trdmarket_auth"] = ["HK"]
+        return payload
+
+
+def test_turnover_snapshot_date_is_compared_in_requested_exchange_timezone():
+    source = replace(snapshot(), as_of=datetime(2026, 8, 27, 16, 30, tzinfo=timezone.utc))
+    review = FutuTradeHistoryService(
+        EmptyHongKongAdapter(),
+        aliaser=AccountAliaser.ephemeral(),
+        clock=lambda: datetime(2026, 8, 28, 1, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 28), portfolio_snapshot=source)
+
+    assert review.coverage["successful_contexts"][0]["market"] == "HK"
+    assert review.data_quality_status == "PARTIAL"
+    assert "CURRENT_SESSION_INCOMPLETE" in {item["code"] for item in review.quality_issues}
+
+
 class NoEligibleAccountAdapter(FixtureAdapter):
     def read_private_json(self, name, arguments, *, timeout=30):
         if name == "get_accounts":
             self.calls.append((name, tuple(arguments), timeout))
             return {"accounts": []}
         raise AssertionError("history reads must not run without an eligible account")
+
+
+class InvalidIdentityContextAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_accounts":
+            payload["accounts"] = payload["accounts"][:1]
+        elif name == "get_history_orders":
+            payload["orders"][0]["code"] = "US.BAD SYMBOL"
+        elif name == "get_history_order_fill_list":
+            payload["deals"][0]["code"] = "US.BAD SYMBOL"
+        return payload
+
+
+def test_invalid_canonical_identity_fails_only_its_context_atomically():
+    review = FutuTradeHistoryService(
+        InvalidIdentityContextAdapter(), aliaser=AccountAliaser.ephemeral()
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert review.coverage["contexts_read"] == 0
+    assert review.coverage["contexts_failed"] == 1
+    assert review.normalized_orders == ()
+    assert review.normalized_fills == ()
+    assert review.data_quality_status == "UNAVAILABLE"
 
 
 def test_zero_requested_contexts_are_unavailable_and_cannot_claim_zero_activity():
@@ -178,6 +225,10 @@ def test_failed_and_budget_omitted_contexts_are_separate_masked_coverage():
     assert review.coverage["contexts_read"] == 0
     assert review.coverage["accounts_covered"] == 0
     assert review.data_quality_status == "UNAVAILABLE"
+    assert {item["code"] for item in review.quality_issues} >= {
+        "CONTEXT_FAILED",
+        "CONTEXT_OMITTED_BUDGET",
+    }
     assert all(value is None for value in vars(review.metrics).values())
     assert "Orders / fills / symbols: Unavailable / Unavailable / Unavailable" in (
         review.to_markdown()

@@ -118,6 +118,7 @@ class RebalanceResult:
     schema_version: str
     simulation_id: str
     source_snapshot_id: str
+    source_snapshot: Mapping[str, Any]
     as_of: datetime
     base_currency: str
     status: str
@@ -136,6 +137,7 @@ class RebalanceResult:
     data_quality_notes: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "source_snapshot", _deep_freeze(dict(self.source_snapshot)))
         object.__setattr__(self, "constraints", _deep_freeze(dict(self.constraints)))
         object.__setattr__(self, "request", _deep_freeze(dict(self.request)))
         object.__setattr__(self, "evidence", _deep_freeze(dict(self.evidence)))
@@ -367,8 +369,24 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     metadata: dict[str, NormalizedPosition] = {}
     values: dict[str, Decimal] = {}
     quantities: dict[str, Decimal] = {}
+    leg_signs: dict[str, set[int]] = {}
+    source_legs: dict[str, list[dict[str, Any]]] = {}
     for position in snapshot.positions:
         identity = _identity(position)
+        if any(leg["account_ref"] == position.account_ref for leg in source_legs.get(identity, [])):
+            raise RebalanceError("duplicate account/identity source legs are unsupported")
+        source_legs.setdefault(identity, []).append(
+            {
+                "account_ref": position.account_ref,
+                "quantity": position.quantity,
+                "market_value_base": position.market_value_base,
+            }
+        )
+        if position.quantity != 0 or position.market_value_base != 0:
+            sign = 1 if position.quantity > 0 and position.market_value_base > 0 else -1
+            if (position.quantity > 0) != (position.market_value_base > 0):
+                raise RebalanceError("source leg quantity/value signs conflict")
+            leg_signs.setdefault(identity, set()).add(sign)
         if identity in metadata:
             reference = metadata[identity]
             comparable = (
@@ -389,6 +407,10 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
             metadata[identity] = position
             values[identity] = position.market_value_base
             quantities[identity] = position.quantity
+    if any(len(signs) > 1 for signs in leg_signs.values()):
+        raise RebalanceError(
+            "UNSUPPORTED_OFFSETTING_LEGS: opposite cross-account legs cannot be authoritatively allocated"
+        )
     if any(
         quantities[identity] * metadata[identity].last_price_local * metadata[identity].fx_to_base
         != value
@@ -444,6 +466,32 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         quantities[change.symbol] += quantity_delta
         cash -= delta
         positive_delta += max(delta, Decimal(0))
+        legs = sorted(source_legs[change.symbol], key=lambda item: item["account_ref"])
+        allocation_basis = sum((abs(item["market_value_base"]) for item in legs), Decimal(0))
+        leg_allocations: list[dict[str, Any]] = []
+        allocated_amount = Decimal(0)
+        allocated_quantity = Decimal(0)
+        for index, leg in enumerate(legs):
+            if index == len(legs) - 1:
+                leg_amount = delta - allocated_amount
+                leg_quantity = quantity_delta - allocated_quantity
+            else:
+                weight = (
+                    abs(leg["market_value_base"]) / allocation_basis
+                    if allocation_basis
+                    else Decimal(1) / len(legs)
+                )
+                leg_amount = delta * weight
+                leg_quantity = quantity_delta * weight
+            allocated_amount += leg_amount
+            allocated_quantity += leg_quantity
+            leg_allocations.append(
+                {
+                    "account_ref": leg["account_ref"],
+                    "amount_delta_base": leg_amount,
+                    "quantity_delta": leg_quantity,
+                }
+            )
         applied.append(
             {
                 "symbol": change.symbol,
@@ -453,6 +501,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
                 "quantity_delta": quantity_delta,
                 "unit_price_local": position.last_price_local,
                 "fx_to_base": position.fx_to_base,
+                "leg_allocations": leg_allocations,
             }
         )
     if request.new_cash_only and positive_delta > request.new_cash:
@@ -529,6 +578,12 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
             "fx_to_base": position.fx_to_base,
             "fx_as_of": snapshot.as_of,
             "fx_method": "SOURCE_SNAPSHOT_CURRENT_VALUATION",
+            "sector": position.sector,
+            "region": position.region,
+            "themes": list(position.themes),
+            "theme_allocation": "FULL_AND_EQUAL_SPLIT",
+            "source_legs": sorted(source_legs[identity], key=lambda item: item["account_ref"]),
+            "operation_allocation": "PROPORTIONAL_SAME_DIRECTION_SOURCE_LEGS",
         }
         for identity, position in sorted(metadata.items())
     }
@@ -565,6 +620,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         {
             "schema_version": "1.3",
             "source_snapshot_id": snapshot.snapshot_id,
+            "source_snapshot": snapshot.to_dict(),
             "as_of": snapshot.as_of,
             "base_currency": snapshot.base_currency,
             "status": "HYPOTHETICAL",
@@ -593,6 +649,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         "1.3",
         simulation_id,
         snapshot.snapshot_id,
+        snapshot.to_dict(),
         snapshot.as_of,
         snapshot.base_currency,
         "HYPOTHETICAL",

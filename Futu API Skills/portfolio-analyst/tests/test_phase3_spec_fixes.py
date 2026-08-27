@@ -469,6 +469,32 @@ def test_rebalance_semantics_reject_rehashed_formula_state_and_evidence_tamperin
         validate_rebalance_result_document(payload)
 
 
+def test_rebalance_classification_evidence_is_authoritative_and_tamper_evident():
+    result = simulate_rebalance(
+        snapshot(), RebalanceRequest(snapshot().snapshot_id, "USD")
+    ).to_dict()
+    evidence = result["evidence"]["US.AAA"]
+    assert evidence["sector"] == "TECH"
+    assert evidence["region"] == "US"
+    assert evidence["themes"] == ["AI", "CLOUD"]
+    assert evidence["theme_allocation"] == "FULL_AND_EQUAL_SPLIT"
+
+    evidence["sector"] = "ENERGY"
+    result["before"]["exposures"]["sector"] = {"ENERGY": "0.4", "TECH": "0.3", "HEALTH": "0.2"}
+    result["before"]["exposure_views"]["net"]["sector"] = dict(
+        result["before"]["exposures"]["sector"]
+    )
+    result["before"]["exposure_views"]["long"]["sector"] = dict(
+        result["before"]["exposures"]["sector"]
+    )
+    result["before"]["exposure_views"]["gross"]["sector"] = dict(
+        result["before"]["exposures"]["sector"]
+    )
+    _rehash_simulation(result)
+    with pytest.raises(Exception):
+        validate_rebalance_result_document(result)
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [
@@ -530,6 +556,77 @@ def test_trade_semantics_reject_rehashed_fifo_and_required_quality_tampering():
     _rehash_trade(unmatched)
     with pytest.raises(Exception):
         validate_trade_review_document(unmatched)
+
+
+def test_trade_quality_issues_are_structured_and_fees_mark_gross_pre_fee_pnl():
+    report = build_trade_review(
+        orders=[],
+        deals=[
+            _deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00"),
+            _deal("d2", "o2", "SELL", "1", "12", "2026-08-04 10:00:00"),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        base_currency="USD",
+    )
+    issues = {item["code"]: item["detail"] for item in report.quality_issues}
+    assert "FEES_UNAVAILABLE" in issues
+    assert "gross pre-fee" in issues["FEES_UNAVAILABLE"]
+    assert report.provenance["realized_pl_basis"] == "GROSS_PRE_FEE"
+
+    payload = report.to_dict()
+    payload["quality_issues"] = []
+    payload["data_quality_notes"] = ["all perfect"]
+    _rehash_trade(payload)
+    with pytest.raises(Exception):
+        validate_trade_review_document(payload)
+
+
+def test_trade_analysis_budget_fails_closed_with_injected_clock():
+    ticks = iter((0.0, 0.0, 11.0))
+    with pytest.raises(Exception, match="ANALYSIS_BUDGET_EXCEEDED"):
+        build_trade_review(
+            orders=[],
+            deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+            max_analysis_seconds=10,
+            analysis_clock=lambda: next(ticks),
+        )
+
+
+def test_trade_analysis_operation_budget_fails_before_metrics_are_constructed():
+    with pytest.raises(Exception, match="ANALYSIS_BUDGET_EXCEEDED"):
+        build_trade_review(
+            orders=[],
+            deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+            max_analysis_operations=1,
+        )
+
+
+def test_twenty_thousand_valid_rows_complete_within_default_analysis_budget():
+    deals = [
+        _deal(
+            f"d{index}",
+            f"o{index}",
+            "BUY",
+            "1",
+            "10",
+            "2026-08-03 10:00:00",
+        )
+        for index in range(20_000)
+    ]
+    report = build_trade_review(
+        orders=[],
+        deals=deals,
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    )
+
+    assert report.metrics.fill_count == 20_000
+    assert report.metrics.trade_count == 20_000
 
 
 def test_behavior_and_frequency_use_order_groups_not_partial_fill_rows():

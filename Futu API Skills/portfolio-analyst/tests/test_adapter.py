@@ -1,4 +1,5 @@
 import json
+import io
 from pathlib import Path
 import shutil
 import subprocess
@@ -148,6 +149,41 @@ def test_run_masks_sensitive_json_fields_in_stdout_and_stderr(monkeypatch, tmp_p
         assert secret not in result.stderr
     assert "[REDACTED]" in result.stdout
     assert "[REDACTED]" in result.stderr
+
+
+def test_non_posix_capture_terminates_immediately_at_combined_byte_budget(monkeypatch, tmp_path):
+    adapter = FutuAdapter(_skill(tmp_path))
+    adapter.MAX_RESPONSE_BYTES = 5
+
+    class FakeProcess:
+        def __init__(self, command, **kwargs):
+            self.args = command
+            self.stdout = io.BytesIO(b"abcdef")
+            self.stderr = io.BytesIO(b"")
+            self.returncode = 0
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    processes = []
+
+    def popen(command, **kwargs):
+        process = FakeProcess(command, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(futu_adapter, "resource", None)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    with pytest.raises(Exception, match="bounded response budget"):
+        adapter.run("get_accounts", ["--json"])
+    assert processes[0].terminated is True
 
 
 def test_json_string_values_are_recursively_text_sanitized():

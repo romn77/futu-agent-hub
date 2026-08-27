@@ -11,6 +11,7 @@ from portfolio_analyst.rebalance import (
     RebalanceRequest,
     simulate_rebalance,
 )
+from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.schema import validate_rebalance_result_document
 from test_risk_analysis import snapshot
 
@@ -108,6 +109,7 @@ def test_signed_source_requires_explicit_short_authority_and_preserves_warning()
         positions=(signed_position, *source.positions[1:]),
         nav_base=Decimal("200"),
     )
+    signed_source = replace(signed_source, snapshot_id=snapshot_identity(signed_source))
     request = RebalanceRequest(signed_source.snapshot_id, signed_source.base_currency)
 
     with pytest.raises(RebalanceError, match="short"):
@@ -120,6 +122,61 @@ def test_signed_source_requires_explicit_short_authority_and_preserves_warning()
     assert any(
         "source" in warning.lower() and "signed" in warning.lower() for warning in result.warnings
     )
+    validate_rebalance_result_document(result.to_dict())
+
+
+def test_cross_account_offsetting_legs_fail_closed_instead_of_being_netted_long_only():
+    source = snapshot()
+    long_leg = source.positions[0]
+    short_leg = replace(
+        long_leg,
+        account_ref="acct-short",
+        quantity=Decimal("-0.9"),
+        can_sell_quantity=Decimal("0"),
+        market_value_local=Decimal("-360"),
+        market_value_base=Decimal("-360"),
+        weight=Decimal("-0.36"),
+    )
+    offsetting = replace(source, positions=(long_leg, short_leg, *source.positions[1:]))
+
+    with pytest.raises(RebalanceError, match="UNSUPPORTED_OFFSETTING_LEGS"):
+        simulate_rebalance(
+            offsetting,
+            RebalanceRequest(offsetting.snapshot_id, "USD", allow_short=True),
+        )
+
+
+def test_same_direction_cross_account_change_has_deterministic_leg_allocation():
+    source = snapshot()
+    second_leg = replace(
+        source.positions[0],
+        account_ref="acct-second",
+        quantity=Decimal("0.5"),
+        can_sell_quantity=Decimal("0.5"),
+        market_value_local=Decimal("200"),
+        market_value_base=Decimal("200"),
+        weight=Decimal("0.1666666666666666666666666667"),
+    )
+    multi_account = replace(
+        source,
+        positions=(source.positions[0], second_leg, *source.positions[1:]),
+        nav_base=Decimal("1200"),
+    )
+    multi_account = replace(multi_account, snapshot_id=snapshot_identity(multi_account))
+    result = simulate_rebalance(
+        multi_account,
+        RebalanceRequest(
+            multi_account.snapshot_id,
+            "USD",
+            changes=(RebalanceChange("US.AAA", "AMOUNT_DELTA", Decimal("60")),),
+        ),
+    )
+
+    allocations = result.changes[0]["leg_allocations"]
+    assert [(item["account_ref"], item["amount_delta_base"]) for item in allocations] == [
+        ("acct-safe", Decimal("40")),
+        ("acct-second", Decimal("20")),
+    ]
     validate_rebalance_result_document(result.to_dict())
 
 

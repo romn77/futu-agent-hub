@@ -16,6 +16,7 @@ from .trade_review import (
     TradeReviewInputError,
     build_trade_review,
     canonical_context_market,
+    exchange_local_date,
     normalize_order_status,
     validate_trade_context_rows,
 )
@@ -67,8 +68,6 @@ class FutuTradeHistoryService:
         portfolio_snapshot: PortfolioSnapshot | None = None,
     ) -> TradeReview:
         environment = trd_env.strip().upper()
-        if portfolio_snapshot is not None and portfolio_snapshot.as_of.date() < end:
-            raise TradeReviewInputError("turnover snapshot as-of precedes the review end")
         payload = self.adapter.read_private_json("get_accounts", ["--json"], timeout=timeout)
         raw_accounts = payload.get("accounts")
         if not isinstance(raw_accounts, list):
@@ -118,6 +117,13 @@ class FutuTradeHistoryService:
             {"account_ref": alias, "market": canonical_context_market(market)}
             for _, market, _, alias in selected_contexts
         ]
+        if portfolio_snapshot is not None and any(
+            exchange_local_date(portfolio_snapshot.as_of, context["market"]) < end
+            for context in requested_contexts
+        ):
+            raise TradeReviewInputError(
+                "turnover snapshot as-of precedes the review end in a requested exchange timezone"
+            )
         successful_contexts: list[dict[str, str]] = []
         failed_contexts: list[dict[str, str]] = []
         omitted_contexts: list[dict[str, str]] = []

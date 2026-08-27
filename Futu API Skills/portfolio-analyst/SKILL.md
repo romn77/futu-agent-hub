@@ -163,6 +163,10 @@ The report embeds that normalized policy body so semantic validation can rebuild
 observations and verified behavior findings from exchange-local OrderGroups.
 Base-currency fills have exact 1:1 FIFO realized P&L and base win/loss statistics. Cross-currency
 trips without transaction-date FX stay null/partial while per-currency local P&L pools remain exact.
+Realized P&L is gross pre-fee; closed trips require the structured `FEES_UNAVAILABLE` quality code
+when fee evidence is absent. Other stable quality codes are reconstructed from coverage,
+reconciliation, FX, corporate-event, and current-session evidence. Analysis is indexed and bounded by
+operation and wall-clock budgets. Snapshot/date checks use requested exchange-local markets.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
@@ -182,3 +186,8 @@ Results carry `as_of`, `base_currency`, coverage and quality notes. Every result
 `execution_disabled=true`; there is no order generation or trading-write path. `--output DIR`
 transactionally saves `request.json`, `result.json`, and `summary.md` without replacement. See
 [references/rebalance-simulation.md](references/rebalance-simulation.md).
+Per-identity evidence includes account-level source legs and sector/region/theme classifications.
+Same-direction multi-account changes are allocated deterministically and proportionally; opposite
+cross-account legs fail closed as `UNSUPPORTED_OFFSETTING_LEGS` rather than being netted away.
+The complete content-addressed source snapshot is embedded and revalidated to prevent classification
+evidence from being rewritten by recomputing only the simulation hash.

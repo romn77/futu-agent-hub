@@ -11,8 +11,9 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import _json_value
@@ -259,6 +260,7 @@ class TradeReview:
     unverified_interpretations: tuple[str, ...]
     motive_status: str
     data_quality_status: str
+    quality_issues: tuple[Mapping[str, str], ...]
     data_quality_notes: tuple[str, ...]
     provenance: Mapping[str, Any]
 
@@ -281,6 +283,9 @@ class TradeReview:
         object.__setattr__(self, "behavior_findings", tuple(self.behavior_findings))
         object.__setattr__(
             self, "unverified_interpretations", tuple(self.unverified_interpretations)
+        )
+        object.__setattr__(
+            self, "quality_issues", tuple(MappingProxyType(dict(x)) for x in self.quality_issues)
         )
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
         object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance)))
@@ -307,6 +312,7 @@ class TradeReview:
             f"- Realized P&L base coverage: {safe(self.coverage['realized_pl_base_coverage'])}",
             f"- Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
             f"- Data quality: {self.data_quality_status}",
+            f"- Structured quality issues: {safe(json.dumps(_json_value(self.quality_issues), sort_keys=True))}",
             f"- Policy status: {self.policy_status}",
             f"- Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
             "- Motive: unverified; only observed execution patterns are described.",
@@ -381,6 +387,7 @@ class TradeReview:
                 f"Realized P&L base coverage: {safe(self.coverage['realized_pl_base_coverage'])}",
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
+                f"Structured quality issues: {safe(json.dumps(_json_value(self.quality_issues), sort_keys=True))}",
                 f"Policy: {self.policy_status}",
                 f"Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
                 "Motive: UNVERIFIED; findings describe observed behavior only.",
@@ -455,6 +462,15 @@ def canonical_context_market(raw: Any) -> str:
     if canonical not in _MARKET_TIME:
         raise TradeReviewInputError("history context market is outside the canonical contract")
     return canonical
+
+
+def exchange_local_date(timestamp: datetime, market: str) -> date:
+    """Return an aware instant's date under the canonical exchange context."""
+
+    if timestamp.tzinfo is None:
+        raise TradeReviewInputError("exchange-local date requires a timezone-aware timestamp")
+    canonical = canonical_context_market(market)
+    return timestamp.astimezone(ZoneInfo(_MARKET_TIME[canonical][0])).date()
 
 
 def load_trade_policy(data_home: Path) -> TradePolicy | None:
@@ -643,7 +659,12 @@ def _fill(raw: Mapping[str, Any], start: date, end: date) -> NormalizedFill:
     code = str(raw["code"]).strip().upper()
     parts = code.split(".", 1)
     market = canonical_context_market(parts[0]) if len(parts) == 2 else ""
-    if len(parts) != 2 or market not in _MARKET_TIME or not parts[1]:
+    identity = f"{market}.{parts[1]}" if len(parts) == 2 else ""
+    if (
+        len(parts) != 2
+        or market not in _MARKET_TIME
+        or re.fullmatch(r"[A-Z]{2,4}\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*", identity) is None
+    ):
         raise TradeReviewInputError("deal requires a supported market-qualified identity")
     side = str(raw["side"]).strip().upper().replace("TRD_SIDE.", "").replace("TRDSIDE.", "")
     if side not in {"BUY", "SELL"}:
@@ -667,7 +688,7 @@ def _fill(raw: Mapping[str, Any], start: date, end: date) -> NormalizedFill:
         identifiers[0],
         identifiers[1],
         identifiers[2],
-        f"{market}.{parts[1]}",
+        identity,
         market,
         currency,
         fx_to_base,
@@ -699,7 +720,12 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
     code = str(raw["code"]).strip().upper()
     parts = code.split(".", 1)
     market = canonical_context_market(parts[0]) if len(parts) == 2 else ""
-    if len(parts) != 2 or market not in _MARKET_TIME or not parts[1]:
+    identity = f"{market}.{parts[1]}" if len(parts) == 2 else ""
+    if (
+        len(parts) != 2
+        or market not in _MARKET_TIME
+        or re.fullmatch(r"[A-Z]{2,4}\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*", identity) is None
+    ):
         raise TradeReviewInputError("order requires a supported market-qualified identity")
     side = str(raw["side"]).strip().upper().replace("TRD_SIDE.", "").replace("TRDSIDE.", "")
     if side not in {"BUY", "SELL"}:
@@ -727,7 +753,7 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
     return NormalizedOrder(
         order_id,
         account_ref,
-        f"{market}.{parts[1]}",
+        identity,
         market,
         currency,
         side,
@@ -881,7 +907,22 @@ def build_trade_review(
     coverage_context: Mapping[str, Any] | None = None,
     corporate_action_evidence_status: str = "UNSUPPORTED_EVIDENCE",
     provenance_context: Mapping[str, Any] | None = None,
+    max_analysis_operations: int = 2_000_000,
+    max_analysis_seconds: float = 10.0,
+    analysis_clock: Callable[[], float] = time.monotonic,
 ) -> TradeReview:
+    if max_analysis_operations <= 0 or max_analysis_seconds <= 0:
+        raise TradeReviewInputError("analysis budgets must be positive")
+    analysis_started = analysis_clock()
+
+    def check_budget(operations: int) -> None:
+        if (
+            operations > max_analysis_operations
+            or analysis_clock() - analysis_started > max_analysis_seconds
+        ):
+            raise TradeReviewInputError("ANALYSIS_BUDGET_EXCEEDED")
+
+    check_budget(len(orders) + len(deals))
     if start > end:
         raise TradeReviewInputError("review start must not follow end")
     acquisition = acquired_at or datetime.now(timezone.utc)
@@ -914,6 +955,7 @@ def build_trade_review(
             key=lambda item: (item.account_ref, item.order_id),
         )
     )
+    check_budget(3 * (len(normalized_orders) + len(normalized_all)))
     if base_currency is not None and any(
         fill.currency == base_currency
         and fill.fx_to_base is not None
@@ -1040,18 +1082,17 @@ def build_trade_review(
         if base_complete
         else None
     )
+    symbol_notional_base: dict[str, Decimal] = {}
+    if base_complete:
+        for fill in normalized:
+            symbol_notional_base[fill.identity] = (
+                symbol_notional_base.get(fill.identity, Decimal(0))
+                + fill.quantity * fill.price * fill.fx_to_base
+            )
     per_symbol_turnover = (
         {
-            identity: sum(
-                (
-                    fill.quantity * fill.price * fill.fx_to_base
-                    for fill in normalized
-                    if fill.identity == identity
-                ),
-                Decimal(0),
-            )
-            / (Decimal(2) * portfolio_nav_base)
-            for identity in sorted({fill.identity for fill in normalized})
+            identity: value / (Decimal(2) * portfolio_nav_base)
+            for identity, value in sorted(symbol_notional_base.items())
         }
         if base_complete and portfolio_nav_base is not None
         else {}
@@ -1272,6 +1313,8 @@ def build_trade_review(
             *notes,
             "cross-currency historical base P&L is unavailable without transaction-date FX; snapshot FX is current-valuation evidence only",
         )
+    if trips:
+        notes = (*notes, "realized P&L is gross pre-fee because fee evidence is unavailable")
     if cooldown is None:
         notes = (*notes, "reentry metric is UNAVAILABLE because no cooldown policy is configured")
     if open_count is None:
@@ -1367,18 +1410,15 @@ def build_trade_review(
         "EARLY_SESSION_TRADING", open_count or 0, open_events, "market_open_no_trade_minutes"
     )
     repeated_keys = {key for key, count in activity.items() if count > 1}
-    repeated_events = [
-        group
-        for group in groups
-        if (group.account_ref, group.identity, group.effective_at.date()) in repeated_keys
-    ]
+    repeated_events: dict[tuple[str, str, date], list[OrderGroup]] = {}
+    for group in groups:
+        key = (group.account_ref, group.identity, group.effective_at.date())
+        if key in repeated_keys:
+            repeated_events.setdefault(key, []).append(group)
     for repeated_key in sorted(repeated_keys):
-        key_events = [
-            group
-            for group in repeated_events
-            if (group.account_ref, group.identity, group.effective_at.date()) == repeated_key
-        ]
+        key_events = repeated_events[repeated_key]
         add_behavior("REPEATED_SYMBOL_ACTIVITY", 1, key_events, "max_trades_per_day")
+    check_budget(20 * (len(normalized_orders) + len(normalized_all) + len(groups) + len(trips)))
     add_behavior("ADD_TO_WINNER", add_winner, add_winner_events)
     add_behavior("ADD_TO_LOSER", add_loser, add_loser_events, "flag_add_to_loser")
     if source_unavailable:
@@ -1426,10 +1466,65 @@ def build_trade_review(
         "deals_command": "get_history_order_fill_list",
         "timezone_basis": "EXCHANGE_LOCAL",
         "monetary_basis": "LOCAL_CURRENCY_BUCKETS_BASE_IDENTITY_PNL_AND_VERIFIED_SNAPSHOT_FX",
+        "realized_pl_basis": "GROSS_PRE_FEE",
         "orders_option_policy": "acc-id,market,trd-env,start,end,security-firm,ctx-type,limit=200,json",
         "deals_option_policy": "acc-id,market,trd-env,start,end,security-firm,ctx-type,json",
     }
     provenance.update(dict(provenance_context or {}))
+    quality_issue_details: dict[str, str] = {}
+    if coverage["failed_contexts"]:
+        quality_issue_details["CONTEXT_FAILED"] = "one or more requested contexts failed atomically"
+    if coverage["omitted_contexts"]:
+        quality_issue_details["CONTEXT_OMITTED_BUDGET"] = (
+            "one or more requested contexts were omitted by a bounded work budget"
+        )
+    if in_progress_markets:
+        quality_issue_details["CURRENT_SESSION_INCOMPLETE"] = (
+            "the requested range includes an exchange-local session that may still be in progress"
+        )
+    if corporate_action_evidence_status == "UNSUPPORTED_EVIDENCE":
+        quality_issue_details["CORPORATE_ACTION_EVIDENCE_UNSUPPORTED"] = (
+            "corporate-action, transfer, and cost-adjustment evidence is unsupported"
+        )
+    if excluded_events:
+        quality_issue_details["NONTRADE_EVENTS_EXCLUDED"] = (
+            "recognized corporate-action, transfer, or cost-adjustment rows were excluded from trade metrics"
+        )
+    if orphan_fill_orders:
+        quality_issue_details["ORPHAN_FILL"] = "one or more fills have no matching normalized order"
+    if orders_missing_fills:
+        quality_issue_details["ORDER_MISSING_FILLS"] = (
+            "one or more dealt orders lack normalized fills"
+        )
+    if order_fill_qty_mismatches:
+        quality_issue_details["ORDER_FILL_QTY_MISMATCH"] = (
+            "order dealt quantity and fill quantity do not reconcile"
+        )
+    if order_status_conflicts:
+        quality_issue_details["ORDER_STATUS_CONFLICT"] = (
+            "order status conflicts with dealt quantity or fills"
+        )
+    if unmatched_sells:
+        quality_issue_details["UNMATCHED_SELL"] = (
+            "sell evidence lacks opening inventory in the requested range"
+        )
+    if not base_complete and normalized:
+        quality_issue_details["BASE_MONETARY_FX_INCOMPLETE"] = (
+            "base monetary aggregation lacks complete verified FX evidence"
+        )
+    if trips and not pnl_base_complete:
+        quality_issue_details["BASE_REALIZED_PNL_FX_INCOMPLETE"] = (
+            "historical base realized P&L lacks transaction-date FX evidence"
+        )
+    if trips:
+        quality_issue_details["FEES_UNAVAILABLE"] = (
+            "realized P&L is gross pre-fee because fee evidence is unavailable"
+        )
+    if source_unavailable:
+        quality_issue_details["SOURCE_UNAVAILABLE"] = "no requested context completed successfully"
+    quality_issues = tuple(
+        {"code": code, "detail": detail} for code, detail in sorted(quality_issue_details.items())
+    )
     identity_body = json.dumps(
         _json_value(
             {
@@ -1459,6 +1554,7 @@ def build_trade_review(
                 "data_quality_status": (
                     "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE"
                 ),
+                "quality_issues": quality_issues,
                 "data_quality_notes": notes,
                 "provenance": provenance,
             }
@@ -1491,6 +1587,7 @@ def build_trade_review(
         ("Psychological motive cannot be verified from orders and fills alone.",),
         "UNVERIFIED",
         "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE",
+        quality_issues,
         notes,
         provenance,
     )

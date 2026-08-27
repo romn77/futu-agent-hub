@@ -29,6 +29,17 @@ report absolute short, long, gross, and net market values/weights plus long/shor
 views. Long-only Top-N/HHI and concentration are `null`/`UNAVAILABLE_SIGNED`; warnings and partial
 quality remain explicit whenever either before or after is signed.
 
+Evidence is account-leg preserving. Each canonical identity carries immutable source legs, unit
+price/FX, sector, region, themes, and `FULL_AND_EQUAL_SPLIT` theme allocation semantics. Same-direction
+multi-account changes use deterministic proportional allocation by absolute source-leg market value,
+with an exact residual assigned to the final sorted masked account leg; runtime semantics rebuild the
+aggregate source state and verify allocations. Opposite-direction legs for the same identity fail
+closed as `UNSUPPORTED_OFFSETTING_LEGS`, so +400/-360 can never be netted into a misleading long-only
+40 position. Exposure views are rebuilt from classification evidence, making consistent classification
+and report rehash tampering invalid.
+The complete content-addressed source snapshot is embedded and revalidated, so changing TECH to
+ENERGY and merely recomputing the simulation hash cannot redefine the source classification.
+
 Without `allow_margin`, negative hypothetical cash is infeasible. Without `allow_short`, negative
 hypothetical quantity/value is rejected. Sell-only rejects positive deltas. New-cash-only rejects
 sells and purchases above explicitly supplied new cash. Explicit permission changes feasibility only

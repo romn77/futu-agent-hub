@@ -54,8 +54,10 @@ HMAC-derived from raw identity plus account/canonical market, so aliases and rep
 depend on upstream row order. Both response bodies must fit per-context/total row budgets and fully
 normalize before the context is atomically successful; duplicate, orphan, status, or queried-market
 conflicts fail that context without partial evidence.
-The adapter streams child stdout/stderr to bounded temporary capture and rejects either response
-above 4 MiB; it never uses an unbounded in-memory `capture_output` path.
+The adapter bounds combined child stdout/stderr at 4 MiB. POSIX uses size-limited temporary capture;
+platforms without `resource` use concurrent pipe readers that retain only the remaining byte budget
+and immediately terminate/kill the child on overflow. It never uses an unbounded `capture_output`,
+`communicate`, or temporary-file path.
 
 An `OrderGroup` is the behavior/frequency trade unit: masked account plus order ID, one canonical
 identity and side, summed fill quantity, quantity-weighted fill price, fill count, first/last fill
@@ -69,6 +71,20 @@ quantity. `FILLED_PART` and `CANCELLED_PART` require `0 < dealt == fills < quant
 `WAITING_SUBMIT`, `SUBMITTING`, `SUBMITTED`, `CANCELLED_ALL`, `FAILED`, `DISABLED`, and `DELETED`
 require zero dealt quantity and no fills. Unknown statuses fail closed; every mismatch is partial
 quality evidence.
+
+`quality_issues` is the authoritative structured limitation list. Stable codes cover failed or
+budget-omitted contexts, current sessions, unsupported corporate-event evidence, orphan/missing/
+mismatched/status-conflicting reconciliation, unmatched sells, incomplete FX, unavailable fees,
+and total source unavailability. Runtime semantics reconstruct the required code set; free-form
+notes cannot erase it. Realized P&L is explicitly `GROSS_PRE_FEE`; when closed trips exist without
+fee evidence, `FEES_UNAVAILABLE` is required. Live acquisition admits a context only after both
+orders and fills fully normalize and reconcile. The offline builder may represent incomplete
+evidence as PARTIAL, but does not weaken live context atomicity.
+
+Analysis uses indexed account/order/security/day maps and explicit operation and wall-clock budgets.
+Budget exhaustion fails closed with `ANALYSIS_BUDGET_EXCEEDED`; no partial metric body is fabricated.
+Snapshot recency and current-session checks use every requested market's exchange-local date, so a
+valid UTC cross-midnight snapshot is not rejected.
 
 `trade-policy.yaml` uses this strict shape:
 

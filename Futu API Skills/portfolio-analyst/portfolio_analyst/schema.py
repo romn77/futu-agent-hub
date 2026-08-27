@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
@@ -47,6 +47,9 @@ def _validate(payload: dict[str, Any], name: str) -> None:
     rebalance_request_schema = json.loads(
         _schema_path("rebalance_request.schema.json").read_text(encoding="utf-8")
     )
+    portfolio_snapshot_schema = json.loads(
+        _schema_path("portfolio_snapshot.schema.json").read_text(encoding="utf-8")
+    )
     registry = Registry().with_resources(
         [
             (definitions["$id"], Resource.from_contents(definitions)),
@@ -54,6 +57,10 @@ def _validate(payload: dict[str, Any], name: str) -> None:
             (
                 rebalance_request_schema["$id"],
                 Resource.from_contents(rebalance_request_schema),
+            ),
+            (
+                portfolio_snapshot_schema["$id"],
+                Resource.from_contents(portfolio_snapshot_schema),
             ),
         ]
     )
@@ -561,7 +568,21 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         if not evidenced_contexts <= successful_contexts:
             raise ValueError("normalized rows must come from successful contexts")
         source_unavailable = not successful_contexts
+        observed_quality_codes = [item["code"] for item in payload["quality_issues"]]
+        if len(observed_quality_codes) != len(set(observed_quality_codes)):
+            raise ValueError("quality issue codes must be unique")
         if source_unavailable:
+            required_codes = {"SOURCE_UNAVAILABLE"}
+            if failed_contexts:
+                required_codes.add("CONTEXT_FAILED")
+            if omitted_contexts:
+                required_codes.add("CONTEXT_OMITTED_BUDGET")
+            if current_session:
+                required_codes.add("CURRENT_SESSION_INCOMPLETE")
+            if coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE":
+                required_codes.add("CORPORATE_ACTION_EVIDENCE_UNSUPPORTED")
+            if coverage["excluded_nontrade_events"]:
+                required_codes.add("NONTRADE_EVENTS_EXCLUDED")
             if (
                 any(value is not None for value in metrics.values())
                 or orders
@@ -587,6 +608,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                         "excluded_nontrade_events",
                     )
                 )
+                or set(observed_quality_codes) != required_codes
             ):
                 raise ValueError("totally unavailable source must not claim observed activity")
             if (
@@ -1110,22 +1132,19 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         )
         if observed_turnover != expected_turnover:
             raise ValueError("portfolio turnover does not reconcile")
+        symbol_notional: dict[str, Decimal] = {}
+        if base_complete:
+            for fill in fills:
+                identity = fill["identity"]
+                symbol_notional[identity] = symbol_notional.get(identity, Decimal(0)) + (
+                    Decimal(fill["quantity"]) * Decimal(fill["price"]) * Decimal(fill["fx_to_base"])
+                )
         expected_symbol_turnover = (
             {}
             if not base_complete or nav is None
             else {
-                identity: sum(
-                    (
-                        Decimal(fill["quantity"])
-                        * Decimal(fill["price"])
-                        * Decimal(fill["fx_to_base"])
-                        for fill in fills
-                        if fill["identity"] == identity
-                    ),
-                    Decimal(0),
-                )
-                / (Decimal(2) * nav)
-                for identity in sorted({fill["identity"] for fill in fills})
+                identity: value / (Decimal(2) * nav)
+                for identity, value in sorted(symbol_notional.items())
             }
         )
         if {
@@ -1260,17 +1279,16 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             breached=check_status.get("market_open_no_trade_minutes") == "BREACH",
         )
         repeated_keys = sorted(key for key, count in activity.items() if count > 1)
+        groups_by_activity: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for group in chronological_groups:
+            activity_key = (
+                group["account_ref"],
+                group["identity"],
+                group_local_datetime(group).date().isoformat(),
+            )
+            groups_by_activity.setdefault(activity_key, []).append(group)
         for repeated_key in repeated_keys:
-            repeated_rows = [
-                group
-                for group in chronological_groups
-                if (
-                    group["account_ref"],
-                    group["identity"],
-                    group_local_datetime(group).date().isoformat(),
-                )
-                == repeated_key
-            ]
+            repeated_rows = groups_by_activity[repeated_key]
             repeated_breach = bool(
                 policy is not None
                 and policy["max_trades_per_day"] is not None
@@ -1303,6 +1321,35 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             or (coverage["monetary_base_coverage"] == "PARTIAL" and fills)
             or (coverage["realized_pl_base_coverage"] == "PARTIAL" and trips)
         )
+        required_codes: set[str] = set()
+        if failed_contexts:
+            required_codes.add("CONTEXT_FAILED")
+        if omitted_contexts:
+            required_codes.add("CONTEXT_OMITTED_BUDGET")
+        if current_session:
+            required_codes.add("CURRENT_SESSION_INCOMPLETE")
+        if coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE":
+            required_codes.add("CORPORATE_ACTION_EVIDENCE_UNSUPPORTED")
+        if coverage["excluded_nontrade_events"]:
+            required_codes.add("NONTRADE_EVENTS_EXCLUDED")
+        for name, code in (
+            ("orphan_fill_orders", "ORPHAN_FILL"),
+            ("orders_missing_fills", "ORDER_MISSING_FILLS"),
+            ("order_fill_qty_mismatches", "ORDER_FILL_QTY_MISMATCH"),
+            ("order_status_conflicts", "ORDER_STATUS_CONFLICT"),
+        ):
+            if coverage[name]:
+                required_codes.add(code)
+        if unmatched_sells:
+            required_codes.add("UNMATCHED_SELL")
+        if coverage["monetary_base_coverage"] == "PARTIAL" and fills:
+            required_codes.add("BASE_MONETARY_FX_INCOMPLETE")
+        if coverage["realized_pl_base_coverage"] == "PARTIAL" and trips:
+            required_codes.add("BASE_REALIZED_PNL_FX_INCOMPLETE")
+        if trips:
+            required_codes.add("FEES_UNAVAILABLE")
+        if set(observed_quality_codes) != required_codes:
+            raise ValueError("structured quality issue codes do not match evidenced limitations")
         if required_partial and not payload["data_quality_notes"]:
             raise ValueError("required source-quality limitations are missing")
         expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
@@ -1319,6 +1366,34 @@ def validate_rebalance_request_document(payload: dict[str, Any]) -> None:
 def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
     _validate(payload, "rebalance_result.schema.json")
     try:
+        validate_snapshot_document(payload["source_snapshot"])
+        snapshot_identity_body = dict(payload["source_snapshot"])
+        observed_snapshot_id = snapshot_identity_body.pop("snapshot_id")
+        snapshot_digest = hashlib.sha256(
+            json.dumps(
+                snapshot_identity_body,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()[:16]
+        snapshot_as_of = datetime.fromisoformat(
+            payload["source_snapshot"]["as_of"].replace("Z", "+00:00")
+        )
+        expected_snapshot_id = (
+            f"ps-{snapshot_as_of.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+            f"{payload['source_snapshot']['trd_env'].lower()}-"
+            f"{payload['source_snapshot']['base_currency'].lower()}-{snapshot_digest}"
+        )
+        if observed_snapshot_id != expected_snapshot_id:
+            raise ValueError("embedded snapshot content identity does not match complete body")
+        if (
+            payload["source_snapshot"]["snapshot_id"] != payload["source_snapshot_id"]
+            or payload["source_snapshot"]["as_of"] != payload["as_of"]
+            or payload["source_snapshot"]["base_currency"] != payload["base_currency"]
+        ):
+            raise ValueError("embedded source snapshot authority does not match result")
         identity_payload = dict(payload)
         observed_simulation_id = identity_payload.pop("simulation_id")
         expected_simulation_id = (
@@ -1461,8 +1536,115 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
         for identity, evidence in payload["evidence"].items():
             unit_price = decimal(evidence["unit_price_local"])
             fx = decimal(evidence["fx_to_base"])
+            legs = evidence["source_legs"]
+            if len({leg["account_ref"] for leg in legs}) != len(legs):
+                raise ValueError("source legs must be unique by account and identity")
+            leg_quantities = [decimal(leg["quantity"]) for leg in legs]
+            leg_values = [decimal(leg["market_value_base"]) for leg in legs]
+            if any(
+                quantity * unit_price * fx != value
+                for quantity, value in zip(leg_quantities, leg_values)
+            ):
+                raise ValueError("account-level source legs do not reconcile with price/FX")
+            nonzero_signs = {value.compare(Decimal(0)) for value in leg_values if value != 0}
+            if len(nonzero_signs) > 1:
+                raise ValueError("UNSUPPORTED_OFFSETTING_LEGS")
+            if (
+                sum(leg_quantities, Decimal(0)) != before_quantities[identity]
+                or sum(leg_values, Decimal(0)) != before_values[identity]
+            ):
+                raise ValueError("account-level source legs do not rebuild source state")
             if before_quantities[identity] * unit_price * fx != before_values[identity]:
                 raise ValueError("source value does not reconcile with immutable price/FX evidence")
+        snapshot_positions: dict[str, list[dict[str, Any]]] = {}
+        for position in payload["source_snapshot"]["positions"]:
+            identity = f"{position['market']}.{position['symbol']}"
+            snapshot_positions.setdefault(identity, []).append(position)
+        if set(snapshot_positions) != set(payload["evidence"]):
+            raise ValueError("embedded source positions do not match rebalance evidence")
+        for identity, positions in snapshot_positions.items():
+            evidence = payload["evidence"][identity]
+            reference = positions[0]
+            if any(
+                position[name] != reference[name]
+                for position in positions[1:]
+                for name in (
+                    "sector",
+                    "region",
+                    "themes",
+                    "last_price_local",
+                    "currency",
+                    "fx_to_base",
+                )
+            ) or any(
+                evidence[name] != reference[name]
+                for name in (
+                    "sector",
+                    "region",
+                    "themes",
+                    "unit_price_local",
+                    "currency",
+                    "fx_to_base",
+                )
+                if name not in {"unit_price_local"}
+            ):
+                raise ValueError(
+                    "classification/price evidence differs from embedded source snapshot"
+                )
+            if evidence["unit_price_local"] != reference["last_price_local"]:
+                raise ValueError("unit price evidence differs from embedded source snapshot")
+
+        def expected_exposure_views(
+            state: dict[str, Any],
+        ) -> dict[str, dict[str, dict[str, Decimal]]]:
+            nav = decimal(state["nav_base"])
+            rebuilt = {
+                view: {
+                    dimension: {} for dimension in ("sector", "region", "theme_full", "theme_split")
+                }
+                for view in ("long", "short", "gross", "net")
+            }
+            for identity, item in state["positions"].items():
+                value = decimal(item["market_value_base"])
+                weight = value / nav
+                evidence = payload["evidence"][identity]
+                view_weights = {
+                    "long": max(weight, Decimal(0)),
+                    "short": max(-weight, Decimal(0)),
+                    "gross": abs(weight),
+                    "net": weight,
+                }
+                for dimension, label in (
+                    ("sector", evidence["sector"]),
+                    ("region", evidence["region"]),
+                ):
+                    for view, view_weight in view_weights.items():
+                        if view_weight:
+                            rebuilt[view][dimension][label] = (
+                                rebuilt[view][dimension].get(label, Decimal(0)) + view_weight
+                            )
+                themes = evidence["themes"] or ["UNKNOWN"]
+                for theme in themes:
+                    for view, view_weight in view_weights.items():
+                        if view_weight:
+                            rebuilt[view]["theme_full"][theme] = (
+                                rebuilt[view]["theme_full"].get(theme, Decimal(0)) + view_weight
+                            )
+                            rebuilt[view]["theme_split"][theme] = rebuilt[view]["theme_split"].get(
+                                theme, Decimal(0)
+                            ) + view_weight / len(themes)
+            return rebuilt
+
+        for state in (before, after):
+            rebuilt = expected_exposure_views(state)
+            for view in rebuilt:
+                for dimension in rebuilt[view]:
+                    observed = {
+                        label: decimal(value)
+                        for label, value in state["exposure_views"][view][dimension].items()
+                    }
+                    if observed != rebuilt[view][dimension]:
+                        raise ValueError("classification exposure evidence does not rebuild state")
         deltas: dict[str, Decimal] = {}
         quantity_deltas: dict[str, Decimal] = {}
         for change in payload["changes"]:
@@ -1482,6 +1664,31 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 or quantity_deltas[symbol] * unit_price * fx != deltas[symbol]
             ):
                 raise ValueError("change amount/quantity formula does not reconcile")
+            allocations = change["leg_allocations"]
+            legs = payload["evidence"][symbol]["source_legs"]
+            if [item["account_ref"] for item in allocations] != [
+                item["account_ref"] for item in legs
+            ]:
+                raise ValueError("operation leg allocation is not deterministic")
+            if (
+                sum((decimal(item["amount_delta_base"]) for item in allocations), Decimal(0))
+                != deltas[symbol]
+                or sum((decimal(item["quantity_delta"]) for item in allocations), Decimal(0))
+                != quantity_deltas[symbol]
+            ):
+                raise ValueError("operation leg allocations do not reconcile")
+            basis = sum((abs(decimal(item["market_value_base"])) for item in legs), Decimal(0))
+            for allocation, leg in zip(allocations[:-1], legs[:-1]):
+                weight = (
+                    abs(decimal(leg["market_value_base"])) / basis
+                    if basis
+                    else Decimal(1) / len(legs)
+                )
+                if (
+                    decimal(allocation["amount_delta_base"]) != deltas[symbol] * weight
+                    or decimal(allocation["quantity_delta"]) != quantity_deltas[symbol] * weight
+                ):
+                    raise ValueError("operation leg allocation weights are not authoritative")
         request = payload["request"]
         if (
             request["snapshot_id"] != payload["source_snapshot_id"]
