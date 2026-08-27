@@ -142,7 +142,10 @@ source order/deal identifiers, separates accounts and market-qualified securitie
 fills by order, and reconstructs only evidenced long-stock FIFO matches. Sells without opening
 inventory in the selected window and the upstream 200-order cap are explicit `PARTIAL` quality
 notes, never fabricated round trips. Market-open checks use exchange-local IANA timezones (including
-DST). Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
+DST). All behavior and frequency metrics use the merged OrderGroup (first fill is its effective
+time); exact fills remain the FIFO/P&L unit. The report captures acquisition `as_of` from an
+injectable UTC clock, keeps snapshot as-of separate, and preserves requested/successful/failed/
+budget-omitted masked contexts even when successful reads are empty. Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
 complete base-currency, NAV, security-currency, and FX evidence; missing evidence makes base
 aggregates `null`, never mixed-currency totals. Orders and fills are reconciled, unsupported
 corporate-action/transfer/cost-adjustment fields are disclosed, and structured verified behavior

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from portfolio_analyst.account_alias import AccountAliaser
+from portfolio_analyst.schema import validate_trade_review_document
 from portfolio_analyst.trade_history import FutuTradeHistoryService
+from test_risk_analysis import snapshot
 
 
 class FixtureAdapter:
@@ -88,3 +90,125 @@ def test_trade_history_service_is_bounded_multi_account_and_masks_private_ids():
         "get_history_orders",
         "get_history_order_fill_list",
     ]
+
+
+class EmptyFixtureAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        if name == "get_accounts":
+            return super().read_private_json(name, arguments, timeout=timeout)
+        self.calls.append((name, tuple(arguments), timeout))
+        return {"orders": []} if name == "get_history_orders" else {"deals": []}
+
+
+def test_service_clock_and_empty_successful_contexts_are_preserved_without_raw_ids():
+    acquired = datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc)
+    adapter = EmptyFixtureAdapter()
+    review = FutuTradeHistoryService(
+        adapter, aliaser=AccountAliaser.ephemeral(), clock=lambda: acquired
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27), trd_env="REAL")
+
+    assert review.as_of == acquired
+    assert review.source_snapshot_as_of is None
+    assert review.coverage["accounts_requested"] == 2
+    assert review.coverage["accounts_covered"] == 2
+    assert review.coverage["contexts_requested"] == 2
+    assert review.coverage["contexts_read"] == 2
+    assert review.coverage["contexts_failed"] == 0
+    assert review.coverage["contexts_omitted_budget"] == 0
+    assert len(review.coverage["successful_contexts"]) == 2
+    assert all(
+        "12345" not in str(value) and "67890" not in str(value)
+        for value in review.coverage.values()
+    )
+
+
+class FirstContextFailureAdapter(EmptyFixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        if name == "get_history_orders":
+            raise RuntimeError("fixture failure")
+        return super().read_private_json(name, arguments, timeout=timeout)
+
+
+def test_failed_and_budget_omitted_contexts_are_separate_masked_coverage():
+    adapter = FirstContextFailureAdapter()
+    service = FutuTradeHistoryService(
+        adapter,
+        aliaser=AccountAliaser.ephemeral(),
+        clock=lambda: datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc),
+    )
+    service.MAX_CONSECUTIVE_FAILURES = 1
+    review = service.review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert review.coverage["contexts_failed"] == 1
+    assert review.coverage["contexts_omitted_budget"] == 1
+    assert review.coverage["contexts_read"] == 0
+    assert review.coverage["accounts_covered"] == 0
+    assert all(
+        "12345" not in str(value) and "67890" not in str(value)
+        for value in review.coverage.values()
+    )
+
+
+class UnknownStatusAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_history_orders" and arguments[arguments.index("--acc-id") + 1] == "12345":
+            payload["orders"][0]["status"] = "FUTURE_UNKNOWN_STATUS"
+        return payload
+
+
+def test_unknown_order_status_fails_that_context_closed_and_marks_report_partial():
+    review = FutuTradeHistoryService(
+        UnknownStatusAdapter(),
+        aliaser=AccountAliaser.ephemeral(),
+        clock=lambda: datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert review.coverage["contexts_failed"] == 1
+    assert review.coverage["contexts_read"] == 1
+    assert review.data_quality_status == "PARTIAL"
+
+
+def test_service_keeps_acquisition_clock_separate_from_source_snapshot_as_of():
+    source = snapshot()
+    acquired = datetime(2026, 8, 28, 1, 2, 3, tzinfo=timezone.utc)
+    review = FutuTradeHistoryService(
+        FixtureAdapter(), aliaser=AccountAliaser.ephemeral(), clock=lambda: acquired
+    ).review(
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        portfolio_snapshot=source,
+    )
+
+    assert review.as_of == acquired
+    assert review.source_snapshot_as_of == source.as_of
+    assert review.as_of != review.source_snapshot_as_of
+
+
+class MalformedDealsAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if (
+            name == "get_history_order_fill_list"
+            and arguments[arguments.index("--acc-id") + 1] == "12345"
+        ):
+            payload["deals"][0].pop("qty")
+        return payload
+
+
+def test_failed_context_does_not_leak_partially_normalized_orders_into_report():
+    review = FutuTradeHistoryService(
+        MalformedDealsAdapter(),
+        aliaser=AccountAliaser.ephemeral(),
+        clock=lambda: datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert review.coverage["contexts_failed"] == 1
+    assert review.coverage["contexts_read"] == 1
+    assert len(review.normalized_orders) == 1
+    assert len(review.normalized_fills) == 1
+    assert (
+        review.normalized_orders[0].account_ref
+        == review.coverage["successful_contexts"][0]["account_ref"]
+    )
+    validate_trade_review_document(review.to_dict())

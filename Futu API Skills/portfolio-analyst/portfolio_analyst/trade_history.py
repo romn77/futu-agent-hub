@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 import time
 from decimal import Decimal
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .account_alias import AccountAliaser
 from .models import PortfolioSnapshot
 from .skill_trust import audited_files
-from .trade_review import TradePolicy, TradeReview, TradeReviewInputError, build_trade_review
+from .trade_review import (
+    TradePolicy,
+    TradeReview,
+    TradeReviewInputError,
+    build_trade_review,
+    normalize_order_status,
+)
 
 
 class TradeHistoryReader(Protocol):
@@ -29,9 +35,16 @@ class FutuTradeHistoryService:
     MAX_CONSECUTIVE_FAILURES = 3
     QUERY_MARKETS = frozenset({"US", "HK", "HKCC", "CN", "SG", "MY", "JP"})
 
-    def __init__(self, adapter: TradeHistoryReader, *, aliaser: AccountAliaser) -> None:
+    def __init__(
+        self,
+        adapter: TradeHistoryReader,
+        *,
+        aliaser: AccountAliaser,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.adapter = adapter
         self.aliaser = aliaser
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def review(
         self,
@@ -86,6 +99,16 @@ class FutuTradeHistoryService:
         if len(selected) > self.MAX_ACCOUNTS:
             raise TradeReviewInputError("account count exceeds the bounded history-read budget")
         self.adapter.protect_sensitive_values(tuple(dict.fromkeys(x[0] for x in selected)))
+        selected_contexts = [
+            (account_id, market, firm, self.aliaser.alias(account_id))
+            for account_id, market, firm in selected
+        ]
+        requested_contexts = [
+            {"account_ref": alias, "market": market} for _, market, _, alias in selected_contexts
+        ]
+        successful_contexts: list[dict[str, str]] = []
+        failed_contexts: list[dict[str, str]] = []
+        omitted_contexts: list[dict[str, str]] = []
         orders: list[dict[str, Any]] = []
         deals: list[dict[str, Any]] = []
         notes: list[str] = (
@@ -114,12 +137,12 @@ class FutuTradeHistoryService:
         deadline = time.monotonic() + self.MAX_WALL_SECONDS
         consecutive_failures = 0
         contexts_read = 0
-        for account_id, market, firm in selected:
+        for index, (account_id, market, firm, alias) in enumerate(selected_contexts):
             remaining = deadline - time.monotonic()
             if remaining <= 0 or consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
                 notes.append("history-read work budget stopped remaining account contexts")
+                omitted_contexts.extend(requested_contexts[index:])
                 break
-            alias = self.aliaser.alias(account_id)
             common = [
                 "--acc-id",
                 account_id,
@@ -165,22 +188,31 @@ class FutuTradeHistoryService:
                     raw_id: f"ord-{market.lower()}-{index:06d}"
                     for index, raw_id in enumerate(sorted(raw_order_ids), 1)
                 }
-                orders.extend(self._orders(account_orders, alias, order_aliases, monetary_evidence))
-                deals.extend(
-                    self._deals(account_deals, alias, order_aliases, market, monetary_evidence)
+                normalized_orders = self._orders(
+                    account_orders, alias, order_aliases, monetary_evidence
                 )
+                normalized_deals = self._deals(
+                    account_deals, alias, order_aliases, market, monetary_evidence
+                )
+                # A context becomes report evidence only after both source bodies
+                # normalize successfully; failed contexts cannot leak half a read.
+                orders.extend(normalized_orders)
+                deals.extend(normalized_deals)
                 contexts_read += 1
+                successful_contexts.append({"account_ref": alias, "market": market})
                 consecutive_failures = 0
             except Exception as exc:
                 consecutive_failures += 1
+                failed_contexts.append(
+                    {
+                        "account_ref": alias,
+                        "market": market,
+                        "reason": type(exc).__name__,
+                    }
+                )
                 notes.append(
                     f"history read failed for masked account {alias} ({type(exc).__name__})"
                 )
-        failed_accounts = sum(note.startswith("history read failed") for note in notes)
-        if selected and failed_accounts == len(selected):
-            raise TradeReviewInputError(
-                "historical reads were unavailable for every selected account"
-            )
         if not selected:
             notes.append(f"no {environment} securities accounts were available")
         return build_trade_review(
@@ -193,10 +225,19 @@ class FutuTradeHistoryService:
             base_currency=portfolio_snapshot.base_currency if portfolio_snapshot else None,
             portfolio_nav_base=portfolio_snapshot.nav_base if portfolio_snapshot else None,
             source_snapshot_id=(portfolio_snapshot.snapshot_id if portfolio_snapshot else None),
-            as_of=portfolio_snapshot.as_of if portfolio_snapshot else None,
+            acquired_at=self.clock(),
+            source_snapshot_as_of=(portfolio_snapshot.as_of if portfolio_snapshot else None),
             coverage_context={
+                "accounts_requested": len({item["account_ref"] for item in requested_contexts}),
+                "accounts_covered": len({item["account_ref"] for item in successful_contexts}),
                 "contexts_requested": len(selected),
                 "contexts_read": contexts_read,
+                "contexts_failed": len(failed_contexts),
+                "contexts_omitted_budget": len(omitted_contexts),
+                "requested_contexts": requested_contexts,
+                "successful_contexts": successful_contexts,
+                "failed_contexts": failed_contexts,
+                "omitted_contexts": omitted_contexts,
             },
             corporate_action_evidence_status="UNSUPPORTED_EVIDENCE",
             provenance_context={
@@ -247,6 +288,7 @@ class FutuTradeHistoryService:
                     "order_id": order_aliases[str(row["order_id"])],
                     "account_ref": account_ref,
                     "currency": currency,
+                    "status": normalize_order_status(row["status"]),
                 }
             )
         return result

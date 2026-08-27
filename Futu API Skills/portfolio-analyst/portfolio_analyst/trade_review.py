@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -104,6 +104,7 @@ class NormalizedOrder:
 
 @dataclass(frozen=True)
 class OrderGroup:
+    group_ref: str
     account_ref: str
     order_id: str
     identity: str
@@ -111,6 +112,7 @@ class OrderGroup:
     quantity: Decimal
     average_price: Decimal
     fill_count: int
+    effective_at: datetime
     first_fill_at: datetime
     last_fill_at: datetime
 
@@ -215,6 +217,7 @@ class TradeReview:
     source: str
     base_currency: str | None
     portfolio_nav_base: Decimal | None
+    source_snapshot_as_of: datetime | None
     start: date
     end: date
     coverage: Mapping[str, Any]
@@ -263,7 +266,9 @@ class TradeReview:
             f"- Range: {self.start.isoformat()} to {self.end.isoformat()}",
             f"- Base currency: {safe(self.base_currency or 'Unavailable')}",
             f"- Portfolio NAV ({safe(self.base_currency or 'base unavailable')}): {self.portfolio_nav_base if self.portfolio_nav_base is not None else 'Unavailable'}",
-            f"- Account/context coverage: {self.coverage['accounts_covered']} accounts; {self.coverage['contexts_read']} of {self.coverage['contexts_requested']} contexts read",
+            f"- Source snapshot as of: {self.source_snapshot_as_of.isoformat() if self.source_snapshot_as_of is not None else 'Unavailable'}",
+            f"- Account/context coverage: {self.coverage['accounts_covered']} of {self.coverage['accounts_requested']} accounts; {self.coverage['contexts_read']} of {self.coverage['contexts_requested']} contexts read",
+            f"- Failed / budget-omitted contexts: {self.coverage['contexts_failed']} / {self.coverage['contexts_omitted_budget']}",
             f"- Monetary base coverage: {safe(self.coverage['monetary_base_coverage'])}",
             f"- Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
             f"- Data quality: {self.data_quality_status}",
@@ -298,6 +303,11 @@ class TradeReview:
             f"- Deals: {safe(self.provenance['deals_command'])}",
             f"- Time basis: {safe(self.provenance['timezone_basis'])}",
             f"- Monetary basis: {safe(self.provenance['monetary_basis'])}",
+            "\n## Masked context coverage\n",
+            f"- Requested: {safe(json.dumps(self.coverage['requested_contexts'], sort_keys=True))}",
+            f"- Successful: {safe(json.dumps(self.coverage['successful_contexts'], sort_keys=True))}",
+            f"- Failed: {safe(json.dumps(self.coverage['failed_contexts'], sort_keys=True))}",
+            f"- Budget omitted: {safe(json.dumps(self.coverage['omitted_contexts'], sort_keys=True))}",
         ]
         if json_artifact:
             lines.append(f"\nAuthoritative JSON: `{safe(json_artifact)}`\n")
@@ -313,7 +323,8 @@ class TradeReview:
                 f"Range: {self.start.isoformat()} to {self.end.isoformat()}",
                 f"Base currency: {safe(self.base_currency or 'Unavailable')}",
                 f"Portfolio NAV: {self.portfolio_nav_base if self.portfolio_nav_base is not None else 'Unavailable'} {safe(self.base_currency or '')}".rstrip(),
-                f"Coverage: {self.coverage['accounts_covered']} accounts; {self.coverage['contexts_read']}/{self.coverage['contexts_requested']} contexts",
+                f"Source snapshot as of: {self.source_snapshot_as_of.isoformat() if self.source_snapshot_as_of is not None else 'Unavailable'}",
+                f"Coverage: {self.coverage['accounts_covered']}/{self.coverage['accounts_requested']} accounts; {self.coverage['contexts_read']}/{self.coverage['contexts_requested']} contexts; {self.coverage['contexts_failed']} failed; {self.coverage['contexts_omitted_budget']} budget-omitted",
                 f"Monetary base coverage: {safe(self.coverage['monetary_base_coverage'])}",
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
@@ -332,6 +343,10 @@ class TradeReview:
                 ],
                 f"Orders source: {safe(self.provenance['orders_command'])}",
                 f"Deals source: {safe(self.provenance['deals_command'])}",
+                f"Requested contexts: {safe(json.dumps(self.coverage['requested_contexts'], sort_keys=True))}",
+                f"Successful contexts: {safe(json.dumps(self.coverage['successful_contexts'], sort_keys=True))}",
+                f"Failed contexts: {safe(json.dumps(self.coverage['failed_contexts'], sort_keys=True))}",
+                f"Budget-omitted contexts: {safe(json.dumps(self.coverage['omitted_contexts'], sort_keys=True))}",
                 *[f"Quality note: {safe(item)}" for item in self.data_quality_notes],
             ]
         )
@@ -348,6 +363,27 @@ _MARKET_TIME = {
     "AU": ("Australia/Sydney", 10, 0),
 }
 _SOURCE_MARKET_ALIASES = {"SH": "CN", "SZ": "CN", "HKCC": "HK"}
+NORMALIZED_ORDER_STATUSES = frozenset(
+    {
+        "WAITING_SUBMIT",
+        "SUBMITTING",
+        "SUBMITTED",
+        "FILLED_PART",
+        "FILLED_ALL",
+        "CANCELLED_PART",
+        "CANCELLED_ALL",
+        "FAILED",
+        "DISABLED",
+        "DELETED",
+    }
+)
+
+
+def normalize_order_status(raw: Any) -> str:
+    status = str(raw).strip().upper().replace("ORDER_STATUS.", "").replace("ORDERSTATUS.", "")
+    if status not in NORMALIZED_ORDER_STATUSES:
+        raise TradeReviewInputError("order status is outside the normalized contract")
+    return status
 
 
 def load_trade_policy(data_home: Path) -> TradePolicy | None:
@@ -587,22 +623,7 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
     side = str(raw["side"]).strip().upper().replace("TRD_SIDE.", "").replace("TRDSIDE.", "")
     if side not in {"BUY", "SELL"}:
         raise TradeReviewInputError("order side must be BUY or SELL")
-    status = (
-        str(raw["status"]).strip().upper().replace("ORDER_STATUS.", "").replace("ORDERSTATUS.", "")
-    )
-    if status not in {
-        "WAITING_SUBMIT",
-        "SUBMITTING",
-        "SUBMITTED",
-        "FILLED_PART",
-        "FILLED_ALL",
-        "CANCELLED_PART",
-        "CANCELLED_ALL",
-        "FAILED",
-        "DISABLED",
-        "DELETED",
-    }:
-        raise TradeReviewInputError("order status is outside the normalized contract")
+    status = normalize_order_status(raw["status"])
     timezone_name = _MARKET_TIME[market][0]
     try:
         created = datetime.fromisoformat(str(raw["create_time"]))
@@ -662,6 +683,7 @@ def _group_orders(fills: Sequence[NormalizedFill]) -> tuple[OrderGroup, ...]:
         notional = sum((x.quantity * x.price for x in items), Decimal(0))
         result.append(
             OrderGroup(
+                f"{key[0]}/{key[1]}",
                 key[0],
                 key[1],
                 items[0].identity,
@@ -669,6 +691,7 @@ def _group_orders(fills: Sequence[NormalizedFill]) -> tuple[OrderGroup, ...]:
                 quantity,
                 notional / quantity,
                 len(items),
+                items[0].executed_at,
                 items[0].executed_at,
                 items[-1].executed_at,
             )
@@ -752,13 +775,26 @@ def build_trade_review(
     base_currency: str | None = None,
     portfolio_nav_base: Decimal | None = None,
     source_snapshot_id: str | None = None,
-    as_of: datetime | None = None,
+    acquired_at: datetime | None = None,
+    source_snapshot_as_of: datetime | None = None,
     coverage_context: Mapping[str, Any] | None = None,
     corporate_action_evidence_status: str = "UNSUPPORTED_EVIDENCE",
     provenance_context: Mapping[str, Any] | None = None,
 ) -> TradeReview:
     if start > end:
         raise TradeReviewInputError("review start must not follow end")
+    acquisition = acquired_at or datetime.now(timezone.utc)
+    if acquisition.tzinfo is None:
+        raise TradeReviewInputError("acquisition timestamp must be timezone-aware")
+    acquisition = acquisition.astimezone(timezone.utc)
+    if acquisition.date() < end:
+        raise TradeReviewInputError("acquisition timestamp precedes the requested period end")
+    if source_snapshot_as_of is not None:
+        if source_snapshot_as_of.tzinfo is None:
+            raise TradeReviewInputError("source snapshot as-of must be timezone-aware")
+        source_snapshot_as_of = source_snapshot_as_of.astimezone(timezone.utc)
+    if (source_snapshot_id is None) != (source_snapshot_as_of is None):
+        raise TradeReviewInputError("source snapshot identity and as-of must be supplied together")
     if base_currency is not None and re.fullmatch(r"[A-Z]{3}", base_currency) is None:
         raise TradeReviewInputError("base currency must be an uppercase ISO-style code")
     if portfolio_nav_base is not None and (
@@ -797,10 +833,25 @@ def build_trade_review(
             partial_fill_orders += 1
         if fill_qty != order.dealt_quantity:
             order_fill_qty_mismatches += 1
+        no_fill_statuses = {
+            "WAITING_SUBMIT",
+            "SUBMITTING",
+            "SUBMITTED",
+            "CANCELLED_ALL",
+            "FAILED",
+            "DISABLED",
+            "DELETED",
+        }
         status_conflict = (
-            (order.status == "FILLED_ALL" and fill_qty != order.quantity)
-            or (order.status == "FILLED_PART" and not Decimal(0) < fill_qty < order.quantity)
-            or (order.status == "CANCELLED_ALL" and fill_qty != 0)
+            (
+                order.status == "FILLED_ALL"
+                and not order.dealt_quantity == fill_qty == order.quantity
+            )
+            or (
+                order.status in {"FILLED_PART", "CANCELLED_PART"}
+                and not Decimal(0) < order.dealt_quantity == fill_qty < order.quantity
+            )
+            or (order.status in no_fill_statuses and (order.dealt_quantity != 0 or fill_qty != 0))
             or any(
                 fill.identity != order.identity or fill.side != order.side
                 for fill in fills_by_key.get(key, [])
@@ -821,7 +872,7 @@ def build_trade_review(
             realized_by_currency[trip.currency] = (
                 realized_by_currency.get(trip.currency, Decimal(0)) + trip.realized_pl_local
             )
-    base_complete = bool(base_currency and source_snapshot_id) and all(
+    base_complete = bool(base_currency and source_snapshot_id and source_snapshot_as_of) and all(
         fill.currency != "UNKNOWN" and fill.fx_to_base is not None for fill in normalized
     )
     buy_base = (
@@ -879,15 +930,15 @@ def build_trade_review(
     ]
     wins_total = sum(profits, Decimal(0))
     losses_total = -sum(losses, Decimal(0))
-    chronological = sorted(normalized, key=lambda x: (x.executed_at, x.deal_id))
-    by_security: dict[tuple[str, str], list[NormalizedFill]] = {}
-    for fill in chronological:
-        by_security.setdefault((fill.account_ref, fill.identity), []).append(fill)
+    chronological_groups = sorted(groups, key=lambda x: (x.effective_at, x.group_ref))
+    by_security: dict[tuple[str, str], list[OrderGroup]] = {}
+    for group in chronological_groups:
+        by_security.setdefault((group.account_ref, group.identity), []).append(group)
     adjacent = [pair for items in by_security.values() for pair in zip(items, items[1:])]
     reversals = sum(
         1
         for left, right in adjacent
-        if left.executed_at.date() == right.executed_at.date() and left.side != right.side
+        if left.effective_at.date() == right.effective_at.date() and left.side != right.side
     )
     cooldown = policy.reentry_cooldown_minutes if policy else None
     reentry_pairs = [
@@ -896,63 +947,72 @@ def build_trade_review(
         if cooldown is not None
         and left.side == "SELL"
         and right.side == "BUY"
-        and right.executed_at - left.executed_at <= timedelta(minutes=cooldown)
+        and right.effective_at - left.effective_at <= timedelta(minutes=cooldown)
     ]
     observed_reentry_pairs = [
         (left, right)
         for left, right in adjacent
         if left.side == "SELL"
         and right.side == "BUY"
-        and left.executed_at.date() == right.executed_at.date()
+        and left.effective_at.date() == right.effective_at.date()
     ]
     reentries = len(reentry_pairs) if cooldown is not None else None
     open_minutes = policy.market_open_no_trade_minutes if policy else None
     market_open_rules = policy.market_open_no_trade_minutes_by_market if policy else {}
-    open_events: list[NormalizedFill] = []
+    open_events: list[OrderGroup] = []
     if open_minutes is not None or market_open_rules:
-        for fill in normalized:
-            fill_window = market_open_rules.get(fill.market, open_minutes)
-            if fill_window is None:
+        for group in groups:
+            market = group.identity.split(".", 1)[0]
+            group_window = market_open_rules.get(market, open_minutes)
+            if group_window is None:
                 continue
-            _, hour, minute = _MARKET_TIME[fill.market]
+            _, hour, minute = _MARKET_TIME[market]
             start_minute = hour * 60 + minute
-            current = fill.executed_at.hour * 60 + fill.executed_at.minute
-            if start_minute <= current < start_minute + fill_window:
-                open_events.append(fill)
-    observed_open_events: list[NormalizedFill] = []
-    for fill in normalized:
-        _, hour, minute = _MARKET_TIME[fill.market]
+            current = group.effective_at.hour * 60 + group.effective_at.minute
+            if start_minute <= current < start_minute + group_window:
+                open_events.append(group)
+    observed_open_events: list[OrderGroup] = []
+    for group in groups:
+        market = group.identity.split(".", 1)[0]
+        _, hour, minute = _MARKET_TIME[market]
         start_minute = hour * 60 + minute
-        current = fill.executed_at.hour * 60 + fill.executed_at.minute
+        current = group.effective_at.hour * 60 + group.effective_at.minute
         if start_minute <= current < start_minute + 30:
-            observed_open_events.append(fill)
+            observed_open_events.append(group)
     open_count = len(open_events) if open_minutes is not None or market_open_rules else None
     activity: dict[tuple[str, str, date], int] = {}
-    for fill in normalized:
-        key = (fill.account_ref, fill.identity, fill.executed_at.date())
+    for group in groups:
+        key = (group.account_ref, group.identity, group.effective_at.date())
         activity[key] = activity.get(key, 0) + 1
     add_winner = 0
     add_loser = 0
-    add_winner_events: list[NormalizedFill] = []
-    add_loser_events: list[NormalizedFill] = []
+    add_winner_events: list[OrderGroup] = []
+    add_loser_events: list[OrderGroup] = []
     inventory_cost: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
-    for fill in chronological:
-        key = (fill.account_ref, fill.identity)
+    round_trip_groups_day: dict[tuple[str, str, date], int] = {}
+    for group in chronological_groups:
+        key = (group.account_ref, group.identity)
         quantity, cost = inventory_cost.get(key, (Decimal(0), Decimal(0)))
-        if fill.side == "BUY":
+        if group.side == "BUY":
             if quantity > 0:
                 average = cost / quantity
-                if fill.price > average:
+                if group.average_price > average:
                     add_winner += 1
-                    add_winner_events.append(fill)
-                elif fill.price < average:
+                    add_winner_events.append(group)
+                elif group.average_price < average:
                     add_loser += 1
-                    add_loser_events.append(fill)
-            inventory_cost[key] = (quantity + fill.quantity, cost + fill.quantity * fill.price)
+                    add_loser_events.append(group)
+            inventory_cost[key] = (
+                quantity + group.quantity,
+                cost + group.quantity * group.average_price,
+            )
         elif quantity > 0:
             average = cost / quantity if quantity else Decimal(0)
-            matched = min(quantity, fill.quantity)
+            matched = min(quantity, group.quantity)
             inventory_cost[key] = (quantity - matched, cost - average * matched)
+            if matched > 0:
+                trip_key = (group.account_ref, group.identity, group.effective_at.date())
+                round_trip_groups_day[trip_key] = round_trip_groups_day.get(trip_key, 0) + 1
     additions = add_winner + add_loser
     cost_proximity = sum(
         1
@@ -995,10 +1055,10 @@ def build_trade_review(
         if not pnl_base_complete or not trips
         else sum((x.realized_pl_base for x in trips), Decimal(0)) / len(trips),
         reversals,
-        None if not normalized else Decimal(reversals) / len(normalized),
+        None if not groups else Decimal(reversals) / len(groups),
         reentries,
         open_count,
-        None if open_count is None or not normalized else Decimal(open_count) / len(normalized),
+        None if open_count is None or not groups else Decimal(open_count) / len(groups),
         sum(1 for count in activity.values() if count > 1),
         add_winner,
         add_loser,
@@ -1008,13 +1068,9 @@ def build_trade_review(
     checks: list[dict[str, Any]] = []
     if policy:
         per_day: dict[tuple[str, date], int] = {}
-        round_trips_day: dict[tuple[str, str, date], int] = {}
-        for fill in normalized:
-            day_key = (fill.account_ref, fill.executed_at.date())
+        for group in groups:
+            day_key = (group.account_ref, group.effective_at.date())
             per_day[day_key] = per_day.get(day_key, 0) + 1
-        for trip in trips:
-            trip_key = (trip.account_ref, trip.identity, trip.closed_at.date())
-            round_trips_day[trip_key] = round_trips_day.get(trip_key, 0) + 1
         for name, observed, limit in (
             (
                 "market_open_no_trade_minutes",
@@ -1025,7 +1081,7 @@ def build_trade_review(
             ("max_trades_per_day", max(per_day.values(), default=0), policy.max_trades_per_day),
             (
                 "max_round_trips_per_symbol_day",
-                max(round_trips_day.values(), default=0),
+                max(round_trip_groups_day.values(), default=0),
                 policy.max_round_trips_per_symbol_day,
             ),
             ("flag_add_to_loser", add_loser, 0 if policy.flag_add_to_loser else None),
@@ -1091,14 +1147,14 @@ def build_trade_review(
     def add_behavior(
         kind: str,
         count: int,
-        events: Sequence[NormalizedFill],
+        events: Sequence[OrderGroup],
         policy_name: str | None = None,
     ) -> None:
         if count <= 0 or not events:
             return
         ordered_events = sorted(
-            {item.deal_id: item for item in events}.values(),
-            key=lambda item: (item.executed_at, item.deal_id),
+            {item.group_ref: item for item in events}.values(),
+            key=lambda item: (item.effective_at, item.group_ref),
         )
         behavior.append(
             BehaviorFinding(
@@ -1106,17 +1162,18 @@ def build_trade_review(
                 "MEDIUM" if policy_name in breached else "INFORMATIONAL",
                 f"Observed {count} qualifying events in normalized execution evidence.",
                 True,
-                tuple(item.deal_id for item in ordered_events),
+                tuple(item.group_ref for item in ordered_events),
                 tuple(sorted({item.identity for item in ordered_events})),
-                ordered_events[0].executed_at,
-                ordered_events[-1].executed_at,
+                ordered_events[0].effective_at,
+                ordered_events[-1].effective_at,
             )
         )
 
     reversal_events = [
         item
         for pair in adjacent
-        if pair[0].executed_at.date() == pair[1].executed_at.date() and pair[0].side != pair[1].side
+        if pair[0].effective_at.date() == pair[1].effective_at.date()
+        and pair[0].side != pair[1].side
         for item in pair
     ]
     add_behavior("SAME_DAY_REVERSAL", reversals, reversal_events)
@@ -1137,35 +1194,40 @@ def build_trade_review(
     )
     repeated_keys = {key for key, count in activity.items() if count > 1}
     repeated_events = [
-        fill
-        for fill in normalized
-        if (fill.account_ref, fill.identity, fill.executed_at.date()) in repeated_keys
+        group
+        for group in groups
+        if (group.account_ref, group.identity, group.effective_at.date()) in repeated_keys
     ]
     add_behavior(
         "REPEATED_SYMBOL_ACTIVITY", len(repeated_keys), repeated_events, "max_trades_per_day"
     )
     add_behavior("ADD_TO_WINNER", add_winner, add_winner_events)
     add_behavior("ADD_TO_LOSER", add_loser, add_loser_events, "flag_add_to_loser")
-    identity_body = json.dumps(
-        {
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "deals": [_json_value(x) for x in normalized],
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+    evidenced_accounts = sorted(
+        {fill.account_ref for fill in normalized_all}
+        | {order.account_ref for order in normalized_orders}
     )
-    review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
+    evidenced_contexts = [
+        {"account_ref": account, "market": market}
+        for account, market in sorted(
+            {(fill.account_ref, fill.market) for fill in normalized_all}
+            | {(order.account_ref, order.market) for order in normalized_orders}
+        )
+    ]
     coverage = {
         "orders_received": len(orders),
         "deals_received": len(deals),
         "source_snapshot_id": source_snapshot_id,
-        "accounts_covered": len(
-            {fill.account_ref for fill in normalized_all}
-            | {order.account_ref for order in normalized_orders}
-        ),
-        "contexts_requested": 0,
-        "contexts_read": 0,
+        "accounts_requested": len(evidenced_accounts),
+        "accounts_covered": len(evidenced_accounts),
+        "contexts_requested": len(evidenced_contexts),
+        "contexts_read": len(evidenced_contexts),
+        "contexts_failed": 0,
+        "contexts_omitted_budget": 0,
+        "requested_contexts": evidenced_contexts,
+        "successful_contexts": evidenced_contexts,
+        "failed_contexts": [],
+        "omitted_contexts": [],
         "partial_fill_orders": partial_fill_orders,
         "orders_missing_fills": orders_missing_fills,
         "orphan_fill_orders": orphan_fill_orders,
@@ -1185,13 +1247,48 @@ def build_trade_review(
         "deals_option_policy": "acc-id,market,trd-env,start,end,security-firm,ctx-type,json",
     }
     provenance.update(dict(provenance_context or {}))
+    identity_body = json.dumps(
+        _json_value(
+            {
+                "schema_version": "1.2",
+                "as_of": acquisition,
+                "source": "futuapi",
+                "base_currency": base_currency,
+                "portfolio_nav_base": portfolio_nav_base,
+                "source_snapshot_as_of": source_snapshot_as_of,
+                "start": start,
+                "end": end,
+                "coverage": coverage,
+                "normalized_orders": normalized_orders,
+                "normalized_fills": normalized_all,
+                "order_groups": groups,
+                "round_trips": trips,
+                "open_lots": open_lots,
+                "metrics": metrics,
+                "policy_status": status,
+                "policy_checks": checks,
+                "behavior_findings": behavior,
+                "unverified_interpretations": (
+                    "Psychological motive cannot be verified from orders and fills alone.",
+                ),
+                "motive_status": "UNVERIFIED",
+                "data_quality_status": "PARTIAL" if notes else "COMPLETE",
+                "data_quality_notes": notes,
+                "provenance": provenance,
+            }
+        ),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
     return TradeReview(
-        "1.1",
+        "1.2",
         review_id,
-        as_of or datetime.combine(end, datetime_time(23, 59, 59), tzinfo=ZoneInfo("UTC")),
+        acquisition,
         "futuapi",
         base_currency,
         portfolio_nav_base,
+        source_snapshot_as_of,
         start,
         end,
         coverage,

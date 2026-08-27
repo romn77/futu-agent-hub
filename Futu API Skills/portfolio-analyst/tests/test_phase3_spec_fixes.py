@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -11,7 +11,7 @@ from portfolio_analyst.schema import (
     validate_rebalance_result_document,
     validate_trade_review_document,
 )
-from portfolio_analyst.trade_review import build_trade_review
+from portfolio_analyst.trade_review import TradePolicy, build_trade_review
 from test_risk_analysis import snapshot
 
 
@@ -90,6 +90,7 @@ def test_mixed_currency_money_is_bucketed_and_base_aggregation_requires_complete
         base_currency="USD",
         portfolio_nav_base=Decimal("1000"),
         source_snapshot_id="ps-fixture",
+        source_snapshot_as_of=datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc),
     )
 
     assert report.metrics.notional_by_currency == {
@@ -104,6 +105,8 @@ def test_mixed_currency_money_is_bucketed_and_base_aggregation_requires_complete
 
 
 def test_complete_fx_enables_base_pnl_and_currency_qualified_statistics():
+    acquired = datetime(2026, 8, 27, 16, 0, tzinfo=timezone.utc)
+    snapshot_as_of = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
     report = build_trade_review(
         orders=[],
         deals=[
@@ -135,7 +138,11 @@ def test_complete_fx_enables_base_pnl_and_currency_qualified_statistics():
         base_currency="USD",
         portfolio_nav_base=Decimal("1000"),
         source_snapshot_id="ps-fixture",
+        acquired_at=acquired,
+        source_snapshot_as_of=snapshot_as_of,
     )
+    assert report.as_of == acquired
+    assert report.source_snapshot_as_of == snapshot_as_of
     assert report.metrics.buy_notional_base == Decimal("10")
     assert report.metrics.sell_notional_base == Decimal("11")
     assert report.metrics.average_win_base == Decimal("1")
@@ -285,3 +292,88 @@ def test_global_trade_and_rebalance_contracts_are_self_contained_and_reject_old_
     }
     with pytest.raises(Exception):
         request_from_document(old_request)
+
+
+def test_behavior_and_frequency_use_order_groups_not_partial_fill_rows():
+    report = build_trade_review(
+        orders=[],
+        deals=[
+            _deal("d1", "o1", "BUY", "4", "10", "2026-08-03 09:31:00"),
+            _deal("d2", "o1", "BUY", "6", "12", "2026-08-03 09:32:00"),
+            _deal("d3", "o2", "SELL", "10", "13", "2026-08-03 10:00:00"),
+            _deal("d4", "o3", "BUY", "1", "14", "2026-08-03 10:10:00"),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        policy=TradePolicy(
+            market_open_no_trade_minutes=5,
+            reentry_cooldown_minutes=30,
+            max_trades_per_day=3,
+            max_round_trips_per_symbol_day=1,
+        ),
+        acquired_at=datetime(2026, 8, 27, 16, 0, tzinfo=timezone.utc),
+    )
+
+    assert report.metrics.trade_count == 3
+    assert report.metrics.fill_count == 4
+    assert report.order_groups[0].quantity == Decimal("10")
+    assert report.order_groups[0].average_price == Decimal("11.2")
+    assert report.order_groups[0].effective_at == report.order_groups[0].first_fill_at
+    assert report.metrics.same_day_reversals == 2
+    assert report.metrics.same_day_reversal_rate == Decimal("2") / Decimal("3")
+    assert report.metrics.reentries_within_cooldown == 1
+    assert report.metrics.open_window_trades == 1
+    assert report.metrics.open_window_trade_rate == Decimal("1") / Decimal("3")
+    assert report.metrics.add_to_winner_count == 0
+    assert report.metrics.add_to_loser_count == 0
+    max_daily = next(
+        check for check in report.policy_checks if check["name"] == "max_trades_per_day"
+    )
+    assert max_daily["observed"] == 3
+    max_round_trips = next(
+        check for check in report.policy_checks if check["name"] == "max_round_trips_per_symbol_day"
+    )
+    assert max_round_trips["observed"] == 1
+    assert all(
+        event.startswith("acct-a/")
+        for finding in report.behavior_findings
+        for event in finding.affected_events
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "dealt", "fill_qty", "expected_conflict"),
+    [
+        ("FILLED_ALL", "10", "10", 0),
+        ("FILLED_PART", "4", "4", 0),
+        ("CANCELLED_PART", "4", "4", 0),
+        ("WAITING_SUBMIT", "0", None, 0),
+        ("SUBMITTING", "0", None, 0),
+        ("SUBMITTED", "0", None, 0),
+        ("CANCELLED_ALL", "0", None, 0),
+        ("FAILED", "0", None, 0),
+        ("DISABLED", "0", None, 0),
+        ("DELETED", "0", None, 0),
+        ("CANCELLED_PART", "0", None, 1),
+        ("FAILED", "1", "1", 1),
+        ("SUBMITTED", "1", "1", 1),
+        ("FILLED_ALL", "9", "9", 1),
+    ],
+)
+def test_order_status_reconciliation_uses_a_strict_quantity_matrix(
+    status: str, dealt: str, fill_qty: str | None, expected_conflict: int
+):
+    deals = (
+        []
+        if fill_qty is None
+        else [_deal("d1", "o1", "BUY", fill_qty, "10", "2026-08-03 10:00:00")]
+    )
+    report = build_trade_review(
+        orders=[_order("o1", "BUY", "10", dealt, status=status)],
+        deals=deals,
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        acquired_at=datetime(2026, 8, 27, 16, 0, tzinfo=timezone.utc),
+    )
+    assert report.coverage["order_status_conflicts"] == expected_conflict
+    validate_trade_review_document(report.to_dict())

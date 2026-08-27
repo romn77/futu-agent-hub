@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -446,7 +447,15 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
 def validate_trade_review_document(payload: dict[str, Any]) -> None:
     _validate(payload, "trade_review.schema.json")
     try:
+        identity_payload = dict(payload)
+        observed_review_id = identity_payload.pop("review_id")
+        identity_body = json.dumps(identity_payload, sort_keys=True, separators=(",", ":"))
+        expected_review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
+        if observed_review_id != expected_review_id:
+            raise ValueError("review identity does not match the complete report body")
         as_of = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
+        if payload["source_snapshot_as_of"] is not None:
+            datetime.fromisoformat(payload["source_snapshot_as_of"].replace("Z", "+00:00"))
         start = datetime.fromisoformat(payload["start"]).date()
         end = datetime.fromisoformat(payload["end"]).date()
         if start > end or as_of.date() < end:
@@ -457,15 +466,54 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         fills = [item for item in payload["normalized_fills"] if item["event_type"] == "TRADE"]
         orders = payload["normalized_orders"]
         coverage = payload["coverage"]
+        if (coverage["source_snapshot_id"] is None) != (payload["source_snapshot_as_of"] is None):
+            raise ValueError("source snapshot identity and as-of must be supplied together")
         if coverage["orders_received"] != len(orders) or coverage["deals_received"] != len(
             payload["normalized_fills"]
         ):
             raise ValueError("source row coverage does not match normalized evidence")
-        accounts = {item["account_ref"] for item in (*orders, *payload["normalized_fills"])}
-        if coverage["accounts_covered"] != len(accounts):
-            raise ValueError("account coverage does not match normalized evidence")
-        if not 0 <= coverage["contexts_read"] <= coverage["contexts_requested"]:
-            raise ValueError("context coverage is invalid")
+
+        def context_key(item: dict[str, Any]) -> tuple[str, str]:
+            return item["account_ref"], item["market"]
+
+        requested_contexts = {context_key(item) for item in coverage["requested_contexts"]}
+        successful_contexts = {context_key(item) for item in coverage["successful_contexts"]}
+        failed_contexts = {context_key(item) for item in coverage["failed_contexts"]}
+        omitted_contexts = {context_key(item) for item in coverage["omitted_contexts"]}
+        for values, rows in (
+            (requested_contexts, coverage["requested_contexts"]),
+            (successful_contexts, coverage["successful_contexts"]),
+            (failed_contexts, coverage["failed_contexts"]),
+            (omitted_contexts, coverage["omitted_contexts"]),
+        ):
+            if len(values) != len(rows):
+                raise ValueError("context coverage contains duplicates")
+        if (
+            successful_contexts & failed_contexts
+            or successful_contexts & omitted_contexts
+            or failed_contexts & omitted_contexts
+            or successful_contexts | failed_contexts | omitted_contexts != requested_contexts
+        ):
+            raise ValueError("context coverage partitions do not reconcile")
+        if (
+            coverage["contexts_requested"] != len(requested_contexts)
+            or coverage["contexts_read"] != len(successful_contexts)
+            or coverage["contexts_failed"] != len(failed_contexts)
+            or coverage["contexts_omitted_budget"] != len(omitted_contexts)
+        ):
+            raise ValueError("context coverage counts do not reconcile")
+        requested_accounts = {account for account, _ in requested_contexts}
+        covered_accounts = {account for account, _ in successful_contexts}
+        if coverage["accounts_requested"] != len(requested_accounts) or coverage[
+            "accounts_covered"
+        ] != len(covered_accounts):
+            raise ValueError("account coverage counts do not reconcile")
+        evidenced_contexts = {
+            (item["account_ref"], item["market"])
+            for item in (*orders, *payload["normalized_fills"])
+        }
+        if not evidenced_contexts <= successful_contexts:
+            raise ValueError("normalized rows must come from successful contexts")
         excluded = sum(item["event_type"] != "TRADE" for item in payload["normalized_fills"])
         if coverage["excluded_nontrade_events"] != excluded:
             raise ValueError("excluded-event coverage does not reconcile")
@@ -475,6 +523,36 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             item["fill_count"] for item in groups
         ):
             raise ValueError("fill count does not match normalized/grouped fills")
+        group_keys = {(item["account_ref"], item["order_id"]) for item in groups}
+        if len(group_keys) != len(groups):
+            raise ValueError("order groups must have unique account/order identities")
+        grouped_fills: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for fill in fills:
+            grouped_fills.setdefault((fill["account_ref"], fill["order_id"]), []).append(fill)
+        if group_keys != set(grouped_fills):
+            raise ValueError("order groups must cover every trade fill exactly once")
+        for group in groups:
+            key = (group["account_ref"], group["order_id"])
+            related = sorted(
+                grouped_fills[key], key=lambda item: (item["executed_at"], item["deal_id"])
+            )
+            quantity = sum((Decimal(item["quantity"]) for item in related), Decimal(0))
+            notional = sum(
+                (Decimal(item["quantity"]) * Decimal(item["price"]) for item in related),
+                Decimal(0),
+            )
+            if (
+                group["group_ref"] != f"{group['account_ref']}/{group['order_id']}"
+                or group["identity"] != related[0]["identity"]
+                or group["side"] != related[0]["side"]
+                or Decimal(group["quantity"]) != quantity
+                or Decimal(group["average_price"]) != notional / quantity
+                or group["fill_count"] != len(related)
+                or group["effective_at"] != related[0]["executed_at"]
+                or group["first_fill_at"] != related[0]["executed_at"]
+                or group["last_fill_at"] != related[-1]["executed_at"]
+            ):
+                raise ValueError("order-group normalization does not reconcile")
         order_keys = {(item["account_ref"], item["order_id"]) for item in orders}
         fill_order_keys = {(item["account_ref"], item["order_id"]) for item in fills}
         if metrics["order_count"] != len(order_keys | fill_order_keys):
@@ -496,9 +574,24 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             if fill_quantity != dealt:
                 quantity_mismatch += 1
             if (
-                (order["status"] == "FILLED_ALL" and fill_quantity != quantity)
-                or (order["status"] == "FILLED_PART" and not Decimal(0) < fill_quantity < quantity)
-                or (order["status"] == "CANCELLED_ALL" and fill_quantity)
+                (order["status"] == "FILLED_ALL" and not dealt == fill_quantity == quantity)
+                or (
+                    order["status"] in {"FILLED_PART", "CANCELLED_PART"}
+                    and not Decimal(0) < dealt == fill_quantity < quantity
+                )
+                or (
+                    order["status"]
+                    in {
+                        "WAITING_SUBMIT",
+                        "SUBMITTING",
+                        "SUBMITTED",
+                        "CANCELLED_ALL",
+                        "FAILED",
+                        "DISABLED",
+                        "DELETED",
+                    }
+                    and (dealt != 0 or fill_quantity != 0)
+                )
                 or any(
                     item["identity"] != order["identity"] or item["side"] != order["side"]
                     for item in related
@@ -527,9 +620,9 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         observed_win_rate = None if metrics["win_rate"] is None else Decimal(metrics["win_rate"])
         if observed_win_rate != expected_win_rate:
             raise ValueError("win rate does not match closed FIFO trips")
-        fill_count = metrics["fill_count"]
+        trade_count = metrics["trade_count"]
         expected_reversal_rate = (
-            None if not fill_count else Decimal(metrics["same_day_reversals"]) / fill_count
+            None if not trade_count else Decimal(metrics["same_day_reversals"]) / trade_count
         )
         observed_reversal_rate = (
             None
@@ -549,7 +642,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             raise ValueError("open-window rate must be unavailable without policy evidence")
         if open_configured:
             expected_rate = (
-                None if not fill_count else Decimal(metrics["open_window_trades"]) / fill_count
+                None if not trade_count else Decimal(metrics["open_window_trades"]) / trade_count
             )
             observed_rate = (
                 None
@@ -596,6 +689,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             if (
                 payload["base_currency"] is None
                 or coverage["source_snapshot_id"] is None
+                or payload["source_snapshot_as_of"] is None
                 or any(
                     fill["currency"] == "UNKNOWN" or fill["fx_to_base"] is None for fill in fills
                 )
@@ -699,7 +793,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         )
         if payload["policy_status"] != expected_policy:
             raise ValueError("policy status does not match checks")
-        events_by_id = {item["deal_id"]: item for item in fills}
+        events_by_id = {item["group_ref"]: item for item in groups}
         for finding in payload["behavior_findings"]:
             affected = [events_by_id.get(event_id) for event_id in finding["affected_events"]]
             if not finding["verified"] or any(item is None for item in affected):
@@ -708,7 +802,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             if finding["affected_symbols"] != expected_symbols:
                 raise ValueError("behavior finding symbols do not match its events")
             instants = sorted(
-                datetime.fromisoformat(item["executed_at"].replace("Z", "+00:00"))
+                datetime.fromisoformat(item["effective_at"].replace("Z", "+00:00"))
                 for item in affected
             )
             if (

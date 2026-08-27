@@ -1,6 +1,7 @@
 # Trade review contract
 
-The authoritative report contract is version `1.1`; pre-currency-bucket `1.0` reports are rejected.
+The authoritative report contract is version `1.2`; earlier reports without OrderGroup behavior,
+acquisition time, and complete masked context coverage are rejected.
 
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
 must not end in the future, and is capped at 90 days. At most 20 securities account contexts and 40
@@ -35,6 +36,19 @@ computed only when one immutable source snapshot supplies base currency, NAV, se
 and FX for every analyzed fill. Otherwise those base aggregates are `null`, turnover maps are empty,
 and monetary coverage is `PARTIAL`; currencies are never added together directly.
 
+An `OrderGroup` is the behavior/frequency trade unit: masked account plus order ID, one canonical
+identity and side, summed fill quantity, quantity-weighted fill price, fill count, first/last fill
+times, and `effective_at` equal to the first fill. Reversal, reentry, open-window, repeated-symbol,
+add-to-position, and maximum-trades-per-day logic uses these groups, so partial fills within one
+order never trigger behavior against each other. FIFO lots and monetary P&L continue to use exact
+fills. Rates use `trade_count` (order groups), while `fill_count` remains separately reported.
+
+Status reconciliation is a strict matrix. `FILLED_ALL` requires dealt/fill quantity equal order
+quantity. `FILLED_PART` and `CANCELLED_PART` require `0 < dealt == fills < quantity`.
+`WAITING_SUBMIT`, `SUBMITTING`, `SUBMITTED`, `CANCELLED_ALL`, `FAILED`, `DISABLED`, and `DELETED`
+require zero dealt quantity and no fills. Unknown statuses fail closed; every mismatch is partial
+quality evidence.
+
 `trade-policy.yaml` uses this strict shape:
 
 ```yaml
@@ -61,7 +75,7 @@ session observation, repeat, and add-to-position patterns are reported even with
 changes only breach/severity. Interpretations are separate and explicitly unverified; reports never
 claim fear, revenge, conviction, or any other motive. Without a configured cooldown or open-window
 rule, the corresponding policy metric count and rate are `null`, not zero.
-Same-day reversal and configured open-window rates use total fill count as their denominator.
+Same-day reversal and configured open-window rates use total OrderGroup trade count as denominator.
 Cost-proximity evidence means an evidenced FIFO exit within 1% of its matched entry price; this is
 an observable fixed diagnostic definition, not a claim about intent. Add `--latest` or
 `--snapshot PATH` to provide explicit single-snapshot NAV evidence for turnover. Without it,
@@ -69,5 +83,10 @@ turnover is unavailable; with it, the report remains partial because period-aver
 
 No-save is the default. `--output DIR` writes the four immutable artifacts as one transaction:
 `normalized_trades.json`, `trade_metrics.json`, `trade_review.json`, and escaped
-`trade_review.md`. JSON, Markdown, and terminal output include as-of, range, account/context
-coverage, currency/quality, and pinned read-command provenance.
+`trade_review.md`. Report `as_of` is the UTC acquisition timestamp captured after the history reads
+through an injectable clock; it is never the requested period end or snapshot timestamp. The
+optional `source_snapshot_as_of` is separate. JSON, Markdown, and terminal output include requested,
+successful, failed, and budget-omitted masked contexts (including successful empty contexts), range,
+currency/quality, and pinned read-command provenance. Raw account IDs never enter coverage.
+A context is successful only after both order and deal bodies normalize; a failed second body cannot
+leave the first body's rows in report evidence.
