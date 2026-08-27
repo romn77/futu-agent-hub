@@ -230,7 +230,8 @@ def test_ambiguous_nontrade_events_are_excluded_and_upstream_evidence_gap_is_exp
         orders=[], deals=[], start=date(2026, 8, 1), end=date(2026, 8, 27)
     )
     assert unsupported.coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE"
-    assert unsupported.data_quality_status == "PARTIAL"
+    assert unsupported.data_quality_status == "UNAVAILABLE"
+    assert all(value is None for value in vars(unsupported.metrics).values())
 
 
 def test_global_trade_and_rebalance_contracts_are_self_contained_and_reject_old_shapes():

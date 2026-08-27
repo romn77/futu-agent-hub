@@ -519,7 +519,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             raise ValueError("normalized identity and canonical market do not agree")
         if not evidenced_contexts <= successful_contexts:
             raise ValueError("normalized rows must come from successful contexts")
-        source_unavailable = coverage["contexts_requested"] > 0 and not successful_contexts
+        source_unavailable = not successful_contexts
         if source_unavailable:
             if (
                 any(value is not None for value in metrics.values())

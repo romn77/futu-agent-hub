@@ -105,6 +105,35 @@ class EmptyFixtureAdapter(FixtureAdapter):
         return {"orders": []} if name == "get_history_orders" else {"deals": []}
 
 
+class NoEligibleAccountAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        if name == "get_accounts":
+            self.calls.append((name, tuple(arguments), timeout))
+            return {"accounts": []}
+        raise AssertionError("history reads must not run without an eligible account")
+
+
+def test_zero_requested_contexts_are_unavailable_and_cannot_claim_zero_activity():
+    review = FutuTradeHistoryService(
+        NoEligibleAccountAdapter(),
+        aliaser=AccountAliaser.ephemeral(),
+        clock=lambda: datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27), trd_env="REAL")
+
+    assert review.coverage["contexts_requested"] == 0
+    assert review.coverage["successful_contexts"] == []
+    assert review.data_quality_status == "UNAVAILABLE"
+    assert all(value is None for value in vars(review.metrics).values())
+    assert review.behavior_findings == ()
+    validate_trade_review_document(review.to_dict())
+
+    false_zero = deepcopy(review.to_dict())
+    false_zero["metrics"]["fill_count"] = 0
+    _rehash_trade_review(false_zero)
+    with pytest.raises(Exception):
+        validate_trade_review_document(false_zero)
+
+
 def test_service_clock_and_empty_successful_contexts_are_preserved_without_raw_ids():
     acquired = datetime(2026, 8, 27, 8, 9, 10, tzinfo=timezone.utc)
     adapter = EmptyFixtureAdapter()

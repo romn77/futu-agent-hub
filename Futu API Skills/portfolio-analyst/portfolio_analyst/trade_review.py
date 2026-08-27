@@ -824,13 +824,13 @@ def build_trade_review(
         raise TradeReviewInputError("portfolio NAV requires positive base-currency evidence")
     if corporate_action_evidence_status not in {"AVAILABLE", "UNSUPPORTED_EVIDENCE"}:
         raise TradeReviewInputError("corporate-action evidence status is invalid")
-    source_unavailable = bool(
-        coverage_context
-        and coverage_context.get("contexts_requested", 0) > 0
-        and coverage_context.get("contexts_read", 0) == 0
-    )
     normalized_all = tuple(_fill(raw, start, end) for raw in deals)
     normalized_orders = tuple(_order(raw, start, end) for raw in orders)
+    source_unavailable = (
+        not coverage_context.get("successful_contexts", ())
+        if coverage_context is not None
+        else not normalized_all and not normalized_orders
+    )
     deal_ids = [fill.deal_id for fill in normalized_all]
     if len(deal_ids) != len(set(deal_ids)):
         raise TradeReviewInputError("duplicate deal IDs are forbidden")

@@ -9,10 +9,11 @@ history requests are attempted, with 10-second call and 60-second wall budgets p
 circuit breaker.
 
 Coverage markets are canonical evidence keys. Source `HKCC` is recorded as canonical `HK`, matching
-normalized orders/fills; non-canonical coverage documents are rejected. If every requested context
-fails or is omitted by the budget, top-level quality is `UNAVAILABLE`, all observed activity metrics
-are JSON `null`, and Markdown/terminal output says `Unavailable`. A genuine zero is reported only
-when at least one context completed successfully, including a successful empty context.
+normalized orders/fills; non-canonical coverage documents are rejected. If no context completes
+successfully—including zero requested contexts because no eligible account exists—top-level quality
+is `UNAVAILABLE`, all observed activity metrics are JSON `null`, and Markdown/terminal output says
+`Unavailable`. A genuine zero is reported only when at least one context completed successfully,
+including a successful empty context.
 
 The two source scripts and their shared dependency are content pinned. Calls require exact account,
 market, REAL/SIMULATE environment, start/end, firm, SEC context, JSON, and (for orders) limit 200
