@@ -6,10 +6,12 @@ import hashlib
 import json
 import re
 import sys
+import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 from zoneinfo import ZoneInfo
 
 import jsonschema
@@ -18,6 +20,7 @@ from referencing import Registry, Resource
 from .models import _json_value
 from .normalization import canonical_unknown
 from .risk import _latest_complete_market_close_date
+from .trade_quality import canonical_quality_issues
 
 
 class ReportSemanticError(ValueError):
@@ -461,8 +464,48 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             )
 
 
-def validate_trade_review_document(payload: dict[str, Any]) -> None:
+def validate_trade_review_document(
+    payload: dict[str, Any],
+    *,
+    max_validation_operations: int = 3_000_000,
+    max_validation_seconds: float = 30.0,
+    validation_clock: Callable[[], float] = time.monotonic,
+) -> None:
+    if max_validation_operations <= 0 or max_validation_seconds <= 0:
+        raise ReportSemanticError("validation budgets must be positive")
+    validation_started = validation_clock()
+    remaining_operations = max_validation_operations
+
+    def validation_consume(operations: int = 1) -> None:
+        nonlocal remaining_operations
+        remaining_operations -= operations
+        if (
+            remaining_operations < 0
+            or validation_clock() - validation_started > max_validation_seconds
+        ):
+            raise ReportSemanticError("VALIDATION_BUDGET_EXCEEDED")
+
+    bounded_arrays = {
+        "normalized_orders": 20_000,
+        "normalized_fills": 20_000,
+        "order_groups": 20_000,
+        "round_trips": 40_000,
+        "open_lots": 20_000,
+        "behavior_findings": 20_000,
+    }
+    if any(
+        isinstance(payload.get(name), list) and len(payload[name]) > limit
+        for name, limit in bounded_arrays.items()
+    ) or (
+        isinstance(payload.get("normalized_orders"), list)
+        and isinstance(payload.get("normalized_fills"), list)
+        and len(payload["normalized_orders"]) + len(payload["normalized_fills"]) > 20_000
+    ):
+        raise ReportSemanticError("VALIDATION_ROW_LIMIT_EXCEEDED")
     _validate(payload, "trade_review.schema.json")
+    validation_consume(
+        sum(len(payload[name]) for name in bounded_arrays if isinstance(payload.get(name), list))
+    )
     try:
         identity_payload = dict(payload)
         observed_review_id = identity_payload.pop("review_id")
@@ -483,6 +526,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         fills = [item for item in payload["normalized_fills"] if item["event_type"] == "TRADE"]
         orders = payload["normalized_orders"]
         coverage = payload["coverage"]
+        validation_consume(len(fills) + len(orders) + len(groups) + len(trips))
         if payload["base_currency"] is not None and any(
             fill["currency"] == payload["base_currency"]
             and fill["fx_to_base"] is not None
@@ -573,7 +617,17 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         if len(observed_quality_codes) != len(set(observed_quality_codes)):
             raise ValueError("quality issue codes must be unique")
         if source_unavailable:
-            required_codes = {"SOURCE_UNAVAILABLE"}
+            required_codes = {"SOURCE_UNAVAILABLE", "SOURCE_HISTORY_ROW_CAP"}
+            policy = payload["policy"]
+            if policy is None or policy["reentry_cooldown_minutes"] is None:
+                required_codes.add("REENTRY_POLICY_UNCONFIGURED")
+            if policy is None or (
+                policy["market_open_no_trade_minutes"] is None
+                and not policy["market_open_no_trade_minutes_by_market"]
+            ):
+                required_codes.add("OPEN_WINDOW_POLICY_UNCONFIGURED")
+            if coverage["source_snapshot_id"] is not None:
+                required_codes.add("TURNOVER_SNAPSHOT_NAV")
             if failed_contexts:
                 required_codes.add("CONTEXT_FAILED")
             if omitted_contexts:
@@ -610,6 +664,9 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                     )
                 )
                 or set(observed_quality_codes) != required_codes
+                or payload["quality_issues"] != canonical_quality_issues(required_codes)
+                or payload["data_quality_notes"]
+                != [item["detail"] for item in canonical_quality_issues(required_codes)]
             ):
                 raise ValueError("totally unavailable source must not claim observed activity")
             if (
@@ -656,6 +713,9 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         if group_keys != set(grouped_fills):
             raise ValueError("order groups must cover every trade fill exactly once")
         for group in groups:
+            validation_consume(
+                len(grouped_fills.get((group["account_ref"], group["order_id"]), ())) + 1
+            )
             key = (group["account_ref"], group["order_id"])
             related = sorted(
                 grouped_fills[key], key=lambda item: (item["executed_at"], item["deal_id"])
@@ -677,12 +737,13 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 or group["last_fill_at"] != related[-1]["executed_at"]
             ):
                 raise ValueError("order-group normalization does not reconcile")
-        fifo_lots: dict[tuple[str, str], list[list[Any]]] = {}
+        fifo_lots: dict[tuple[str, str], deque[list[Any]]] = {}
         expected_trips: list[dict[str, Any]] = []
         unmatched_sells = 0
         for fill in sorted(fills, key=lambda item: (item["executed_at"], item["deal_id"])):
+            validation_consume()
             key = (fill["account_ref"], fill["identity"])
-            lots = fifo_lots.setdefault(key, [])
+            lots = fifo_lots.setdefault(key, deque())
             quantity = Decimal(fill["quantity"])
             price = Decimal(fill["price"])
             if fill["side"] == "BUY":
@@ -690,6 +751,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 continue
             remaining = quantity
             while remaining and lots:
+                validation_consume()
                 lot = lots[0]
                 matched = min(remaining, lot[0])
                 if lot[3] != fill["currency"]:
@@ -718,7 +780,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 lot[0] -= matched
                 remaining -= matched
                 if lot[0] == 0:
-                    lots.pop(0)
+                    lots.popleft()
             if remaining:
                 unmatched_sells += 1
         expected_open_lots = [
@@ -838,6 +900,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         groups_by_security: dict[tuple[str, str], list[dict[str, Any]]] = {}
         activity: dict[tuple[str, str, str], int] = {}
         for group in chronological_groups:
+            validation_consume()
             groups_by_security.setdefault((group["account_ref"], group["identity"]), []).append(
                 group
             )
@@ -860,6 +923,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         add_loser_refs: list[str] = []
         inventory_cost: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
         for group in chronological_groups:
+            validation_consume()
             key = (group["account_ref"], group["identity"])
             quantity, cost = inventory_cost.get(key, (Decimal(0), Decimal(0)))
             group_quantity = Decimal(group["quantity"])
@@ -1322,7 +1386,16 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             or (coverage["monetary_base_coverage"] == "PARTIAL" and fills)
             or (coverage["realized_pl_base_coverage"] == "PARTIAL" and trips)
         )
-        required_codes: set[str] = set()
+        required_codes: set[str] = {"SOURCE_HISTORY_ROW_CAP"}
+        if policy is None or policy["reentry_cooldown_minutes"] is None:
+            required_codes.add("REENTRY_POLICY_UNCONFIGURED")
+        if policy is None or (
+            policy["market_open_no_trade_minutes"] is None
+            and not policy["market_open_no_trade_minutes_by_market"]
+        ):
+            required_codes.add("OPEN_WINDOW_POLICY_UNCONFIGURED")
+        if coverage["source_snapshot_id"] is not None:
+            required_codes.add("TURNOVER_SNAPSHOT_NAV")
         if failed_contexts:
             required_codes.add("CONTEXT_FAILED")
         if omitted_contexts:
@@ -1351,6 +1424,12 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             required_codes.add("FEES_UNAVAILABLE")
         if set(observed_quality_codes) != required_codes:
             raise ValueError("structured quality issue codes do not match evidenced limitations")
+        if payload["quality_issues"] != canonical_quality_issues(required_codes):
+            raise ValueError("structured quality issue details are not canonical")
+        if payload["data_quality_notes"] != [
+            item["detail"] for item in canonical_quality_issues(required_codes)
+        ]:
+            raise ValueError("data quality notes are not canonical")
         if required_partial and not payload["data_quality_notes"]:
             raise ValueError("required source-quality limitations are missing")
         expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
@@ -1367,7 +1446,11 @@ def validate_rebalance_request_document(payload: dict[str, Any]) -> None:
 def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
     _validate(payload, "rebalance_result.schema.json")
     try:
-        validate_snapshot_document(payload["source_snapshot"])
+        # Local import avoids the snapshot_io -> schema module cycle while still
+        # applying the complete Phase 1 schema, identity, and financial semantics.
+        from .snapshot_io import snapshot_from_document
+
+        embedded_snapshot = snapshot_from_document(payload["source_snapshot"])
         snapshot_identity_body = dict(payload["source_snapshot"])
         observed_snapshot_id = snapshot_identity_body.pop("snapshot_id")
         snapshot_digest = hashlib.sha256(
@@ -1420,9 +1503,25 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 raise ValueError("non-finite decimal")
             return value
 
+        reconciliation_tolerance = Decimal("1e-24")
+
+        def reconciles(actual: Decimal, expected: Decimal) -> bool:
+            return (
+                abs(actual - expected) <= max(Decimal(1), abs(expected)) * reconciliation_tolerance
+            )
+
+        def decimal_maps_reconcile(
+            actual: dict[str, Decimal], expected: dict[str, Decimal]
+        ) -> bool:
+            return set(actual) == set(expected) and all(
+                reconciles(actual[key], expected[key]) for key in expected
+            )
+
         def validate_state(state: dict[str, Any]) -> None:
             nav = decimal(state["nav_base"])
-            if nav <= 0 or decimal(state["cash_weight"]) != decimal(state["cash_base"]) / nav:
+            if nav <= 0 or not reconciles(
+                decimal(state["cash_weight"]), decimal(state["cash_base"]) / nav
+            ):
                 raise ValueError("cash weight does not reconcile")
             values = {
                 identity: decimal(item["market_value_base"])
@@ -1431,7 +1530,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             if sum(values.values(), Decimal(0)) + decimal(state["cash_base"]) != nav:
                 raise ValueError("cash plus positions must equal NAV")
             for identity, item in state["positions"].items():
-                if decimal(item["weight"]) != values[identity] / nav:
+                if not reconciles(decimal(item["weight"]), values[identity] / nav):
                     raise ValueError("position weight does not reconcile")
             long_value = sum((max(value, Decimal(0)) for value in values.values()), Decimal(0))
             short_value = sum((max(-value, Decimal(0)) for value in values.values()), Decimal(0))
@@ -1445,7 +1544,10 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 "gross_weight": (long_value + short_value) / nav,
                 "net_weight": (long_value - short_value) / nav,
             }
-            if any(decimal(state[name]) != value for name, value in expected_monetary.items()):
+            if any(
+                not reconciles(decimal(state[name]), value)
+                for name, value in expected_monetary.items()
+            ):
                 raise ValueError("long/short/gross/net state values do not reconcile")
             for dimension in ("sector", "region", "theme_full", "theme_split"):
                 labels = set().union(
@@ -1469,9 +1571,11 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                     if (
                         long_weight < 0
                         or short_weight < 0
-                        or gross_weight != long_weight + short_weight
-                        or net_weight != long_weight - short_weight
-                        or decimal(state["exposures"][dimension].get(label, "0")) != net_weight
+                        or not reconciles(gross_weight, long_weight + short_weight)
+                        or not reconciles(net_weight, long_weight - short_weight)
+                        or not reconciles(
+                            decimal(state["exposures"][dimension].get(label, "0")), net_weight
+                        )
                     ):
                         raise ValueError("signed exposure views do not reconcile")
                 if dimension != "theme_full":
@@ -1482,14 +1586,16 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                         "net": expected_monetary["net_weight"],
                     }
                     if any(
-                        sum(
-                            (
-                                decimal(value)
-                                for value in state["exposure_views"][view][dimension].values()
+                        not reconciles(
+                            sum(
+                                (
+                                    decimal(value)
+                                    for value in state["exposure_views"][view][dimension].values()
+                                ),
+                                Decimal(0),
                             ),
-                            Decimal(0),
+                            total,
                         )
-                        != total
                         for view, total in expected_totals.items()
                     ):
                         raise ValueError("additive signed exposure totals do not reconcile")
@@ -1508,7 +1614,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                     "hhi": sum((weight * weight for weight in weights), Decimal(0)),
                 }
                 if state["concentration_status"] != "AVAILABLE" or any(
-                    decimal(state["concentration"][name]) != value
+                    not reconciles(decimal(state["concentration"][name]), value)
                     for name, value in expected.items()
                 ):
                     raise ValueError("long-only concentration does not reconcile")
@@ -1622,6 +1728,24 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 )
             if evidence["unit_price_local"] != reference["last_price_local"]:
                 raise ValueError("unit price evidence differs from embedded source snapshot")
+        embedded_values = {
+            identity: sum(
+                (decimal(position["market_value_base"]) for position in positions), Decimal(0)
+            )
+            for identity, positions in snapshot_positions.items()
+        }
+        embedded_quantities = {
+            identity: sum((decimal(position["quantity"]) for position in positions), Decimal(0))
+            for identity, positions in snapshot_positions.items()
+        }
+        if (
+            not reconciles(decimal(before["nav_base"]), embedded_snapshot.nav_base)
+            or not reconciles(decimal(before["cash_base"]), embedded_snapshot.cash_base)
+            or not reconciles(decimal(before["cash_weight"]), embedded_snapshot.cash_weight)
+            or not decimal_maps_reconcile(before_values, embedded_values)
+            or not decimal_maps_reconcile(before_quantities, embedded_quantities)
+        ):
+            raise ValueError("before state does not match the full embedded source snapshot")
 
         def expected_exposure_views(
             state: dict[str, Any],
@@ -1672,7 +1796,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                         label: decimal(value)
                         for label, value in state["exposure_views"][view][dimension].items()
                     }
-                    if observed != rebuilt[view][dimension]:
+                    if not decimal_maps_reconcile(observed, rebuilt[view][dimension]):
                         raise ValueError("classification exposure evidence does not rebuild state")
         deltas: dict[str, Decimal] = {}
         quantity_deltas: dict[str, Decimal] = {}
@@ -1690,7 +1814,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             if (
                 decimal(change["unit_price_local"]) != unit_price
                 or decimal(change["fx_to_base"]) != fx
-                or quantity_deltas[symbol] * unit_price * fx != deltas[symbol]
+                or not reconciles(quantity_deltas[symbol] * unit_price * fx, deltas[symbol])
             ):
                 raise ValueError("change amount/quantity formula does not reconcile")
             allocations = change["leg_allocations"]
@@ -1699,11 +1823,12 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 item["account_ref"] for item in legs
             ]:
                 raise ValueError("operation leg allocation is not deterministic")
-            if (
-                sum((decimal(item["amount_delta_base"]) for item in allocations), Decimal(0))
-                != deltas[symbol]
-                or sum((decimal(item["quantity_delta"]) for item in allocations), Decimal(0))
-                != quantity_deltas[symbol]
+            if not reconciles(
+                sum((decimal(item["amount_delta_base"]) for item in allocations), Decimal(0)),
+                deltas[symbol],
+            ) or not reconciles(
+                sum((decimal(item["quantity_delta"]) for item in allocations), Decimal(0)),
+                quantity_deltas[symbol],
             ):
                 raise ValueError("operation leg allocations do not reconcile")
             basis = sum((abs(decimal(item["market_value_base"])) for item in legs), Decimal(0))
@@ -1713,9 +1838,10 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                     if basis
                     else Decimal(1) / len(legs)
                 )
-                if (
-                    decimal(allocation["amount_delta_base"]) != deltas[symbol] * weight
-                    or decimal(allocation["quantity_delta"]) != quantity_deltas[symbol] * weight
+                if not reconciles(
+                    decimal(allocation["amount_delta_base"]), deltas[symbol] * weight
+                ) or not reconciles(
+                    decimal(allocation["quantity_delta"]), quantity_deltas[symbol] * weight
                 ):
                     raise ValueError("operation leg allocation weights are not authoritative")
         request = payload["request"]
@@ -1751,16 +1877,18 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 if change["operation"] == "AMOUNT_DELTA"
                 else value * decimal(change["unit_price_local"]) * decimal(change["fx_to_base"])
             )
-            if deltas[change["symbol"]] != expected_delta:
+            if not reconciles(deltas[change["symbol"]], expected_delta):
                 raise ValueError("operation-specific amount formula does not reconcile")
         for symbol in set(before_values) | set(after_values):
             if after_values.get(symbol, Decimal(0)) - before_values.get(
                 symbol, Decimal(0)
             ) != deltas.get(symbol, Decimal(0)):
                 raise ValueError("position deltas do not reconcile")
-            if after_quantities.get(symbol, Decimal(0)) - before_quantities.get(
-                symbol, Decimal(0)
-            ) != quantity_deltas.get(symbol, Decimal(0)):
+            if not reconciles(
+                after_quantities.get(symbol, Decimal(0))
+                - before_quantities.get(symbol, Decimal(0)),
+                quantity_deltas.get(symbol, Decimal(0)),
+            ):
                 raise ValueError("quantity deltas do not reconcile")
         nav_delta = decimal(after["nav_base"]) - decimal(before["nav_base"])
         constraints = payload["constraints"]
@@ -1793,10 +1921,11 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 expected_change = decimal(after["concentration"][name]) - decimal(
                     before["concentration"][name]
                 )
-                if decimal(payload["risk_changes"][name]) != expected_change:
+                if not reconciles(decimal(payload["risk_changes"][name]), expected_change):
                     raise ValueError("risk delta does not reconcile")
-                if decimal(payload["risk_changes"]["concentration"][name]) != decimal(
-                    after["concentration"][name]
+                if not reconciles(
+                    decimal(payload["risk_changes"]["concentration"][name]),
+                    decimal(after["concentration"][name]),
                 ):
                     raise ValueError("after concentration evidence does not reconcile")
         for dimension in ("sector", "region", "theme_full", "theme_split"):
@@ -1809,7 +1938,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             observed_deltas = {
                 label: decimal(value) for label, value in payload["risk_changes"][dimension].items()
             }
-            if observed_deltas != expected_deltas:
+            if not decimal_maps_reconcile(observed_deltas, expected_deltas):
                 raise ValueError(f"{dimension} exposure deltas do not reconcile")
         for view in ("long", "short", "gross", "net"):
             for dimension in ("sector", "region", "theme_full", "theme_split"):
@@ -1827,7 +1956,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                         dimension
                     ].items()
                 }
-                if observed_deltas != expected_deltas:
+                if not decimal_maps_reconcile(observed_deltas, expected_deltas):
                     raise ValueError("signed exposure-view risk deltas do not reconcile")
         violations = (
             (decimal(after["cash_base"]) < 0 and not constraints["allow_margin"])

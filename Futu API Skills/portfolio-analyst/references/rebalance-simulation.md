@@ -21,6 +21,10 @@ requesting history. The original snapshot and request are frozen and never mutat
 validation rechecks operation formulas, cash plus positions equals NAV, state weights, additive
 exposures, concentration, cash/NAV/change deltas, risk deltas, constraint feasibility, quality
 status, and a simulation identity bound to the complete result body.
+It first runs the complete Phase 1 snapshot schema, content identity, alias, FX, cash/NAV, weights,
+exposure, and quality semantics over the embedded source, then requires `before` cash, NAV,
+quantities, and market values to match it. Decimal ratios, weights, and signed exposure maps use one
+documented relative reconciliation tolerance of `1e-24`; monetary NAV identities remain exact.
 Every result is self-contained: `as_of`, `base_currency`, currency-qualified monetary fields,
 source/change/price/FX coverage, warnings, and data-quality notes travel with the hypothetical state.
 Risk-change status is `STRUCTURAL_ONLY` because no historical price request occurs. With explicit

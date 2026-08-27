@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -18,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from .models import _json_value
 from .rendering import markdown_text, terminal_text
+from .trade_quality import canonical_quality_issues
 
 
 class TradeReviewInputError(ValueError):
@@ -26,6 +28,28 @@ class TradeReviewInputError(ValueError):
 
 class TradePolicyConfigError(ValueError):
     """Private trade policy is unsafe or violates its strict schema."""
+
+
+MAX_ANALYSIS_ROWS = 20_000
+MAX_ANALYSIS_GROUPS = 20_000
+MAX_ANALYSIS_TRIPS = 40_000
+
+
+class AnalysisBudget:
+    """Cumulative operation and wall-clock guard shared across analysis phases."""
+
+    def __init__(self, max_operations: int, max_seconds: float, clock: Callable[[], float]):
+        if max_operations <= 0 or max_seconds <= 0:
+            raise TradeReviewInputError("analysis budgets must be positive")
+        self.remaining = max_operations
+        self.max_seconds = max_seconds
+        self.clock = clock
+        self.started = clock()
+
+    def consume(self, operations: int = 1) -> None:
+        self.remaining -= operations
+        if self.remaining < 0 or self.clock() - self.started > self.max_seconds:
+            raise TradeReviewInputError("ANALYSIS_BUDGET_EXCEEDED")
 
 
 @dataclass(frozen=True)
@@ -766,12 +790,18 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
     )
 
 
-def _group_orders(fills: Sequence[NormalizedFill]) -> tuple[OrderGroup, ...]:
+def _group_orders(
+    fills: Sequence[NormalizedFill], budget: AnalysisBudget | None = None
+) -> tuple[OrderGroup, ...]:
     groups: dict[tuple[str, str], list[NormalizedFill]] = {}
     for fill in fills:
+        if budget:
+            budget.consume()
         groups.setdefault((fill.account_ref, fill.order_id), []).append(fill)
     result = []
     for key in sorted(groups):
+        if budget:
+            budget.consume(len(groups[key]) + 1)
         items = sorted(groups[key], key=lambda x: (x.executed_at, x.deal_id))
         identity_side = {(x.identity, x.side) for x in items}
         if len(identity_side) != 1:
@@ -797,14 +827,18 @@ def _group_orders(fills: Sequence[NormalizedFill]) -> tuple[OrderGroup, ...]:
 
 
 def _fifo(
-    fills: Sequence[NormalizedFill], base_currency: str | None
+    fills: Sequence[NormalizedFill],
+    base_currency: str | None,
+    budget: AnalysisBudget | None = None,
 ) -> tuple[tuple[RoundTrip, ...], tuple[OpenLot, ...], int]:
-    inventories: dict[tuple[str, str], list[list[Any]]] = {}
+    inventories: dict[tuple[str, str], deque[list[Any]]] = {}
     trips: list[RoundTrip] = []
     unmatched_sells = 0
     for fill in sorted(fills, key=lambda x: (x.executed_at, x.deal_id)):
+        if budget:
+            budget.consume()
         key = (fill.account_ref, fill.identity)
-        lots = inventories.setdefault(key, [])
+        lots = inventories.setdefault(key, deque())
         if fill.side == "BUY":
             lots.append(
                 [fill.quantity, fill.price, fill.executed_at, fill.currency, fill.fx_to_base]
@@ -812,6 +846,8 @@ def _fifo(
             continue
         remaining = fill.quantity
         while remaining and lots:
+            if budget:
+                budget.consume()
             lot = lots[0]
             matched = min(remaining, lot[0])
             seconds = Decimal(str((fill.executed_at - lot[2]).total_seconds()))
@@ -839,7 +875,7 @@ def _fifo(
             lot[0] -= matched
             remaining -= matched
             if lot[0] == 0:
-                lots.pop(0)
+                lots.popleft()
         if remaining:
             unmatched_sells += 1
     open_lots = tuple(
@@ -911,18 +947,10 @@ def build_trade_review(
     max_analysis_seconds: float = 10.0,
     analysis_clock: Callable[[], float] = time.monotonic,
 ) -> TradeReview:
-    if max_analysis_operations <= 0 or max_analysis_seconds <= 0:
-        raise TradeReviewInputError("analysis budgets must be positive")
-    analysis_started = analysis_clock()
-
-    def check_budget(operations: int) -> None:
-        if (
-            operations > max_analysis_operations
-            or analysis_clock() - analysis_started > max_analysis_seconds
-        ):
-            raise TradeReviewInputError("ANALYSIS_BUDGET_EXCEEDED")
-
-    check_budget(len(orders) + len(deals))
+    if len(orders) + len(deals) > MAX_ANALYSIS_ROWS:
+        raise TradeReviewInputError("ANALYSIS_ROW_LIMIT_EXCEEDED")
+    budget = AnalysisBudget(max_analysis_operations, max_analysis_seconds, analysis_clock)
+    budget.consume(len(orders) + len(deals))
     if start > end:
         raise TradeReviewInputError("review start must not follow end")
     acquisition = acquired_at or datetime.now(timezone.utc)
@@ -943,19 +971,24 @@ def build_trade_review(
         raise TradeReviewInputError("portfolio NAV requires positive base-currency evidence")
     if corporate_action_evidence_status not in {"AVAILABLE", "UNSUPPORTED_EVIDENCE"}:
         raise TradeReviewInputError("corporate-action evidence status is invalid")
+    normalized_fill_rows = []
+    for raw in deals:
+        budget.consume()
+        normalized_fill_rows.append(_fill(raw, start, end))
     normalized_all = tuple(
         sorted(
-            (_fill(raw, start, end) for raw in deals),
+            normalized_fill_rows,
             key=lambda item: (item.account_ref, item.order_id, item.executed_at, item.deal_id),
         )
     )
+    normalized_order_rows = []
+    for raw in orders:
+        budget.consume()
+        normalized_order_rows.append(_order(raw, start, end))
     normalized_orders = tuple(
-        sorted(
-            (_order(raw, start, end) for raw in orders),
-            key=lambda item: (item.account_ref, item.order_id),
-        )
+        sorted(normalized_order_rows, key=lambda item: (item.account_ref, item.order_id))
     )
-    check_budget(3 * (len(normalized_orders) + len(normalized_all)))
+    budget.consume(len(normalized_orders) + len(normalized_all))
     if base_currency is not None and any(
         fill.currency == base_currency
         and fill.fx_to_base is not None
@@ -993,8 +1026,10 @@ def build_trade_review(
         raise TradeReviewInputError("duplicate account/order identities are forbidden")
     excluded_events = tuple(fill for fill in normalized_all if fill.event_type != "TRADE")
     normalized = tuple(fill for fill in normalized_all if fill.event_type == "TRADE")
-    groups = _group_orders(normalized)
-    trips, open_lots, unmatched_sells = _fifo(normalized, base_currency)
+    groups = _group_orders(normalized, budget)
+    trips, open_lots, unmatched_sells = _fifo(normalized, base_currency, budget)
+    if len(groups) > MAX_ANALYSIS_GROUPS or len(trips) > MAX_ANALYSIS_TRIPS:
+        raise TradeReviewInputError("ANALYSIS_DERIVED_ROW_LIMIT_EXCEEDED")
 
     orders_by_key = {(item.account_ref, item.order_id): item for item in normalized_orders}
     fills_by_key: dict[tuple[str, str], list[NormalizedFill]] = {}
@@ -1006,6 +1041,7 @@ def build_trade_review(
     order_fill_qty_mismatches = 0
     order_status_conflicts = 0
     for key, order in orders_by_key.items():
+        budget.consume(len(fills_by_key.get(key, ())) + 1)
         fill_qty = sum((item.quantity for item in fills_by_key.get(key, [])), Decimal(0))
         if fill_qty == 0 and order.dealt_quantity > 0:
             orders_missing_fills += 1
@@ -1042,12 +1078,14 @@ def build_trade_review(
 
     currency_buckets: dict[str, dict[str, Decimal]] = {}
     for fill in normalized:
+        budget.consume()
         if fill.currency == "UNKNOWN":
             continue
         bucket = currency_buckets.setdefault(fill.currency, {"buy": Decimal(0), "sell": Decimal(0)})
         bucket[fill.side.lower()] += fill.quantity * fill.price
     realized_by_currency: dict[str, Decimal] = {}
     for trip in trips:
+        budget.consume()
         if trip.currency != "UNKNOWN":
             realized_by_currency[trip.currency] = (
                 realized_by_currency.get(trip.currency, Decimal(0)) + trip.realized_pl_local
@@ -1115,6 +1153,7 @@ def build_trade_review(
     chronological_groups = sorted(groups, key=lambda x: (x.effective_at, x.group_ref))
     by_security: dict[tuple[str, str], list[OrderGroup]] = {}
     for group in chronological_groups:
+        budget.consume()
         by_security.setdefault((group.account_ref, group.identity), []).append(group)
     adjacent = [pair for items in by_security.values() for pair in zip(items, items[1:])]
     reversals = sum(
@@ -1155,6 +1194,7 @@ def build_trade_review(
                 open_events.append(group)
     observed_open_events: list[OrderGroup] = []
     for group in groups:
+        budget.consume()
         market = group.identity.split(".", 1)[0]
         _, hour, minute = _MARKET_TIME[market]
         start_minute = hour * 60 + minute
@@ -1173,6 +1213,7 @@ def build_trade_review(
     inventory_cost: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
     round_trip_groups_day: dict[tuple[str, str, date], int] = {}
     for group in chronological_groups:
+        budget.consume()
         key = (group.account_ref, group.identity)
         quantity, cost = inventory_cost.get(key, (Decimal(0), Decimal(0)))
         if group.side == "BUY":
@@ -1418,7 +1459,7 @@ def build_trade_review(
     for repeated_key in sorted(repeated_keys):
         key_events = repeated_events[repeated_key]
         add_behavior("REPEATED_SYMBOL_ACTIVITY", 1, key_events, "max_trades_per_day")
-    check_budget(20 * (len(normalized_orders) + len(normalized_all) + len(groups) + len(trips)))
+    budget.consume(len(normalized_orders) + len(normalized_all) + len(groups) + len(trips))
     add_behavior("ADD_TO_WINNER", add_winner, add_winner_events)
     add_behavior("ADD_TO_LOSER", add_loser, add_loser_events, "flag_add_to_loser")
     if source_unavailable:
@@ -1522,9 +1563,15 @@ def build_trade_review(
         )
     if source_unavailable:
         quality_issue_details["SOURCE_UNAVAILABLE"] = "no requested context completed successfully"
-    quality_issues = tuple(
-        {"code": code, "detail": detail} for code, detail in sorted(quality_issue_details.items())
-    )
+    quality_issue_details["SOURCE_HISTORY_ROW_CAP"] = ""
+    if cooldown is None:
+        quality_issue_details["REENTRY_POLICY_UNCONFIGURED"] = ""
+    if open_count is None:
+        quality_issue_details["OPEN_WINDOW_POLICY_UNCONFIGURED"] = ""
+    if source_snapshot_id is not None:
+        quality_issue_details["TURNOVER_SNAPSHOT_NAV"] = ""
+    quality_issues = tuple(canonical_quality_issues(quality_issue_details))
+    notes = tuple(item["detail"] for item in quality_issues)
     identity_body = json.dumps(
         _json_value(
             {

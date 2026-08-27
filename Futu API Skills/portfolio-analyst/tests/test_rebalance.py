@@ -11,9 +11,8 @@ from portfolio_analyst.rebalance import (
     RebalanceRequest,
     simulate_rebalance,
 )
-from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.schema import validate_rebalance_result_document
-from test_risk_analysis import snapshot
+from test_risk_analysis import reconciled_snapshot, snapshot
 
 
 def test_target_amount_share_and_new_cash_are_deterministic_without_mutating_snapshot():
@@ -46,6 +45,7 @@ def test_target_amount_share_and_new_cash_are_deterministic_without_mutating_sna
     assert "quantity" in first.after.positions["US.AAA"]
     assert first.before.snapshot_id == source.snapshot_id
     assert first.risk_changes["top_1"] != Decimal("0")
+    validate_rebalance_result_document(first.to_dict())
     with pytest.raises(TypeError):
         first.request["changes"][0]["value"] = Decimal("999")
     with pytest.raises(TypeError):
@@ -104,12 +104,7 @@ def test_signed_source_requires_explicit_short_authority_and_preserves_warning()
         market_value_base=Decimal("-400"),
         weight=Decimal("-2"),
     )
-    signed_source = replace(
-        source,
-        positions=(signed_position, *source.positions[1:]),
-        nav_base=Decimal("200"),
-    )
-    signed_source = replace(signed_source, snapshot_id=snapshot_identity(signed_source))
+    signed_source = reconciled_snapshot(source, (signed_position, *source.positions[1:]))
     request = RebalanceRequest(signed_source.snapshot_id, signed_source.base_currency)
 
     with pytest.raises(RebalanceError, match="short"):
@@ -161,13 +156,11 @@ def test_same_direction_cross_account_change_has_deterministic_leg_allocation():
         market_value_base=Decimal("200"),
         weight=Decimal("0.1666666666666666666666666667"),
     )
-    multi_account = replace(
+    multi_account = reconciled_snapshot(
         source,
+        (source.positions[0], second_leg, *source.positions[1:]),
         accounts=(*source.accounts, replace(source.accounts[0], account_ref="acct-second")),
-        positions=(source.positions[0], second_leg, *source.positions[1:]),
-        nav_base=Decimal("1200"),
     )
-    multi_account = replace(multi_account, snapshot_id=snapshot_identity(multi_account))
     result = simulate_rebalance(
         multi_account,
         RebalanceRequest(

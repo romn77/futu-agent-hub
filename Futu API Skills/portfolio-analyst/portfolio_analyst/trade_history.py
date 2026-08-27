@@ -37,7 +37,8 @@ class HistoryBudgetLimit(TradeReviewInputError):
 class FutuTradeHistoryService:
     """Read no more than twenty securities accounts and two history endpoints each."""
 
-    MAX_ACCOUNTS = 20
+    MAX_UNIQUE_ACCOUNTS = 20
+    MAX_CONTEXTS = 20
     MAX_WALL_SECONDS = 60.0
     MAX_CONSECUTIVE_FAILURES = 3
     MAX_ROWS_PER_CONTEXT = 2_000
@@ -106,8 +107,14 @@ class FutuTradeHistoryService:
         selected.sort(
             key=lambda item: (item[0], canonical_context_market(item[1]), item[1], item[2])
         )
-        if len(selected) > self.MAX_ACCOUNTS:
-            raise TradeReviewInputError("account count exceeds the bounded history-read budget")
+        if len({account_id for account_id, _, _ in selected}) > self.MAX_UNIQUE_ACCOUNTS:
+            raise TradeReviewInputError(
+                "unique account count exceeds the bounded history-read budget"
+            )
+        if len(selected) > self.MAX_CONTEXTS:
+            raise TradeReviewInputError(
+                "account/market context count exceeds the history-read budget"
+            )
         self.adapter.protect_sensitive_values(tuple(dict.fromkeys(x[0] for x in selected)))
         selected_contexts = [
             (account_id, market, firm, self.aliaser.alias(account_id))

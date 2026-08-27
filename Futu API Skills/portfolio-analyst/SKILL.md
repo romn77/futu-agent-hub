@@ -167,6 +167,9 @@ Realized P&L is gross pre-fee; closed trips require the structured `FEES_UNAVAIL
 when fee evidence is absent. Other stable quality codes are reconstructed from coverage,
 reconciliation, FX, corporate-event, and current-session evidence. Analysis is indexed and bounded by
 operation and wall-clock budgets. Snapshot/date checks use requested exchange-local markets.
+Quality issue codes, ordering, details, and data-quality notes are canonical and runtime-rebuilt. Direct analysis and
+semantic validation have separate hard row caps plus cumulative operation/wall budgets; FIFO uses a
+deque and indexed validation remains linear for the documented 20,000-row boundary.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
@@ -194,3 +197,6 @@ evidence from being rewritten by recomputing only the simulation hash.
 Runtime semantics rebuild stable account-level legs from the embedded positions and account aliases,
 require exact one-to-one evidence equality, and recompute allocation weights from those authoritative
 legs; equal-total leg redistribution plus a new simulation hash remains invalid.
+Rebalance validation invokes the complete Phase 1 snapshot semantics and binds `before` cash/NAV and
+positions to that source. Decimal weight/exposure reconciliation uses the documented `1e-24`
+relative tolerance while cash-plus-positions and NAV remain exact.

@@ -116,6 +116,56 @@ def snapshot() -> PortfolioSnapshot:
     return replace(value, snapshot_id=snapshot_identity(value))
 
 
+def reconciled_snapshot(
+    source: PortfolioSnapshot,
+    positions: tuple[NormalizedPosition, ...],
+    *,
+    accounts: tuple[Account, ...] | None = None,
+) -> PortfolioSnapshot:
+    """Build a semantically valid synthetic snapshot for rebalance authority tests."""
+
+    nav = source.cash_base + sum((item.market_value_base for item in positions), Decimal(0))
+    normalized_positions = tuple(
+        replace(item, weight=item.market_value_base / nav) for item in positions
+    )
+    cash_balances = tuple(
+        replace(item, weight=item.amount_base / nav) for item in source.cash_balances
+    )
+    long_value = sum(
+        (max(item.market_value_base, Decimal(0)) for item in normalized_positions), Decimal(0)
+    )
+    short_value = sum(
+        (max(-item.market_value_base, Decimal(0)) for item in normalized_positions), Decimal(0)
+    )
+    exposures = {dimension: {} for dimension in ("sector", "region", "theme", "asset_class")}
+    for item in normalized_positions:
+        for dimension, labels in (
+            ("sector", (item.sector,)),
+            ("region", (item.region,)),
+            ("theme", item.themes),
+            ("asset_class", (item.asset_class,)),
+        ):
+            for label in labels:
+                exposures[dimension][label] = (
+                    exposures[dimension].get(label, Decimal(0)) + item.weight
+                )
+    value = replace(
+        source,
+        accounts=source.accounts if accounts is None else accounts,
+        cash_balances=cash_balances,
+        positions=normalized_positions,
+        nav_base=nav,
+        cash_weight=source.cash_base / nav,
+        long_exposure_base=long_value,
+        short_exposure_base=short_value,
+        gross_exposure_base=long_value + short_value,
+        net_exposure_base=long_value - short_value,
+        exposures=exposures,
+        snapshot_id="",
+    )
+    return replace(value, snapshot_id=snapshot_identity(value))
+
+
 class CorrelatedPrices:
     def history(self, symbol: str, *, market: str, lookback: int, as_of: date):
         del market, lookback, as_of

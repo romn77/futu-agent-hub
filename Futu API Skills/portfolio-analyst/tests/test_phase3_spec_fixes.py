@@ -10,13 +10,12 @@ import json
 import pytest
 
 from portfolio_analyst.rebalance import RebalanceChange, RebalanceRequest, simulate_rebalance
-from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.schema import (
     validate_rebalance_result_document,
     validate_trade_review_document,
 )
 from portfolio_analyst.trade_review import TradePolicy, build_trade_review
-from test_risk_analysis import snapshot
+from test_risk_analysis import reconciled_snapshot, snapshot
 
 
 def _rehash_simulation(payload):
@@ -35,6 +34,15 @@ def _rehash_trade(payload):
         json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:16]
     payload["review_id"] = "tr_" + digest
+
+
+def _rehash_snapshot(payload):
+    body = dict(payload)
+    body.pop("snapshot_id")
+    digest = hashlib.sha256(
+        json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    payload["snapshot_id"] = f"ps-20260827T100000Z-real-usd-{digest}"
 
 
 def _deal(
@@ -508,13 +516,11 @@ def test_rebalance_rejects_rehashed_leg_and_allocation_redistribution_with_same_
         market_value_local=Decimal("200"),
         market_value_base=Decimal("200"),
     )
-    source = replace(
+    source = reconciled_snapshot(
         source,
+        (source.positions[0], second_leg, *source.positions[1:]),
         accounts=(*source.accounts, second_account),
-        positions=(source.positions[0], second_leg, *source.positions[1:]),
-        nav_base=Decimal("1200"),
     )
-    source = replace(source, snapshot_id=snapshot_identity(source))
     payload = simulate_rebalance(
         source,
         RebalanceRequest(
@@ -536,6 +542,45 @@ def test_rebalance_rejects_rehashed_leg_and_allocation_redistribution_with_same_
     _rehash_simulation(payload)
 
     with pytest.raises(Exception, match="source legs"):
+        validate_rebalance_result_document(payload)
+
+
+def test_rebalance_rejects_fully_rehashed_embedded_cash_that_does_not_match_before_state():
+    source = snapshot()
+    payload = simulate_rebalance(source, RebalanceRequest(source.snapshot_id, "USD")).to_dict()
+    embedded = payload["source_snapshot"]
+    embedded["cash_balances"][0]["amount_local"] = "999999"
+    embedded["cash_balances"][0]["amount_base"] = "999999"
+    embedded["cash_base"] = "999999"
+    embedded["nav_base"] = "1000899"
+    embedded["cash_balances"][0]["weight"] = str(Decimal("999999") / Decimal("1000899"))
+    embedded["cash_weight"] = embedded["cash_balances"][0]["weight"]
+    for position in embedded["positions"]:
+        position["weight"] = str(
+            Decimal(position["market_value_base"]) / Decimal(embedded["nav_base"])
+        )
+    for dimension, labels in embedded["exposures"].items():
+        rebuilt = {}
+        for position in embedded["positions"]:
+            position_labels = (
+                position["themes"]
+                if dimension == "theme"
+                else [position["asset_class"]]
+                if dimension == "asset_class"
+                else [position[dimension]]
+            )
+            for label in position_labels:
+                rebuilt[label] = rebuilt.get(label, Decimal(0)) + Decimal(position["weight"])
+        embedded["exposures"][dimension] = {key: str(value) for key, value in rebuilt.items()}
+    _rehash_snapshot(embedded)
+    new_snapshot_id = embedded["snapshot_id"]
+    payload["source_snapshot_id"] = new_snapshot_id
+    payload["request"]["snapshot_id"] = new_snapshot_id
+    payload["before"]["snapshot_id"] = new_snapshot_id
+    payload["after"]["snapshot_id"] = new_snapshot_id
+    _rehash_simulation(payload)
+
+    with pytest.raises(Exception, match="source snapshot|before"):
         validate_rebalance_result_document(payload)
 
 
@@ -625,9 +670,21 @@ def test_trade_quality_issues_are_structured_and_fees_mark_gross_pre_fee_pnl():
     with pytest.raises(Exception):
         validate_trade_review_document(payload)
 
+    rewritten = report.to_dict()
+    rewritten["quality_issues"][0]["detail"] = "all evidence is perfect"
+    _rehash_trade(rewritten)
+    with pytest.raises(Exception, match="quality"):
+        validate_trade_review_document(rewritten)
+
+    rewritten_notes = report.to_dict()
+    rewritten_notes["data_quality_notes"] = ["all evidence is perfect"]
+    _rehash_trade(rewritten_notes)
+    with pytest.raises(Exception, match="quality"):
+        validate_trade_review_document(rewritten_notes)
+
 
 def test_trade_analysis_budget_fails_closed_with_injected_clock():
-    ticks = iter((0.0, 0.0, 11.0))
+    ticks = [0.0, 0.0, 11.0]
     with pytest.raises(Exception, match="ANALYSIS_BUDGET_EXCEEDED"):
         build_trade_review(
             orders=[],
@@ -635,7 +692,7 @@ def test_trade_analysis_budget_fails_closed_with_injected_clock():
             start=date(2026, 8, 1),
             end=date(2026, 8, 27),
             max_analysis_seconds=10,
-            analysis_clock=lambda: next(ticks),
+            analysis_clock=lambda: ticks.pop(0) if ticks else 11.0,
         )
 
 
@@ -671,6 +728,45 @@ def test_twenty_thousand_valid_rows_complete_within_default_analysis_budget():
 
     assert report.metrics.fill_count == 20_000
     assert report.metrics.trade_count == 20_000
+
+
+def test_direct_trade_analysis_rejects_rows_above_hard_cap_before_normalization():
+    row = _deal("duplicate", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")
+    with pytest.raises(Exception, match="ANALYSIS_ROW_LIMIT_EXCEEDED"):
+        build_trade_review(
+            orders=[],
+            deals=[row] * 20_001,
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+        )
+
+
+def test_trade_semantic_validation_rejects_oversized_document_before_deep_validation():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    report["normalized_fills"] *= 20_001
+    with pytest.raises(Exception, match="VALIDATION_ROW_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_validation_has_independent_injected_wall_budget():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    ticks = [0.0, 31.0]
+    with pytest.raises(Exception, match="VALIDATION_BUDGET_EXCEEDED"):
+        validate_trade_review_document(
+            report,
+            max_validation_seconds=30,
+            validation_clock=lambda: ticks.pop(0) if ticks else 31.0,
+        )
 
 
 def test_behavior_and_frequency_use_order_groups_not_partial_fill_rows():

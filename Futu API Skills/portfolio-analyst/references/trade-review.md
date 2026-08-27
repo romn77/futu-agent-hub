@@ -54,6 +54,8 @@ HMAC-derived from raw identity plus account/canonical market, so aliases and rep
 depend on upstream row order. Both response bodies must fit per-context/total row budgets and fully
 normalize before the context is atomically successful; duplicate, orphan, status, or queried-market
 conflicts fail that context without partial evidence.
+Acquisition separately caps 20 unique accounts and 20 account/market contexts; context count is not
+misreported as an account limit.
 The adapter bounds combined child stdout/stderr at 4 MiB. POSIX uses size-limited temporary capture;
 platforms without `resource` use concurrent pipe readers that retain only the remaining byte budget
 and immediately terminate/kill the child on overflow. It never uses an unbounded `capture_output`,
@@ -80,11 +82,19 @@ notes cannot erase it. Realized P&L is explicitly `GROSS_PRE_FEE`; when closed t
 fee evidence, `FEES_UNAVAILABLE` is required. Live acquisition admits a context only after both
 orders and fills fully normalize and reconcile. The offline builder may represent incomplete
 evidence as PARTIAL, but does not weaken live context atomicity.
+Code ordering, detail text, and `data_quality_notes` come from the same fixed canonical templates;
+rewriting either text surface and recomputing the report hash is invalid.
 
 Analysis uses indexed account/order/security/day maps and explicit operation and wall-clock budgets.
 Budget exhaustion fails closed with `ANALYSIS_BUDGET_EXCEEDED`; no partial metric body is fabricated.
 Snapshot recency and current-session checks use every requested market's exchange-local date, so a
 valid UTC cross-midnight snapshot is not rejected.
+Direct analysis accepts at most 20,000 combined normalized input rows, 20,000 groups, and 40,000 FIFO
+trip rows. Its cumulative budget is charged during normalization, grouping, FIFO, reconciliation,
+metrics, and behavior phases; FIFO uses a deque. Semantic validation independently rejects oversized
+arrays before JSON Schema traversal, applies its own cumulative operation/wall budget, and rebuilds
+FIFO and indexed evidence in linear time. The 20,000-row acceptance test uses the generous default
+budget rather than a fragile machine-specific elapsed-time threshold.
 
 `trade-policy.yaml` uses this strict shape:
 
