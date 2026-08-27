@@ -10,6 +10,7 @@ from portfolio_analyst.classification import Classification, ClassificationMappe
 from portfolio_analyst.fx import StaticCurrencyConverter
 from portfolio_analyst.models import Account, CashBalance, DataQuality, Position
 from portfolio_analyst.persistence import SnapshotAlreadyExists, SnapshotStore
+from portfolio_analyst.security_metadata import SecurityMetadata, SecurityMetadataMapper
 from portfolio_analyst.snapshot import PortfolioBuilder, UnsafeAggregationError, normalize_security
 
 
@@ -35,10 +36,10 @@ def _quality() -> DataQuality:
     )
 
 
-def test_security_normalization_preserves_symbol_and_derives_market_currency():
-    assert normalize_security("US.AAPL") == ("AAPL", "US", "USD")
-    assert normalize_security("HK.00700") == ("00700", "HK", "HKD")
-    assert normalize_security("SH.600519") == ("600519", "CN", "CNH")
+def test_security_normalization_preserves_symbol_and_market_without_guessing_currency():
+    assert normalize_security("US.AAPL") == ("AAPL", "US")
+    assert normalize_security("HK.00700") == ("00700", "HK")
+    assert normalize_security("SH.600519") == ("600519", "CN")
 
     with pytest.raises(ValueError, match="market prefix"):
         normalize_security("AAPL")
@@ -79,6 +80,8 @@ def test_builder_converts_every_currency_before_aggregation_and_weights_close():
                 code="US.AAPL",
                 name="Example US Equity",
                 security_type="STOCK",
+                currency="USD",
+                currency_provenance="AUDITED_SOURCE",
                 quantity=Decimal("10"),
                 can_sell_quantity=Decimal("10"),
                 average_cost_local=Decimal("40"),
@@ -92,6 +95,8 @@ def test_builder_converts_every_currency_before_aggregation_and_weights_close():
                 code="HK.00700",
                 name="Example HK Equity",
                 security_type="STOCK",
+                currency="HKD",
+                currency_provenance="USER_CONFIG",
                 quantity=Decimal("8"),
                 can_sell_quantity=Decimal("8"),
                 average_cost_local=Decimal("300"),
@@ -121,6 +126,9 @@ def test_builder_converts_every_currency_before_aggregation_and_weights_close():
     jsonschema.validate(payload, json.loads(SCHEMA.read_text(encoding="utf-8")))
     assert payload["nav_base"] == "1100"
     assert payload["positions"][1]["fx_to_base"] == "0.125"
+    assert payload["positions"][0]["realized_pl_base"] is None
+    assert payload["positions"][1]["realized_pl_base"] == "0"
+    assert payload["positions"][1]["currency_provenance"] == "USER_CONFIG"
 
 
 def test_builder_uses_signed_short_market_value_and_explicit_nav_semantics():
@@ -138,6 +146,8 @@ def test_builder_uses_signed_short_market_value_and_explicit_nav_semantics():
                 code="US.SHORT",
                 name="Short Position",
                 security_type="STOCK",
+                currency="USD",
+                currency_provenance="AUDITED_SOURCE",
                 quantity=Decimal("-2"),
                 can_sell_quantity=Decimal("0"),
                 average_cost_local=Decimal("100"),
@@ -181,6 +191,155 @@ def test_builder_stops_cross_currency_aggregation_when_fx_is_missing():
             source_version="fixture-v1",
             data_quality=_quality(),
         )
+
+
+def test_builder_refuses_position_currency_inference_from_market_prefix():
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=StaticCurrencyConverter({}),
+        classifications=ClassificationMapper({}),
+    )
+
+    with pytest.raises(UnsafeAggregationError, match="currency unavailable.*US.AAPL"):
+        builder.build(
+            accounts=(_account(),),
+            cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+            positions=(
+                Position(
+                    account_ref="acct-0001",
+                    code="US.AAPL",
+                    name="No Currency Proof",
+                    security_type="UNKNOWN",
+                    currency=None,
+                    currency_provenance="UNAVAILABLE",
+                    quantity=Decimal("1"),
+                    can_sell_quantity=Decimal("1"),
+                    average_cost_local=Decimal("10"),
+                    last_price_local=Decimal("10"),
+                    market_value_local=Decimal("10"),
+                    unrealized_pl_local=None,
+                    realized_pl_local=None,
+                ),
+            ),
+            as_of=datetime.now(timezone.utc),
+            trd_env="REAL",
+            source_version="fixture-v1",
+            data_quality=_quality(),
+        )
+
+
+def test_builder_refuses_currency_without_auditable_provenance():
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=StaticCurrencyConverter({}),
+        classifications=ClassificationMapper({}),
+    )
+
+    with pytest.raises(UnsafeAggregationError, match="currency provenance unavailable"):
+        builder.build(
+            accounts=(_account(),),
+            cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+            positions=(
+                Position(
+                    account_ref="acct-0001",
+                    code="US.AAPL",
+                    name="Unproven Currency",
+                    security_type="UNKNOWN",
+                    currency="USD",
+                    currency_provenance="UNAVAILABLE",
+                    quantity=Decimal("1"),
+                    can_sell_quantity=Decimal("1"),
+                    average_cost_local=Decimal("10"),
+                    last_price_local=Decimal("10"),
+                    market_value_local=Decimal("10"),
+                    unrealized_pl_local=None,
+                    realized_pl_local=None,
+                ),
+            ),
+            as_of=datetime.now(timezone.utc),
+            trd_env="REAL",
+            source_version="fixture-v1",
+            data_quality=_quality(),
+        )
+
+
+def test_exact_security_metadata_uses_audited_source_code_before_market_normalization():
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=StaticCurrencyConverter({("CNH", "USD"): Decimal("0.14")}),
+        classifications=ClassificationMapper({}),
+        security_metadata=SecurityMetadataMapper(
+            {
+                "SH.600519": SecurityMetadata(
+                    currency="CNH", security_type="STOCK", provenance="USER_CONFIG"
+                )
+            }
+        ),
+    )
+    snapshot = builder.build(
+        accounts=(_account(),),
+        cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+        positions=(
+            Position(
+                account_ref="acct-0001",
+                code="SH.600519",
+                name="Exact Source Code",
+                security_type="UNKNOWN",
+                currency=None,
+                currency_provenance="UNAVAILABLE",
+                quantity=Decimal("1"),
+                can_sell_quantity=Decimal("1"),
+                average_cost_local=Decimal("100"),
+                last_price_local=Decimal("100"),
+                market_value_local=Decimal("100"),
+                unrealized_pl_local=None,
+                realized_pl_local=None,
+            ),
+        ),
+        as_of=datetime.now(timezone.utc),
+        trd_env="REAL",
+        source_version="fixture-v1",
+        data_quality=_quality(),
+    )
+
+    assert snapshot.positions[0].market == "CN"
+    assert snapshot.positions[0].currency == "CNH"
+
+
+def test_realized_pl_base_uses_verified_non_base_fx_and_preserves_null():
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=StaticCurrencyConverter({("HKD", "USD"): Decimal("0.125")}),
+        classifications=ClassificationMapper({}),
+    )
+    common = dict(
+        account_ref="acct-0001",
+        name="Example",
+        security_type="STOCK",
+        currency="HKD",
+        currency_provenance="USER_CONFIG",
+        quantity=Decimal("1"),
+        can_sell_quantity=Decimal("1"),
+        average_cost_local=Decimal("80"),
+        last_price_local=Decimal("80"),
+        market_value_local=Decimal("80"),
+        unrealized_pl_local=Decimal("8"),
+    )
+    snapshot = builder.build(
+        accounts=(_account(),),
+        cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+        positions=(
+            Position(code="HK.00001", realized_pl_local=Decimal("16"), **common),
+            Position(code="HK.00002", realized_pl_local=None, **common),
+        ),
+        as_of=datetime.now(timezone.utc),
+        trd_env="REAL",
+        source_version="fixture-v1",
+        data_quality=_quality(),
+    )
+
+    assert snapshot.positions[0].realized_pl_base == Decimal("2")
+    assert snapshot.positions[1].realized_pl_base is None
 
 
 def test_unknown_classification_is_literal_and_never_name_guessed():
@@ -235,6 +394,8 @@ def test_unknown_security_type_degrades_quality_explicitly():
                 code="US.AAPL",
                 name="Example",
                 security_type="UNKNOWN",
+                currency="USD",
+                currency_provenance="AUDITED_SOURCE",
                 quantity=Decimal("1"),
                 can_sell_quantity=Decimal("1"),
                 average_cost_local=Decimal("10"),

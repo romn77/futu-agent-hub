@@ -44,7 +44,19 @@ Currency rates are manual facts loaded from `config/fx_rates.json` under the dat
 {"rates": {"HKD/USD": "0.125"}}
 ```
 
-Missing cross-currency rates stop the snapshot. Optional exact-code classifications are loaded from
+The audited portfolio response does not contain per-position currency. Provide exact-code facts in
+`config/security_metadata.json`; a market prefix is never treated as currency evidence:
+
+```json
+{
+  "provenance": "USER_CONFIG",
+  "securities": {
+    "US.AAPL": {"currency": "USD", "security_type": "STOCK"}
+  }
+}
+```
+
+Missing position currency or cross-currency rates stop unsafe aggregation. Optional exact-code classifications are loaded from
 `config/classifications.json`; absent facts remain the literal `UNKNOWN` and are reported as partial
 data quality. The snapshot uses signed position market values: long exposure is positive, short
 exposure is the absolute value of negative positions, NAV is `cash + long - short`, gross exposure

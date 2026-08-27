@@ -1,0 +1,6 @@
+{
+  "funds": {"currency": "USD", "total_assets": 250, "cash": 50, "market_val": 200, "long_mv": 200, "short_mv": 0, "frozen_cash": 0, "avl_withdrawal_cash": 50, "power": 50, "available_funds": 50, "initial_margin": 0, "maintenance_margin": 0, "risk_status": "SAFE", "us_cash": 50, "ca_cash": 0},
+  "positions": [
+    {"code": "US.MSFT", "name": "Example Second Equity", "qty": 2, "can_sell_qty": 2, "average_cost": 90, "nominal_price": 100, "market_val": 200, "unrealized_pl": 20, "pl_ratio_avg_cost": 11.1111, "realized_pl": 0, "today_pl_val": 2, "combo_id": "", "strategy_type": "", "position_type": "LONG", "acc_id": 90000002, "jp_acc_type": ""}
+  ]
+}

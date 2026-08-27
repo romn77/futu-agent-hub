@@ -69,15 +69,6 @@ _COMMAND_OPTIONS = (
             _OptionSpec("--json"),
         ),
     ),
-    _CommandOptions(
-        "get_all_portfolios",
-        (
-            _OptionSpec("--acc-id", takes_value=True, account_id=True),
-            _OptionSpec("--trd-env", takes_value=True, choices=_TRADING_ENVIRONMENTS),
-            _OptionSpec("--show-option-strategy-view"),
-            _OptionSpec("--json"),
-        ),
-    ),
 )
 _COMMAND_OPTION_SCHEMA = MappingProxyType(
     {record.command: record.options for record in _COMMAND_OPTIONS}
@@ -145,6 +136,18 @@ class FutuAdapter:
             raise ValueError(f"audited futuapi Skill required: {detail}")
         self.skill_dir = audited.root
         self.python_executable = python_executable or sys.executable
+        self._protected_sensitive_values: set[str] = set()
+
+    def protect_sensitive_values(self, values: Sequence[str]) -> None:
+        """Register discovered account IDs so every later result masks the full account set."""
+
+        validated: set[str] = set()
+        for value in values:
+            try:
+                validated.add(validate_account_id(str(value)))
+            except ValueError:
+                raise ValueError("discovered account ID has an invalid format") from None
+        self._protected_sensitive_values.update(validated)
 
     def validate_request(self, name: str, arguments: Sequence[str]) -> FutuRequest:
         """Validate a request without exposing an executable source path."""
@@ -211,7 +214,10 @@ class FutuAdapter:
         request = self.validate_request(name, arguments)
         child_environment = controlled_child_environment(purpose="adapter")
         sensitive_values = self._sensitive_values(request, child_environment)
-        completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        try:
+            completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise self._sanitize_timeout(exc, sensitive_values) from None
         return subprocess.CompletedProcess(
             args=self._sanitize_args(completed.args, sensitive_values=sensitive_values),
             returncode=completed.returncode,
@@ -231,7 +237,10 @@ class FutuAdapter:
         request = self.validate_request(name, arguments)
         child_environment = controlled_child_environment(purpose="adapter")
         sensitive_values = self._sensitive_values(request, child_environment)
-        completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        try:
+            completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise self._sanitize_timeout(exc, sensitive_values) from None
         if completed.returncode != 0:
             details = tuple(
                 detail
@@ -255,17 +264,29 @@ class FutuAdapter:
                 return payload
         raise FutuReadError("audited Futu read returned no valid JSON object")
 
-    @staticmethod
     def _sensitive_values(
-        request: FutuRequest, child_environment: dict[str, str]
+        self, request: FutuRequest, child_environment: dict[str, str]
     ) -> tuple[str, ...]:
+        protected = getattr(self, "_protected_sensitive_values", set())
         return tuple(
             dict.fromkeys(
                 (
                     *request.sensitive_values,
+                    *sorted(protected),
                     *(value for key, value in child_environment.items() if key == "FUTU_ACC_ID"),
                 )
             )
+        )
+
+    @classmethod
+    def _sanitize_timeout(
+        cls, exc: subprocess.TimeoutExpired, sensitive_values: Sequence[str]
+    ) -> subprocess.TimeoutExpired:
+        return subprocess.TimeoutExpired(
+            cmd=cls._sanitize_args(exc.cmd, sensitive_values=sensitive_values),
+            timeout=exc.timeout,
+            output=cls.sanitize_output(exc.output, sensitive_values=sensitive_values),
+            stderr=cls.sanitize_output(exc.stderr, sensitive_values=sensitive_values),
         )
 
     def _run_unsanitized(

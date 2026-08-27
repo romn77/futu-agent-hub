@@ -66,15 +66,15 @@
     },
     "position": {
       "type": "object", "additionalProperties": false,
-      "required": ["account_ref", "symbol", "name", "market", "security_type", "currency", "quantity", "can_sell_quantity", "average_cost_local", "last_price_local", "market_value_local", "unrealized_pl_local", "realized_pl_local", "fx_to_base", "market_value_base", "unrealized_pl_base", "weight", "sector", "industry", "region", "themes", "asset_class", "position_role", "data_quality_notes"],
+      "required": ["account_ref", "symbol", "name", "market", "security_type", "currency", "currency_provenance", "quantity", "can_sell_quantity", "average_cost_local", "last_price_local", "market_value_local", "unrealized_pl_local", "realized_pl_local", "fx_to_base", "market_value_base", "unrealized_pl_base", "realized_pl_base", "weight", "sector", "industry", "region", "themes", "asset_class", "position_role", "data_quality_notes"],
       "properties": {
         "account_ref": {"type": "string"}, "symbol": {"type": "string"}, "name": {"type": "string"},
-        "market": {"type": "string"}, "security_type": {"type": "string"}, "currency": {"type": "string"},
+        "market": {"type": "string"}, "security_type": {"type": "string"}, "currency": {"type": "string"}, "currency_provenance": {"type": "string", "minLength": 1},
         "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/decimal"},
         "average_cost_local": {"$ref": "#/$defs/decimal"}, "last_price_local": {"$ref": "#/$defs/decimal"},
         "market_value_local": {"$ref": "#/$defs/decimal"}, "unrealized_pl_local": {"$ref": "#/$defs/nullableDecimal"},
         "realized_pl_local": {"$ref": "#/$defs/nullableDecimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
-        "market_value_base": {"$ref": "#/$defs/decimal"}, "unrealized_pl_base": {"$ref": "#/$defs/nullableDecimal"},
+        "market_value_base": {"$ref": "#/$defs/decimal"}, "unrealized_pl_base": {"$ref": "#/$defs/nullableDecimal"}, "realized_pl_base": {"$ref": "#/$defs/nullableDecimal"},
         "weight": {"$ref": "#/$defs/decimal"}, "sector": {"type": "string"}, "industry": {"type": "string"},
         "region": {"type": "string"}, "themes": {"type": "array", "items": {"type": "string"}},
         "asset_class": {"type": "string"}, "position_role": {"type": ["string", "null"]},

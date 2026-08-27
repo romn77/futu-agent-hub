@@ -17,11 +17,29 @@ from .settings import Settings, resolve_output_path
 from .snapshot import UnsafeAggregationError
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="portfolio.py", description="Read-only portfolio analyst")
+class _JsonParseError(ValueError):
+    pass
+
+
+class _RaisingArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        raise _JsonParseError("invalid command-line arguments")
+
+
+def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
+    parser_class = _RaisingArgumentParser if json_errors else argparse.ArgumentParser
+    parser = parser_class(prog="portfolio.py", description="Read-only portfolio analyst")
+    parser.add_argument("--json", action="store_true", dest="as_json", help="print JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)
     doctor = subparsers.add_parser("doctor", help="check Skill, SDK, and OpenD availability")
-    doctor.add_argument("--json", action="store_true", dest="as_json", help="print JSON")
+    doctor.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        default=argparse.SUPPRESS,
+        help="print JSON",
+    )
     doctor.add_argument("--output", help="save under PORTFOLIO_AGENT_HOME")
     doctor.add_argument("--no-save", action="store_true", help="do not save output")
     doctor.add_argument("--verbose", action="store_true", help="show check details")
@@ -32,7 +50,13 @@ def _parser() -> argparse.ArgumentParser:
         choices=["HKD", "USD", "CNH", "JPY", "AUD", "CAD", "MYR", "SGD"],
         default="USD",
     )
-    snapshot.add_argument("--json", action="store_true", dest="as_json", help="print JSON")
+    snapshot.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        default=argparse.SUPPRESS,
+        help="print JSON",
+    )
     snapshot.add_argument("--output", help="save at a relative path under PORTFOLIO_AGENT_HOME")
     persistence = snapshot.add_mutually_exclusive_group()
     persistence.add_argument(
@@ -58,7 +82,23 @@ def _human_report(report: dict[str, object], verbose: bool) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    json_requested = "--json" in raw_argv
+    try:
+        args = _parser(json_errors=json_requested).parse_args(raw_argv)
+    except _JsonParseError:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "CLI_USAGE",
+                        "message": "invalid command-line arguments",
+                    },
+                }
+            )
+        )
+        return 2
     try:
         settings = Settings.from_env()
         if args.command == "doctor":

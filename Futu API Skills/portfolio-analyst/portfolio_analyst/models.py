@@ -65,6 +65,8 @@ class Position:
     code: str
     name: str
     security_type: str
+    currency: str | None
+    currency_provenance: str
     quantity: Decimal
     can_sell_quantity: Decimal
     average_cost_local: Decimal
@@ -84,6 +86,7 @@ class NormalizedPosition:
     market: str
     security_type: str
     currency: str
+    currency_provenance: str
     quantity: Decimal
     can_sell_quantity: Decimal
     average_cost_local: Decimal
@@ -94,6 +97,7 @@ class NormalizedPosition:
     fx_to_base: Decimal
     market_value_base: Decimal
     unrealized_pl_base: Decimal | None
+    realized_pl_base: Decimal | None
     weight: Decimal
     sector: str
     industry: str

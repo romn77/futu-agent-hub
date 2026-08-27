@@ -1,4 +1,4 @@
-"""Parse audited Futu reads into masked, currency-specific portfolio inputs."""
+"""Parse audited per-account Futu reads into masked portfolio inputs."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ class SourceDataError(ValueError):
 
 
 class PrivateJsonReader(Protocol):
+    def protect_sensitive_values(self, values: Sequence[str]) -> None: ...
+
     def read_private_json(
         self, name: str, arguments: Sequence[str], *, timeout: float = 30
     ) -> dict[str, object]: ...
@@ -28,6 +30,14 @@ class PortfolioInputs:
     positions: tuple[Position, ...]
     data_quality: DataQuality
     source_version: str
+
+
+@dataclass(frozen=True)
+class _SelectedAccount:
+    private_id: str
+    public: Account
+    query_market: str | None
+    security_firm: str | None
 
 
 def _decimal(value: object, field: str) -> Decimal:
@@ -60,7 +70,7 @@ def _source_version() -> str:
 
 
 class FutuPortfolioRepository:
-    CASH_FIELDS = {"us_cash": "USD", "hk_cash": "HKD", "cn_cash": "CNH", "ca_cash": "CAD"}
+    QUERY_MARKETS = frozenset({"US", "HK", "HKCC", "CN", "SG", "MY", "JP"})
 
     def __init__(self, adapter: PrivateJsonReader) -> None:
         self.adapter = adapter
@@ -74,7 +84,8 @@ class FutuPortfolioRepository:
         if not isinstance(source_accounts, list):
             raise SourceDataError("account-list response is missing accounts")
 
-        selected: dict[str, tuple[Account, Mapping[str, object]]] = {}
+        selected: list[_SelectedAccount] = []
+        seen_ids: set[str] = set()
         for raw in source_accounts:
             if not isinstance(raw, Mapping):
                 raise SourceDataError("account-list response contains a malformed account")
@@ -85,105 +96,130 @@ class FutuPortfolioRepository:
             if str(raw.get("acc_status", "")).upper() == "DISABLED":
                 continue
             account_id = _account_key(raw.get("acc_id"))
+            if account_id in seen_ids:
+                continue
+            seen_ids.add(account_id)
             markets_raw = raw.get("trdmarket_auth", [])
             markets = (
                 tuple(str(item).upper() for item in markets_raw)
                 if isinstance(markets_raw, list)
                 else (str(markets_raw).upper(),)
             )
-            account = Account(
-                account_ref=_masked_ref(account_id),
-                trd_env=environment,
-                account_type=str(raw.get("acc_type", "UNKNOWN")) or "UNKNOWN",
-                account_role=str(raw.get("acc_role", "UNKNOWN")) or "UNKNOWN",
-                markets=markets,
-                status=str(raw.get("acc_status", "UNKNOWN")) or "UNKNOWN",
-                context_type="SEC",
-                security_firm=str(raw.get("security_firm", "UNKNOWN")) or "UNKNOWN",
+            query_market = next(
+                (market for market in markets if market in self.QUERY_MARKETS), None
             )
-            selected[account_id] = (account, raw)
+            firm = str(raw.get("security_firm", "")).upper() or None
+            selected.append(
+                _SelectedAccount(
+                    private_id=account_id,
+                    public=Account(
+                        account_ref=_masked_ref(account_id),
+                        trd_env=environment,
+                        account_type=str(raw.get("acc_type", "UNKNOWN")) or "UNKNOWN",
+                        account_role=str(raw.get("acc_role", "UNKNOWN")) or "UNKNOWN",
+                        markets=markets,
+                        status=str(raw.get("acc_status", "UNKNOWN")) or "UNKNOWN",
+                        context_type="SEC",
+                        security_firm=firm or "UNKNOWN",
+                    ),
+                    query_market=query_market,
+                    security_firm=firm,
+                )
+            )
 
-        portfolios_payload = self.adapter.read_private_json(
-            "get_all_portfolios", ["--trd-env", environment, "--json"], timeout=timeout
-        )
-        source_portfolios = portfolios_payload.get("accounts")
-        if not isinstance(source_portfolios, list):
-            raise SourceDataError("portfolio response is missing accounts")
-
+        self.adapter.protect_sensitive_values(tuple(account.private_id for account in selected))
         cash_balances: list[CashBalance] = []
         positions: list[Position] = []
-        read_ids: set[str] = set()
-        for raw in source_portfolios:
-            if not isinstance(raw, Mapping):
-                raise SourceDataError("portfolio response contains a malformed account")
-            account_id = _account_key(raw.get("acc_id"))
-            selected_record = selected.get(account_id)
-            if selected_record is None:
+        source_errors: list[str] = []
+        accounts_read = 0
+        for account in selected:
+            try:
+                if account.query_market is None or account.security_firm is None:
+                    raise SourceDataError("account query metadata is incomplete")
+                arguments = [
+                    "--acc-id",
+                    account.private_id,
+                    "--market",
+                    account.query_market,
+                    "--trd-env",
+                    environment,
+                    "--security-firm",
+                    account.security_firm,
+                    "--ctx-type",
+                    "SEC",
+                    "--json",
+                ]
+                payload = self.adapter.read_private_json(
+                    "get_portfolio", arguments, timeout=timeout
+                )
+                account_cash: list[CashBalance] = []
+                account_positions: list[Position] = []
+                self._parse_cash(payload.get("funds"), account.public.account_ref, account_cash)
+                self._parse_positions(
+                    payload.get("positions"),
+                    account.public.account_ref,
+                    account.private_id,
+                    account_positions,
+                )
+            except Exception as exc:
+                source_errors.append(
+                    f"portfolio read failed for masked account {account.public.account_ref} "
+                    f"({type(exc).__name__})"
+                )
                 continue
-            account, _account_source = selected_record
-            read_ids.add(account_id)
-            self._parse_cash(raw.get("funds"), account.account_ref, cash_balances)
-            self._parse_positions(raw.get("positions"), account.account_ref, positions)
+            cash_balances.extend(account_cash)
+            positions.extend(account_positions)
+            accounts_read += 1
 
         expected = len(selected)
-        read = len(read_ids)
-        missing = sorted(set(selected) - read_ids)
-        source_errors = (
-            (f"portfolio data unavailable for {len(missing)} masked account(s)",) if missing else ()
-        )
         if expected == 0:
             status = "UNAVAILABLE"
-            source_errors = (f"no {environment} securities accounts were returned",)
-        elif read < expected:
+            source_errors = [f"no {environment} securities accounts were returned"]
+        elif accounts_read == 0:
+            status = "UNAVAILABLE"
+        elif accounts_read < expected:
             status = "PARTIAL"
         else:
             status = "COMPLETE"
         return PortfolioInputs(
-            accounts=tuple(selected[account_id][0] for account_id in selected),
+            accounts=tuple(account.public for account in selected),
             cash_balances=tuple(cash_balances),
             positions=tuple(positions),
             data_quality=DataQuality(
                 status=status,
-                source_errors=source_errors,
-                coverage={"accounts_expected": expected, "accounts_read": read},
+                source_errors=tuple(source_errors),
+                coverage={"accounts_expected": expected, "accounts_read": accounts_read},
             ),
             source_version=_source_version(),
         )
 
-    def _parse_cash(
-        self, raw_funds: object, account_ref: str, destination: list[CashBalance]
-    ) -> None:
+    @staticmethod
+    def _parse_cash(raw_funds: object, account_ref: str, destination: list[CashBalance]) -> None:
         if not isinstance(raw_funds, Mapping) or not raw_funds:
             raise SourceDataError("portfolio funds are missing")
-        explicit_currency = str(raw_funds.get("currency", "")).upper()
-        if explicit_currency and explicit_currency not in {"N/A", "NONE", "UNKNOWN"}:
-            destination.append(
-                CashBalance(
-                    account_ref, explicit_currency, _decimal(raw_funds.get("cash", 0), "cash")
-                )
-            )
+        currency = str(raw_funds.get("currency", "")).upper()
+        cash = _decimal(raw_funds.get("cash", 0), "cash")
+        if currency in {"", "N/A", "NONE", "UNKNOWN"}:
+            if cash:
+                raise SourceDataError("nonzero cash has no audited source currency")
             return
-        found_component = False
-        for field, currency in self.CASH_FIELDS.items():
-            if field not in raw_funds:
-                continue
-            amount = _decimal(raw_funds[field], field)
-            if amount:
-                destination.append(CashBalance(account_ref, currency, amount))
-                found_component = True
-        generic_cash = _decimal(raw_funds.get("cash", 0), "cash")
-        if generic_cash and not found_component:
-            raise SourceDataError("nonzero cash has no source currency; aggregation is unsafe")
+        destination.append(CashBalance(account_ref, currency, cash))
 
     @staticmethod
     def _parse_positions(
-        raw_positions: object, account_ref: str, destination: list[Position]
+        raw_positions: object,
+        account_ref: str,
+        private_account_id: str,
+        destination: list[Position],
     ) -> None:
         if not isinstance(raw_positions, list):
             raise SourceDataError("portfolio positions are missing")
         for raw in raw_positions:
             if not isinstance(raw, Mapping):
                 raise SourceDataError("portfolio response contains a malformed position")
+            row_account = raw.get("acc_id")
+            if row_account not in (None, 0, "", int(private_account_id), private_account_id):
+                raise SourceDataError("position account identity does not match its query")
             quantity = _decimal(raw.get("qty"), "qty")
             market_value = _decimal(raw.get("market_val"), "market_val")
             position_role = str(raw.get("position_type", "")).upper()
@@ -196,7 +232,9 @@ class FutuPortfolioRepository:
                     account_ref=account_ref,
                     code=str(raw.get("code", "")),
                     name=str(raw.get("name", "")),
-                    security_type=str(raw.get("security_type", "UNKNOWN")) or "UNKNOWN",
+                    security_type="UNKNOWN",
+                    currency=None,
+                    currency_provenance="UNAVAILABLE",
                     quantity=quantity,
                     can_sell_quantity=_decimal(raw.get("can_sell_qty", 0), "can_sell_qty"),
                     average_cost_local=_decimal(raw.get("average_cost", 0), "average_cost"),

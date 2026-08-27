@@ -19,19 +19,11 @@ from .models import (
     PortfolioSnapshot,
     Position,
 )
+from .security_metadata import SecurityMetadataMapper
 
 
 MARKET_ALIASES = {"SH": "CN", "SZ": "CN", "HKCC": "HK"}
-MARKET_CURRENCIES = {
-    "US": "USD",
-    "HK": "HKD",
-    "CN": "CNH",
-    "SG": "SGD",
-    "MY": "MYR",
-    "JP": "JPY",
-    "CA": "CAD",
-    "AU": "AUD",
-}
+SUPPORTED_MARKETS = frozenset({"US", "HK", "CN", "SG", "MY", "JP", "CA", "AU"})
 
 
 class UnsafeAggregationError(ValueError):
@@ -44,21 +36,23 @@ class _StagedPosition:
     symbol: str
     market: str
     currency: str
+    currency_provenance: str
+    security_type: str
     rate: Decimal
     classification: Classification
     market_value_base: Decimal
     unrealized_base: Decimal | None
+    realized_base: Decimal | None
 
 
-def normalize_security(code: str) -> tuple[str, str, str]:
+def normalize_security(code: str) -> tuple[str, str]:
     market_raw, separator, symbol = str(code).strip().upper().partition(".")
     if not separator or not symbol:
         raise ValueError(f"security code requires a market prefix: {code!r}")
     market = MARKET_ALIASES.get(market_raw, market_raw)
-    currency = MARKET_CURRENCIES.get(market)
-    if currency is None:
+    if market not in SUPPORTED_MARKETS:
         raise ValueError(f"unsupported security market: {market_raw}")
-    return symbol, market, currency
+    return symbol, market
 
 
 def _snapshot_id(as_of: datetime, trd_env: str, base_currency: str, payload: object) -> str:
@@ -77,10 +71,12 @@ class PortfolioBuilder:
         base_currency: str,
         converter: CurrencyConverter,
         classifications: ClassificationMapper,
+        security_metadata: SecurityMetadataMapper | None = None,
     ) -> None:
         self.base_currency = base_currency.upper()
         self.converter = converter
         self.classifications = classifications
+        self.security_metadata = security_metadata or SecurityMetadataMapper({})
 
     def _rate(self, currency: str, as_of: datetime) -> Decimal:
         rate = self.converter.rate(currency.upper(), self.base_currency, as_of)
@@ -133,13 +129,42 @@ class PortfolioBuilder:
 
         staged: list[_StagedPosition] = []
         for position in position_input:
-            symbol, market, currency = normalize_security(position.code)
+            symbol, market = normalize_security(position.code)
+            normalized_code = f"{market}.{symbol}"
+            source_code = position.code.strip().upper()
+            metadata = self.security_metadata.resolve(source_code)
+            currency = metadata.currency if metadata and metadata.currency else position.currency
+            if not currency:
+                raise UnsafeAggregationError(
+                    f"currency unavailable for security {normalized_code}; "
+                    "provide exact-code security metadata"
+                )
+            currency = currency.upper()
+            currency_provenance = (
+                metadata.provenance
+                if metadata and metadata.currency
+                else position.currency_provenance
+            )
+            if currency_provenance in {"", "UNKNOWN", "UNAVAILABLE"}:
+                raise UnsafeAggregationError(
+                    f"currency provenance unavailable for security {normalized_code}"
+                )
+            security_type = (
+                metadata.security_type
+                if metadata and metadata.security_type
+                else position.security_type
+            )
             rate = self._rate(currency, as_of)
-            classification = self.classifications.classify(f"{market}.{symbol}", position.name)
+            classification = self.classifications.classify(source_code, position.name)
             market_value_base = position.market_value_local * rate
             unrealized_base = (
                 position.unrealized_pl_local * rate
                 if position.unrealized_pl_local is not None
+                else None
+            )
+            realized_base = (
+                position.realized_pl_local * rate
+                if position.realized_pl_local is not None
                 else None
             )
             staged.append(
@@ -148,10 +173,13 @@ class PortfolioBuilder:
                     symbol=symbol,
                     market=market,
                     currency=currency,
+                    currency_provenance=currency_provenance,
+                    security_type=security_type or "UNKNOWN",
                     rate=rate,
                     classification=classification,
                     market_value_base=market_value_base,
                     unrealized_base=unrealized_base,
+                    realized_base=realized_base,
                 )
             )
 
@@ -189,8 +217,9 @@ class PortfolioBuilder:
                     symbol=item.symbol,
                     name=position.name,
                     market=item.market,
-                    security_type=position.security_type or "UNKNOWN",
+                    security_type=item.security_type,
                     currency=item.currency,
+                    currency_provenance=item.currency_provenance,
                     quantity=position.quantity,
                     can_sell_quantity=position.can_sell_quantity,
                     average_cost_local=position.average_cost_local,
@@ -201,6 +230,7 @@ class PortfolioBuilder:
                     fx_to_base=item.rate,
                     market_value_base=value,
                     unrealized_pl_base=item.unrealized_base,
+                    realized_pl_base=item.realized_base,
                     weight=weight,
                     sector=classification.sector,
                     industry=classification.industry,
@@ -217,7 +247,7 @@ class PortfolioBuilder:
                 classification.region,
                 classification.asset_class,
             }
-            unknown_security_types |= position.security_type in {"", "UNKNOWN", "N/A"}
+            unknown_security_types |= item.security_type in {"", "UNKNOWN", "N/A"}
             for dimension, labels in (
                 ("sector", (classification.sector,)),
                 ("region", (classification.region,)),

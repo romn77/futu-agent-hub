@@ -14,6 +14,7 @@ from .fx import StaticCurrencyConverter
 from .models import PortfolioSnapshot
 from .repository import FutuPortfolioRepository, PrivateJsonReader, SourceDataError
 from .schema import validate_snapshot_document
+from .security_metadata import SecurityMetadata, SecurityMetadataMapper
 from .settings import Settings, discover_futuapi_skill
 from .snapshot import PortfolioBuilder
 
@@ -77,6 +78,32 @@ def load_classifications(data_home: Path) -> ClassificationMapper:
     return ClassificationMapper(mappings)
 
 
+def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
+    path = data_home / "config" / "security_metadata.json"
+    if not path.exists():
+        return SecurityMetadataMapper({})
+    payload = _load_json_object(path)
+    if payload.get("provenance") != "USER_CONFIG":
+        raise ConfigError("security_metadata.json provenance must be USER_CONFIG")
+    raw_securities = payload.get("securities")
+    if not isinstance(raw_securities, dict):
+        raise ConfigError("security_metadata.json requires an object named securities")
+    mappings: dict[str, SecurityMetadata] = {}
+    for code, raw in raw_securities.items():
+        if not isinstance(raw, dict):
+            raise ConfigError(f"security metadata must be an object: {code}")
+        currency = str(raw.get("currency", "")).upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise ConfigError(f"security currency must be an ISO-style code: {code}")
+        security_type = str(raw.get("security_type", "UNKNOWN")).upper() or "UNKNOWN"
+        mappings[str(code).upper()] = SecurityMetadata(
+            currency=currency,
+            security_type=security_type,
+            provenance="USER_CONFIG",
+        )
+    return SecurityMetadataMapper(mappings)
+
+
 def generate_snapshot(
     settings: Settings,
     *,
@@ -94,10 +121,13 @@ def generate_snapshot(
     inputs = FutuPortfolioRepository(reader).read(trd_env=trd_env)
     if not inputs.accounts:
         raise SourceDataError(inputs.data_quality.source_errors[0])
+    if inputs.data_quality.status == "UNAVAILABLE":
+        raise SourceDataError("no account portfolio data was available for snapshot valuation")
     builder = PortfolioBuilder(
         base_currency=base_currency,
         converter=load_currency_converter(settings.data_home),
         classifications=load_classifications(settings.data_home),
+        security_metadata=load_security_metadata(settings.data_home),
     )
     snapshot = builder.build(
         accounts=inputs.accounts,

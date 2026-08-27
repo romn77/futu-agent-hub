@@ -1,0 +1,7 @@
+{
+  "funds": {"currency": "USD", "total_assets": 1000, "cash": 100, "market_val": 900, "long_mv": 900, "short_mv": 0, "frozen_cash": 0, "avl_withdrawal_cash": 100, "power": 100, "available_funds": 100, "initial_margin": 0, "maintenance_margin": 0, "risk_status": "SAFE", "us_cash": 100, "ca_cash": 0},
+  "positions": [
+    {"code": "US.AAPL", "name": "Example US Equity", "qty": 10, "can_sell_qty": 10, "average_cost": 40, "nominal_price": 50, "market_val": 500, "unrealized_pl": 100, "pl_ratio_avg_cost": 25, "realized_pl": 25, "today_pl_val": 5, "combo_id": "", "strategy_type": "", "position_type": "LONG", "acc_id": 90000001, "jp_acc_type": ""},
+    {"code": "HK.00700", "name": "Example HK Equity", "qty": 8, "can_sell_qty": 8, "average_cost": 300, "nominal_price": 400, "market_val": 3200, "unrealized_pl": 800, "pl_ratio_avg_cost": 33.3333, "realized_pl": 80, "today_pl_val": 20, "combo_id": "", "strategy_type": "", "position_type": "LONG", "acc_id": 90000001, "jp_acc_type": ""}
+  ]
+}

@@ -82,7 +82,7 @@ def test_repository_and_global_roots_are_ordered_trusted_locations(monkeypatch, 
 
 def test_adapter_rejects_missing_required_allowlisted_script(tmp_path):
     incomplete = _audited_candidate(tmp_path / "incomplete")
-    (incomplete / "scripts/trade/get_all_portfolios.py").unlink()
+    (incomplete / "scripts/trade/get_portfolio.py").unlink()
 
     with pytest.raises(ValueError, match="required audited file"):
         FutuAdapter(incomplete)

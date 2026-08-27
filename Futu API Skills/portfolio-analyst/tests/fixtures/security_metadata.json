@@ -1,0 +1,8 @@
+{
+  "provenance": "USER_CONFIG",
+  "securities": {
+    "US.AAPL": {"currency": "USD", "security_type": "STOCK"},
+    "HK.00700": {"currency": "HKD", "security_type": "STOCK"},
+    "US.MSFT": {"currency": "USD", "security_type": "STOCK"}
+  }
+}

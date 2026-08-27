@@ -59,17 +59,6 @@ def test_adapter_exposes_only_hard_coded_read_only_scripts(tmp_path):
                 "--json",
             ],
         ),
-        (
-            "get_all_portfolios",
-            [
-                "--acc-id",
-                "281756475296104250",
-                "--trd-env",
-                "SIMULATE",
-                "--show-option-strategy-view",
-                "--json",
-            ],
-        ),
     ],
 )
 def test_each_command_accepts_its_exact_official_option_set(tmp_path, command, arguments):
@@ -104,6 +93,13 @@ def test_argument_policy_rejects_abbreviated_unknown_missing_duplicate_and_malfo
 def test_private_option_schema_is_immutable():
     with pytest.raises(TypeError):
         futu_adapter._COMMAND_OPTION_SCHEMA["alias"] = ()
+
+
+def test_obsolete_all_portfolios_command_is_not_in_portfolio_allowlist(tmp_path):
+    adapter = FutuAdapter(_skill(tmp_path))
+
+    with pytest.raises(UnsafeFutuCommand, match="allowlist"):
+        adapter.validate_request("get_all_portfolios", ["--json"])
 
 
 def test_read_only_real_query_never_accepts_a_password(tmp_path):
@@ -459,7 +455,7 @@ def test_explicit_account_id_is_redacted_from_unlabeled_timeout_buffers(monkeypa
     monkeypatch.setattr(subprocess, "run", time_out)
 
     with pytest.raises(subprocess.TimeoutExpired) as caught:
-        adapter.run("get_all_portfolios", ["--acc-id", explicit_id], timeout=1)
+        adapter.run("get_portfolio", ["--acc-id", explicit_id, "--json"], timeout=1)
 
     exposed = f"{caught.value.cmd} {caught.value.output} {caught.value.stderr}"
     assert explicit_id not in exposed

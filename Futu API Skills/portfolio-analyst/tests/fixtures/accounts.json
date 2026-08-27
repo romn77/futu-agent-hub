@@ -5,9 +5,12 @@
       "acc_type": "MARGIN",
       "acc_role": "NORMAL",
       "trd_env": "REAL",
+      "card_num": "SANITIZED-CARD-1",
       "security_firm": "FUTUINC",
       "trdmarket_auth": ["US", "HK"],
       "acc_status": "ACTIVE",
+      "sim_acc_type": "NONE",
+      "competition_acc_name": "N/A",
       "ctx_type": "SEC"
     },
     {
@@ -15,9 +18,12 @@
       "acc_type": "CASH",
       "acc_role": "NORMAL",
       "trd_env": "REAL",
-      "security_firm": "FUTUINC",
+      "card_num": "SANITIZED-CARD-2",
+      "security_firm": "FUTUSECURITIES",
       "trdmarket_auth": ["US"],
       "acc_status": "ACTIVE",
+      "sim_acc_type": "NONE",
+      "competition_acc_name": "N/A",
       "ctx_type": "SEC"
     },
     {
@@ -25,9 +31,12 @@
       "acc_type": "FUTURES",
       "acc_role": "NORMAL",
       "trd_env": "REAL",
+      "card_num": "SANITIZED-CARD-3",
       "security_firm": "FUTUINC",
       "trdmarket_auth": ["FUTURES"],
       "acc_status": "ACTIVE",
+      "sim_acc_type": "NONE",
+      "competition_acc_name": "N/A",
       "ctx_type": "FUTURE"
     },
     {
@@ -35,9 +44,12 @@
       "acc_type": "MARGIN",
       "acc_role": "NORMAL",
       "trd_env": "SIMULATE",
+      "card_num": "SANITIZED-CARD-4",
       "security_firm": "FUTUINC",
       "trdmarket_auth": ["US"],
       "acc_status": "ACTIVE",
+      "sim_acc_type": "STOCK",
+      "competition_acc_name": "N/A",
       "ctx_type": "SEC"
     }
   ]

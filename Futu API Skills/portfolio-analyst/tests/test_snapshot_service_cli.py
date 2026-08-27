@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst import cli
+from portfolio_analyst.futu_adapter import FutuReadError
+from portfolio_analyst.repository import SourceDataError
 from portfolio_analyst.service import ConfigError, generate_snapshot, load_currency_converter
 from portfolio_analyst.settings import Settings
 
@@ -14,10 +16,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FixtureAdapter:
+    def protect_sensitive_values(self, values):
+        self.protected = tuple(values)
+
     def read_private_json(self, name, arguments, *, timeout=30):
-        del arguments, timeout
-        fixture = "accounts.json" if name == "get_accounts" else "portfolios.json"
-        return json.loads((FIXTURES / fixture).read_text(encoding="utf-8"))
+        del timeout
+        if name == "get_accounts":
+            return json.loads((FIXTURES / "accounts.json").read_text(encoding="utf-8"))
+        account_id = arguments[arguments.index("--acc-id") + 1]
+        number = {"90000001": 1, "90000002": 2}[account_id]
+        return json.loads(
+            (FIXTURES / f"portfolio_account_{number}.json").read_text(encoding="utf-8")
+        )
 
 
 def _configured_home(tmp_path):
@@ -26,6 +36,7 @@ def _configured_home(tmp_path):
     config.mkdir(parents=True)
     shutil.copy2(FIXTURES / "fx_rates.json", config / "fx_rates.json")
     shutil.copy2(FIXTURES / "classifications.json", config / "classifications.json")
+    shutil.copy2(FIXTURES / "security_metadata.json", config / "security_metadata.json")
     return home
 
 
@@ -40,11 +51,31 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
     )
 
     assert snapshot.schema_version == "1.0"
-    assert snapshot.nav_base == 1350
-    assert snapshot.cash_base == 250
+    assert snapshot.nav_base == 1250
+    assert snapshot.cash_base == 150
     assert snapshot.gross_exposure_base == 1100
     assert snapshot.data_quality.status == "COMPLETE"
     assert snapshot.data_quality.coverage == {"accounts_expected": 2, "accounts_read": 2}
+    assert snapshot.positions[1].currency == "HKD"
+    assert snapshot.positions[1].currency_provenance == "USER_CONFIG"
+    assert snapshot.positions[1].realized_pl_base == 10
+
+
+def test_service_stops_when_no_discovered_account_portfolio_was_read(tmp_path):
+    home = _configured_home(tmp_path)
+
+    class UnavailableAdapter(FixtureAdapter):
+        def read_private_json(self, name, arguments, *, timeout=30):
+            if name == "get_portfolio":
+                raise FutuReadError("unavailable")
+            return super().read_private_json(name, arguments, timeout=timeout)
+
+    with pytest.raises(SourceDataError, match="no account portfolio data"):
+        generate_snapshot(
+            Settings(data_home=home),
+            adapter=UnavailableAdapter(),
+            as_of=datetime.now(timezone.utc),
+        )
 
 
 def test_missing_fx_config_fails_closed_instead_of_inventing_rates(tmp_path):
@@ -156,3 +187,42 @@ def test_output_escape_is_rejected_as_structured_json(monkeypatch, tmp_path, cap
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "INVALID_OUTPUT"
     assert not (tmp_path / "escape.json").exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--json", "snapshot", "--trd-env", "LIVE"],
+        ["snapshot", "--trd-env", "LIVE", "--json"],
+        ["snapshot", "--base-currency", "--json"],
+        ["snapshot", "--unknown", "90000001", "--json"],
+    ],
+)
+def test_json_requested_parse_failures_emit_only_structured_json(argv, capsys):
+    assert cli.main(argv) == 2
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert payload == {
+        "ok": False,
+        "error": {"code": "CLI_USAGE", "message": "invalid command-line arguments"},
+    }
+    assert captured.err == ""
+    assert "90000001" not in captured.out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["--json", "snapshot", "--no-save"], ["snapshot", "--json", "--no-save"]],
+)
+def test_json_option_is_accepted_before_or_after_subcommand(monkeypatch, tmp_path, capsys, argv):
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(tmp_path / "private"))
+    monkeypatch.setattr(
+        cli,
+        "generate_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConfigError("expected test stop")),
+    )
+
+    assert cli.main(argv) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "CONFIG_ERROR"
