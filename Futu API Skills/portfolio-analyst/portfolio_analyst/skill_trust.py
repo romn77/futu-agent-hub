@@ -38,10 +38,15 @@ _AUDITED_FILES = (
         Path("scripts/trade/get_portfolio.py"),
         "0286bc8d0a0c0aef727e0b4c4f54c2791f6cc48e707ff0f5f1a55be04e2166be",
     ),
+    AuditedFile(
+        Path("scripts/quote/get_kline.py"),
+        "b60f94cd952be5617a098ffd56e19a4c7ee48780ef0346c47d65b77dd63fc345",
+    ),
 )
 _AUDITED_COMMANDS = (
     AuditedCommand("get_accounts", Path("scripts/trade/get_accounts.py")),
     AuditedCommand("get_portfolio", Path("scripts/trade/get_portfolio.py")),
+    AuditedCommand("get_kline", Path("scripts/quote/get_kline.py")),
 )
 _AUDITED_COMMAND_NAMES = frozenset(command.name for command in _AUDITED_COMMANDS)
 

@@ -26,7 +26,7 @@ def test_canonical_command_view_is_immutable_and_cannot_add_place_order():
     names = skill_trust.audited_command_names()
 
     assert isinstance(names, frozenset)
-    assert names == frozenset({"get_accounts", "get_portfolio"})
+    assert names == frozenset({"get_accounts", "get_portfolio", "get_kline"})
     assert "place_order" not in names
     with pytest.raises(AttributeError):
         names.add("place_order")

@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Sequence
 
 from .doctor import run_doctor
-from .futu_adapter import FutuReadError
+from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
+from .reporting import build_portfolio_report
 from .repository import SourceDataError
+from .risk import PolicyConfigError, analyze_risk, load_portfolio_policy
+from .schema import validate_portfolio_report_document, validate_risk_document
 from .service import ConfigError, generate_snapshot
-from .settings import Settings, SettingsError, resolve_output_path
+from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
 from .snapshot import UnsafeAggregationError
+from .snapshot_io import InvalidSnapshot, load_latest_snapshot, load_snapshot
 
 
 class _JsonParseError(ValueError):
@@ -66,6 +70,21 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         "--no-save", action="store_true", help="do not save, even when --output is supplied"
     )
     snapshot.add_argument("--verbose", action="store_true", help="show non-sensitive details")
+    for command, help_text in (
+        ("risk", "analyze risk from one immutable snapshot"),
+        ("analyze", "build comprehensive JSON and Markdown portfolio reports"),
+    ):
+        analysis = subparsers.add_parser(command, help=help_text)
+        source = analysis.add_mutually_exclusive_group(required=True)
+        source.add_argument("--latest", action="store_true", help="use latest valid saved snapshot")
+        source.add_argument("--snapshot", help="relative immutable snapshot path under data home")
+        analysis.add_argument("--lookback", type=int, default=120)
+        analysis.add_argument(
+            "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+        )
+        analysis.add_argument("--output", help="relative output path under data home")
+        analysis.add_argument("--no-save", action="store_true")
+        analysis.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -116,6 +135,63 @@ def main(argv: Sequence[str] | None = None) -> int:
                 destination.write_text(rendered + "\n", encoding="utf-8")
             return 0 if report["ok"] else 1
 
+        if args.command in {"risk", "analyze"}:
+            source_snapshot = (
+                load_latest_snapshot(settings.data_home)
+                if args.latest
+                else load_snapshot(settings.data_home, args.snapshot)
+            )
+            history_provider = None
+            skill_dir = discover_futuapi_skill()
+            if skill_dir is not None:
+                from .price_history import FutuAdjustedPriceProvider
+
+                history_provider = FutuAdjustedPriceProvider(FutuAdapter(skill_dir))
+            risk = analyze_risk(
+                source_snapshot,
+                lookback=args.lookback,
+                price_provider=history_provider,
+                policy=load_portfolio_policy(settings.data_home),
+            )
+            validate_risk_document(risk.to_dict())
+            if args.command == "risk":
+                payload = risk.to_dict()
+                rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+                if args.output and not args.no_save:
+                    SnapshotStore(settings.data_home).save(args.output, rendered + "\n")
+                if args.as_json:
+                    print(rendered)
+                else:
+                    print(
+                        f"Portfolio risk for {risk.source_snapshot_id}\n"
+                        f"As of: {risk.as_of.isoformat()}\n"
+                        f"Overall: {risk.overall_risk}\n"
+                        + "\n".join(
+                            f"- {finding.type} [{finding.severity}/{finding.review_priority}]: "
+                            f"{finding.summary}"
+                            for finding in risk.top_risks
+                        )
+                    )
+                return 0
+            report = build_portfolio_report(source_snapshot, risk)
+            payload = report.to_dict()
+            validate_portfolio_report_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                output = Path(args.output)
+                # Validate before writing either sibling so unsafe paths are side-effect free.
+                resolve_output_path(settings.data_home, output / "portfolio_report.json")
+                SnapshotStore(settings.data_home).save(
+                    output / "portfolio_report.json", rendered + "\n"
+                )
+                SnapshotStore(settings.data_home).save(
+                    output / "portfolio_report.md", report.to_markdown()
+                )
+            print(
+                rendered if args.as_json else report.to_markdown(), end="\n" if args.as_json else ""
+            )
+            return 0
+
         should_save = not args.no_save and (args.save or args.output is not None)
         snapshot = generate_snapshot(
             settings,
@@ -143,9 +219,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except SettingsError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except InvalidSnapshot as exc:
+        return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except SnapshotAlreadyExists as exc:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))
     except ConfigError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except PolicyConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except UnsafeAggregationError as exc:
         return _emit_error(args, "UNSAFE_AGGREGATION", str(exc))

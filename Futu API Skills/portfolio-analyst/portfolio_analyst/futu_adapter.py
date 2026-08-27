@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -170,6 +171,8 @@ class FutuAdapter:
         )
         if any(term in option for option in option_names for term in self.CREDENTIAL_FLAG_TERMS):
             raise UnsafeFutuCommand("credential and unlock arguments are forbidden")
+        if name == "get_kline":
+            return self._validate_kline_request(tuple(map(str, arguments)))
         normalized: list[str] = []
         sensitive_values: list[str] = []
         seen: set[str] = set()
@@ -213,6 +216,47 @@ class FutuAdapter:
             normalized.append(value)
             index += 1
         return FutuRequest(name, tuple(normalized), tuple(sensitive_values))
+
+    @staticmethod
+    def _validate_kline_request(arguments: tuple[str, ...]) -> FutuRequest:
+        """Require the one audited historical adjusted-daily invocation shape."""
+
+        if not arguments or not re.fullmatch(r"[A-Z]{2,4}\.[A-Z0-9][A-Z0-9.-]{0,31}", arguments[0]):
+            raise UnsafeFutuCommand("K-line security code is outside the command policy")
+        options: dict[str, str | None] = {}
+        index = 1
+        value_options = {"--ktype", "--start", "--end", "--rehab", "--session", "--num"}
+        while index < len(arguments):
+            option = arguments[index]
+            if option == "--json":
+                if option in options:
+                    raise UnsafeFutuCommand("duplicate Futu options are forbidden")
+                options[option] = None
+                index += 1
+                continue
+            if option not in value_options or option in options or index + 1 >= len(arguments):
+                raise UnsafeFutuCommand("Futu option is not in the command policy")
+            options[option] = arguments[index + 1]
+            index += 2
+        required = {"--ktype", "--start", "--end", "--rehab", "--session", "--num", "--json"}
+        if set(options) != required:
+            raise UnsafeFutuCommand("adjusted daily history requires the complete option policy")
+        if options["--ktype"] != "1d" or options["--rehab"] != "forward":
+            raise UnsafeFutuCommand("only forward-adjusted daily history is permitted")
+        if options["--session"] != "NONE" or options["--num"] != "1000":
+            raise UnsafeFutuCommand("K-line option value is outside the command policy")
+        try:
+            start = date.fromisoformat(str(options["--start"]))
+            end = date.fromisoformat(str(options["--end"]))
+        except ValueError:
+            raise UnsafeFutuCommand("K-line dates must use YYYY-MM-DD") from None
+        if start > end:
+            raise UnsafeFutuCommand("K-line start date must not follow end date")
+        normalized = [arguments[0]]
+        for option in ("--ktype", "--start", "--end", "--rehab", "--session", "--num"):
+            normalized.extend((option, str(options[option])))
+        normalized.append("--json")
+        return FutuRequest("get_kline", tuple(normalized))
 
     def run(
         self, name: str, arguments: Sequence[str], *, timeout: float = 30

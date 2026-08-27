@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portfolio_report.schema.json",
+  "title": "Comprehensive Portfolio Report 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "as_of", "source_snapshot_id", "base_currency", "coverage", "data_quality_status", "data_quality_notes", "summary", "largest_risks", "concentration", "exposures", "correlation", "lifecycle", "performance", "options", "hypothetical_simulation_candidates", "data_gaps"],
+  "properties": {
+    "schema_version": {"const": "1.0"}, "as_of": {"type": "string", "format": "date-time"},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-"}, "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "coverage": {"type": "object"}, "data_quality_status": {"type": "string"},
+    "data_quality_notes": {"type": "array", "items": {"type": "string"}}, "summary": {"type": "object"},
+    "largest_risks": {"type": "array", "minItems": 3, "maxItems": 3}, "concentration": {"type": "object"},
+    "exposures": {"type": "object"}, "correlation": {"type": "object"},
+    "lifecycle": {"type": "object", "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_4"}}, "required": ["status"]},
+    "performance": {"type": "object", "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_5"}}, "required": ["status"]},
+    "options": {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]},
+    "hypothetical_simulation_candidates": {"type": "array", "items": {"type": "string"}},
+    "data_gaps": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "concentration": {
+    "top_1": "0.4",
+    "top_3": "0.9",
+    "top_5": "0.9",
+    "hhi": "0.29"
+  },
+  "theme_full": {
+    "view": "OVERLAP_FULL_ALLOCATION",
+    "weights": {"AI": "0.7", "CLOUD": "0.4", "UNKNOWN": "0.2"}
+  },
+  "theme_split": {
+    "view": "ADDITIVE_SPLIT_ALLOCATION",
+    "weights": {"AI": "0.5", "CLOUD": "0.2", "UNKNOWN": "0.2"}
+  },
+  "top_risk_types": [
+    "POSITION_CONCENTRATION",
+    "SECTOR_CONCENTRATION",
+    "THEME_CONCENTRATION"
+  ]
+}

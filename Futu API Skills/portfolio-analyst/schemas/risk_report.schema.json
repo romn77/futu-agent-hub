@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "risk_report.schema.json",
+  "title": "Portfolio Risk Report 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "as_of", "source_snapshot_id", "coverage", "data_quality_status", "data_quality_notes", "overall_risk", "concentration", "exposures", "correlation", "top_risks", "policy_status", "policy_checks"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "as_of": {"type": "string", "format": "date-time"},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-"},
+    "coverage": {"type": "object"},
+    "data_quality_status": {"enum": ["COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"]},
+    "data_quality_notes": {"type": "array", "items": {"type": "string"}},
+    "overall_risk": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+    "policy_status": {"enum": ["NOT_CONFIGURED", "CONFIGURED"]},
+    "policy_checks": {"type": "object"},
+    "concentration": {"$ref": "#/$defs/concentration"},
+    "exposures": {"$ref": "#/$defs/exposures"},
+    "correlation": {"$ref": "#/$defs/correlation"},
+    "top_risks": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/finding"}}
+  },
+  "$defs": {
+    "decimal": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+    "concentration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "top_1", "top_3", "top_5", "hhi", "effective_positions", "note"],
+      "properties": {
+        "status": {"enum": ["AVAILABLE", "UNAVAILABLE"]}, "top_1": {"$ref": "#/$defs/nullableDecimal"},
+        "top_3": {"$ref": "#/$defs/nullableDecimal"}, "top_5": {"$ref": "#/$defs/nullableDecimal"},
+        "hhi": {"$ref": "#/$defs/nullableDecimal"}, "effective_positions": {"$ref": "#/$defs/nullableDecimal"},
+        "note": {"type": "string"}
+      }
+    },
+    "view": {
+      "type": "object", "required": ["basis", "weights"], "properties": {
+        "basis": {"const": "NAV"}, "view": {"type": "string"},
+        "weights": {"type": "object", "additionalProperties": {"$ref": "#/$defs/decimal"}}
+      }
+    },
+    "exposures": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sector", "region", "theme_full", "theme_split"],
+      "properties": {"sector": {"$ref": "#/$defs/view"}, "region": {"$ref": "#/$defs/view"}, "theme_full": {"$ref": "#/$defs/view"}, "theme_split": {"$ref": "#/$defs/view"}}
+    },
+    "correlation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "lookback", "minimum_observations", "adjusted_prices", "coverage", "matrix", "pairs", "clusters", "notes"],
+      "properties": {
+        "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]}, "lookback": {"type": "integer", "minimum": 61},
+        "minimum_observations": {"type": "integer", "minimum": 2}, "adjusted_prices": {"const": true},
+        "coverage": {"type": "object"}, "matrix": {"type": "object"}, "pairs": {"type": "array"},
+        "clusters": {"type": "array"}, "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "severity", "summary", "evidence", "affected_positions", "review_priority", "simulation_direction"],
+      "properties": {
+        "type": {"type": "string"}, "severity": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+        "summary": {"type": "string"}, "evidence": {"type": "object"},
+        "affected_positions": {"type": "array", "items": {"type": "string"}},
+        "review_priority": {"enum": ["P0", "P1", "P2", "P3"]},
+        "simulation_direction": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

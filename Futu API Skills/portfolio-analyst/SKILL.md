@@ -99,3 +99,18 @@ exposure is the absolute value of negative positions, NAV is `cash + long - shor
 is `long + short`, and net exposure is `long - short`. In ordinary long-only portfolios, position
 weights plus cash weight must reconcile to 1 within `0.00000001`.
 Non-positive NAV stops snapshot generation because portfolio weights would be misleading.
+
+Analyze an existing immutable snapshot without persistence:
+
+```bash
+python scripts/portfolio.py risk --snapshot snapshots/FILE.json --lookback 120 --json --no-save
+python scripts/portfolio.py analyze --latest --json --no-save
+```
+
+Exactly one of `--latest` and `--snapshot` is required. The selected document is schema-validated
+and its full-body snapshot identity is recomputed before use. `risk --output FILE` saves immutable
+JSON; `analyze --output DIRECTORY` saves `portfolio_report.json` and `portfolio_report.md`.
+`--no-save` always wins and the default remains side-effect free. Reports preserve one
+`source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
+order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
+correlation, optional user-policy, unavailable-data, and Phase 4-6 placeholder contracts.

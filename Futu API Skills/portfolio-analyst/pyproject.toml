@@ -21,4 +21,4 @@ line-length = 100
 target-version = "py310"
 
 [tool.setuptools.data-files]
-schemas = ["schemas/portfolio_snapshot.schema.json"]
+schemas = ["schemas/portfolio_snapshot.schema.json", "schemas/risk_report.schema.json", "schemas/portfolio_report.schema.json"]
