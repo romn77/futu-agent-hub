@@ -11,6 +11,7 @@ from portfolio_analyst.rebalance import (
     RebalanceRequest,
     simulate_rebalance,
 )
+from portfolio_analyst.schema import validate_rebalance_result_document
 from test_risk_analysis import snapshot
 
 
@@ -63,23 +64,63 @@ def test_no_margin_and_no_short_constraints_fail_closed_but_explicit_modes_are_p
         changes=(RebalanceChange("US.AAA", "SHARE_DELTA", Decimal("-2")),),
     )
     assert simulate_rebalance(source, cash_hungry).feasible is False
-    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
+    with pytest.raises(RebalanceError, match="short"):
         simulate_rebalance(source, shorting)
     assert simulate_rebalance(source, replace(cash_hungry, allow_margin=True)).feasible is True
-    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
-        simulate_rebalance(source, replace(shorting, allow_short=True))
+    signed = simulate_rebalance(source, replace(shorting, allow_short=True))
+    assert signed.feasible is True
+    assert signed.after.positions["US.AAA"]["quantity"] == Decimal("-1")
+    assert signed.after.long_market_value_base == Decimal("500")
+    assert signed.after.short_market_value_base == Decimal("400")
+    assert signed.after.gross_exposure_base == Decimal("900")
+    assert signed.after.net_exposure_base == Decimal("100")
+    assert signed.after.long_weight == Decimal("0.5")
+    assert signed.after.short_weight == Decimal("0.4")
+    assert signed.after.gross_weight == Decimal("0.9")
+    assert signed.after.net_weight == Decimal("0.1")
+    assert signed.after.concentration_status == "UNAVAILABLE_SIGNED"
+    assert all(value is None for value in signed.after.concentration.values())
+    assert signed.after.exposure_views["short"]["sector"] == {"TECH": Decimal("0.4")}
+    assert signed.after.exposure_views["net"]["sector"] == {
+        "HEALTH": Decimal("0.2"),
+        "TECH": Decimal("-0.1"),
+    }
+    assert signed.risk_changes["status"] == "STRUCTURAL_ONLY_SIGNED"
+    assert signed.risk_changes["top_1"] is None
+    assert signed.risk_changes["concentration"] is None
+    assert any("signed" in warning.lower() for warning in signed.warnings)
+    assert signed.data_quality_status == "PARTIAL"
+    validate_rebalance_result_document(signed.to_dict())
 
 
-def test_signed_source_portfolio_fails_closed_before_simulation():
+def test_signed_source_requires_explicit_short_authority_and_preserves_warning():
     source = snapshot()
+    signed_position = replace(
+        source.positions[0],
+        quantity=Decimal("-1"),
+        can_sell_quantity=Decimal("0"),
+        market_value_local=Decimal("-400"),
+        market_value_base=Decimal("-400"),
+        weight=Decimal("-2"),
+    )
     signed_source = replace(
         source,
-        positions=(replace(source.positions[0], quantity=Decimal("-1")), *source.positions[1:]),
+        positions=(signed_position, *source.positions[1:]),
+        nav_base=Decimal("200"),
     )
     request = RebalanceRequest(signed_source.snapshot_id, signed_source.base_currency)
 
-    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
+    with pytest.raises(RebalanceError, match="short"):
         simulate_rebalance(signed_source, request)
+    result = simulate_rebalance(signed_source, replace(request, allow_short=True))
+    assert result.before.concentration_status == "UNAVAILABLE_SIGNED"
+    assert result.after.concentration_status == "UNAVAILABLE_SIGNED"
+    assert result.before.short_market_value_base == Decimal("400")
+    assert result.risk_changes["status"] == "STRUCTURAL_ONLY_SIGNED"
+    assert any(
+        "source" in warning.lower() and "signed" in warning.lower() for warning in result.warnings
+    )
+    validate_rebalance_result_document(result.to_dict())
 
 
 def test_duplicate_conflicting_changes_missing_identity_and_currency_are_rejected():

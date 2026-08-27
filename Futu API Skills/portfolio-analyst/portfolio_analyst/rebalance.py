@@ -84,9 +84,19 @@ class PortfolioState:
     nav_base: Decimal
     cash_base: Decimal
     cash_weight: Decimal
+    long_market_value_base: Decimal
+    short_market_value_base: Decimal
+    gross_exposure_base: Decimal
+    net_exposure_base: Decimal
+    long_weight: Decimal
+    short_weight: Decimal
+    gross_weight: Decimal
+    net_weight: Decimal
     positions: Mapping[str, Mapping[str, Decimal]]
     exposures: Mapping[str, Mapping[str, Decimal]]
-    concentration: Mapping[str, Decimal]
+    exposure_views: Mapping[str, Mapping[str, Mapping[str, Decimal]]]
+    concentration_status: str
+    concentration: Mapping[str, Decimal | None]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -99,6 +109,7 @@ class PortfolioState:
             "exposures",
             MappingProxyType({k: MappingProxyType(dict(v)) for k, v in self.exposures.items()}),
         )
+        object.__setattr__(self, "exposure_views", _deep_freeze(dict(self.exposure_views)))
         object.__setattr__(self, "concentration", MappingProxyType(dict(self.concentration)))
 
 
@@ -154,6 +165,10 @@ class RebalanceResult:
             f"- Price/FX evidence: {safe(json.dumps(_json_value(self.evidence), sort_keys=True))}",
             f"- Before cash: {self.before.cash_base}",
             f"- After cash: {self.after.cash_base}",
+            f"- Before long / short / gross / net market value: {self.before.long_market_value_base} / {self.before.short_market_value_base} / {self.before.gross_exposure_base} / {self.before.net_exposure_base}",
+            f"- After long / short / gross / net market value: {self.after.long_market_value_base} / {self.after.short_market_value_base} / {self.after.gross_exposure_base} / {self.after.net_exposure_base}",
+            f"- Before exposure views: {safe(json.dumps(_json_value(self.before.exposure_views), sort_keys=True))}",
+            f"- After exposure views: {safe(json.dumps(_json_value(self.after.exposure_views), sort_keys=True))}",
             f"- Risk comparison status: {safe(self.risk_changes['status'])}",
             f"- Before weights: {safe(json.dumps(_json_value({k: v['weight'] for k, v in self.before.positions.items()}), sort_keys=True))}",
             f"- After weights: {safe(json.dumps(_json_value({k: v['weight'] for k, v in self.after.positions.items()}), sort_keys=True))}",
@@ -198,6 +213,10 @@ class RebalanceResult:
                 f"Price/FX evidence: {terminal_text(json.dumps(_json_value(self.evidence), sort_keys=True))}",
                 f"Before cash: {self.before.cash_base}",
                 f"After cash: {self.after.cash_base}",
+                f"Before long/short/gross/net: {self.before.long_market_value_base}/{self.before.short_market_value_base}/{self.before.gross_exposure_base}/{self.before.net_exposure_base}",
+                f"After long/short/gross/net: {self.after.long_market_value_base}/{self.after.short_market_value_base}/{self.after.gross_exposure_base}/{self.after.net_exposure_base}",
+                f"Before exposure views: {terminal_text(json.dumps(_json_value(self.before.exposure_views), sort_keys=True))}",
+                f"After exposure views: {terminal_text(json.dumps(_json_value(self.after.exposure_views), sort_keys=True))}",
                 f"Risk comparison: {terminal_text(self.risk_changes['status'])}",
                 f"Before weights: {terminal_text(json.dumps(_json_value({k: v['weight'] for k, v in self.before.positions.items()}), sort_keys=True))}",
                 f"After weights: {terminal_text(json.dumps(_json_value({k: v['weight'] for k, v in self.after.positions.items()}), sort_keys=True))}",
@@ -273,29 +292,52 @@ def _state(
     nav: Decimal,
 ) -> PortfolioState:
     weights = {identity: value / nav for identity, value in positions.items() if value != 0}
-    dimensions: dict[str, dict[str, Decimal]] = {
-        "sector": {},
-        "region": {},
-        "theme_full": {},
-        "theme_split": {},
+    exposure_views: dict[str, dict[str, dict[str, Decimal]]] = {
+        view: {"sector": {}, "region": {}, "theme_full": {}, "theme_split": {}}
+        for view in ("long", "short", "gross", "net")
     }
     for identity, weight in weights.items():
         position = metadata[identity]
+        view_weights = {
+            "long": max(weight, Decimal(0)),
+            "short": max(-weight, Decimal(0)),
+            "gross": abs(weight),
+            "net": weight,
+        }
         for dimension, label in (("sector", position.sector), ("region", position.region)):
-            dimensions[dimension][label] = dimensions[dimension].get(label, Decimal(0)) + weight
+            for view, view_weight in view_weights.items():
+                if view_weight == 0:
+                    continue
+                exposure_views[view][dimension][label] = (
+                    exposure_views[view][dimension].get(label, Decimal(0)) + view_weight
+                )
         themes = position.themes or ("UNKNOWN",)
         for theme in themes:
-            dimensions["theme_full"][theme] = (
-                dimensions["theme_full"].get(theme, Decimal(0)) + weight
-            )
-            dimensions["theme_split"][theme] = dimensions["theme_split"].get(
-                theme, Decimal(0)
-            ) + weight / len(themes)
+            for view, view_weight in view_weights.items():
+                if view_weight == 0:
+                    continue
+                exposure_views[view]["theme_full"][theme] = (
+                    exposure_views[view]["theme_full"].get(theme, Decimal(0)) + view_weight
+                )
+                exposure_views[view]["theme_split"][theme] = exposure_views[view][
+                    "theme_split"
+                ].get(theme, Decimal(0)) + view_weight / len(themes)
+    long_value = sum((max(value, Decimal(0)) for value in positions.values()), Decimal(0))
+    short_value = sum((max(-value, Decimal(0)) for value in positions.values()), Decimal(0))
+    signed = short_value > 0
     return PortfolioState(
         snapshot_id,
         nav,
         cash,
         cash / nav,
+        long_value,
+        short_value,
+        long_value + short_value,
+        long_value - short_value,
+        long_value / nav,
+        short_value / nav,
+        (long_value + short_value) / nav,
+        (long_value - short_value) / nav,
         {
             identity: {
                 "quantity": quantities[identity],
@@ -304,8 +346,14 @@ def _state(
             }
             for identity, value in sorted(positions.items())
         },
-        dimensions,
-        _concentration(positions, nav),
+        exposure_views["net"],
+        exposure_views,
+        "UNAVAILABLE_SIGNED" if signed else "AVAILABLE",
+        (
+            {name: None for name in ("top_1", "top_3", "top_5", "hhi")}
+            if signed
+            else _concentration(positions, nav)
+        ),
     )
 
 
@@ -316,10 +364,6 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         raise RebalanceError("request base currency does not match snapshot currency")
     if snapshot.nav_base <= 0:
         raise RebalanceError("source NAV must be positive")
-    if any(
-        position.quantity < 0 or position.market_value_base < 0 for position in snapshot.positions
-    ):
-        raise RebalanceError("UNSUPPORTED_PORTFOLIO: signed source positions are not supported")
     metadata: dict[str, NormalizedPosition] = {}
     values: dict[str, Decimal] = {}
     quantities: dict[str, Decimal] = {}
@@ -345,6 +389,17 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
             metadata[identity] = position
             values[identity] = position.market_value_base
             quantities[identity] = position.quantity
+    if any(
+        quantities[identity] * metadata[identity].last_price_local * metadata[identity].fx_to_base
+        != value
+        for identity, value in values.items()
+    ):
+        raise RebalanceError("source quantity/value does not reconcile with price/FX evidence")
+    source_signed = any(
+        quantity < 0 or values[identity] < 0 for identity, quantity in quantities.items()
+    )
+    if source_signed and not request.allow_short:
+        raise RebalanceError("source portfolio contains short positions while shorting is disabled")
     before = _state(
         snapshot.snapshot_id,
         values,
@@ -356,7 +411,11 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     final_nav = snapshot.nav_base + request.new_cash
     cash = snapshot.cash_base + request.new_cash
     applied: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = (
+        ["source portfolio contains signed positions; long-only concentration is unavailable"]
+        if source_signed
+        else []
+    )
     positive_delta = Decimal(0)
     feasible = True
     for change in request.changes:
@@ -402,20 +461,23 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     if cash < 0 and not request.allow_margin:
         warnings.append("simulated cash is negative while margin is disabled")
         feasible = False
-    if any(quantity < 0 for quantity in quantities.values()) and not request.allow_short:
-        warnings.append("simulated quantity is negative while shorting is disabled")
-        feasible = False
-    if any(quantity < 0 for quantity in quantities.values()):
-        raise RebalanceError(
-            "UNSUPPORTED_PORTFOLIO: signed hypothetical positions are not supported"
+    after_signed = any(quantity < 0 for quantity in quantities.values())
+    if after_signed and not request.allow_short:
+        raise RebalanceError("simulated quantity is negative while shorting is disabled")
+    if after_signed:
+        warnings.append(
+            "hypothetical portfolio contains signed positions; long-only concentration is unavailable"
         )
     after = _state(snapshot.snapshot_id, values, quantities, metadata, cash, final_nav)
+    signed_authority = source_signed or after_signed
     risk_changes: dict[str, Any] = {
-        name: after.concentration[name] - before.concentration[name]
+        name: (None if signed_authority else after.concentration[name] - before.concentration[name])
         for name in before.concentration
     }
-    risk_changes["status"] = "STRUCTURAL_ONLY"
-    risk_changes["concentration"] = MappingProxyType(dict(after.concentration))
+    risk_changes["status"] = "STRUCTURAL_ONLY_SIGNED" if signed_authority else "STRUCTURAL_ONLY"
+    risk_changes["concentration"] = (
+        None if signed_authority else MappingProxyType(dict(after.concentration))
+    )
     for dimension in ("sector", "region", "theme_full", "theme_split"):
         risk_changes[dimension] = MappingProxyType(
             {
@@ -426,6 +488,26 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
                 )
             }
         )
+    risk_changes["exposure_views"] = MappingProxyType(
+        {
+            view: MappingProxyType(
+                {
+                    dimension: MappingProxyType(
+                        {
+                            key: after.exposure_views[view][dimension].get(key, Decimal(0))
+                            - before.exposure_views[view][dimension].get(key, Decimal(0))
+                            for key in sorted(
+                                set(before.exposure_views[view][dimension])
+                                | set(after.exposure_views[view][dimension])
+                            )
+                        }
+                    )
+                    for dimension in ("sector", "region", "theme_full", "theme_split")
+                }
+            )
+            for view in ("long", "short", "gross", "net")
+        }
+    )
     request_body = {
         "schema_version": request.schema_version,
         "snapshot_id": request.snapshot_id,
@@ -481,7 +563,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     quality_status = "PARTIAL" if quality_notes else "COMPLETE"
     identity_body = _json_value(
         {
-            "schema_version": "1.2",
+            "schema_version": "1.3",
             "source_snapshot_id": snapshot.snapshot_id,
             "as_of": snapshot.as_of,
             "base_currency": snapshot.base_currency,
@@ -508,7 +590,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         ).hexdigest()[:16]
     )
     return RebalanceResult(
-        "1.2",
+        "1.3",
         simulation_id,
         snapshot.snapshot_id,
         snapshot.as_of,

@@ -173,6 +173,133 @@ def test_complete_fx_enables_base_pnl_and_currency_qualified_statistics():
     validate_trade_review_document(report.to_dict())
 
 
+def test_base_currency_fifo_pnl_is_exact_without_snapshot_fx_and_rebuilds_statistics():
+    report = build_trade_review(
+        orders=[],
+        deals=[
+            _deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00"),
+            _deal("d2", "o2", "SELL", "1", "12", "2026-08-04 10:00:00"),
+            _deal("d3", "o3", "BUY", "1", "10", "2026-08-05 10:00:00"),
+            _deal("d4", "o4", "SELL", "1", "8", "2026-08-06 10:00:00"),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        base_currency="USD",
+    )
+
+    assert [trip.realized_pl_base for trip in report.round_trips] == [
+        Decimal("2"),
+        Decimal("-2"),
+    ]
+    assert report.coverage["realized_pl_base_coverage"] == "COMPLETE"
+    assert report.metrics.average_win_base == Decimal("2")
+    assert report.metrics.average_loss_base == Decimal("-2")
+    assert report.metrics.payoff_ratio_base == Decimal("1")
+    assert report.metrics.profit_factor_base == Decimal("1")
+    assert report.metrics.expectancy_base == Decimal("0")
+    assert report.metrics.pnl_statistics_by_currency["USD"] == {
+        "closed_trips": 2,
+        "wins": 1,
+        "losses": 1,
+        "gross_profit": Decimal("2"),
+        "gross_loss_absolute": Decimal("2"),
+        "average_win": Decimal("2"),
+        "average_loss": Decimal("-2"),
+        "payoff_ratio": Decimal("1"),
+        "profit_factor": Decimal("1"),
+        "expectancy": Decimal("0"),
+    }
+    validate_trade_review_document(report.to_dict())
+    with pytest.raises(Exception, match="FX must equal one"):
+        build_trade_review(
+            orders=[],
+            deals=[
+                _deal(
+                    "bad-fx",
+                    "bad-order",
+                    "BUY",
+                    "1",
+                    "10",
+                    "2026-08-03 10:00:00",
+                    fx_to_base="0.9",
+                )
+            ],
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+            base_currency="USD",
+        )
+
+
+def test_cross_currency_fifo_keeps_local_statistics_without_false_base_pnl():
+    report = build_trade_review(
+        orders=[],
+        deals=[
+            _deal(
+                "d1",
+                "o1",
+                "BUY",
+                "1",
+                "80",
+                "2026-08-03 10:00:00",
+                code="HK.00001",
+                currency="HKD",
+                fx_to_base="0.125",
+            ),
+            _deal(
+                "d2",
+                "o2",
+                "SELL",
+                "1",
+                "88",
+                "2026-08-04 10:00:00",
+                code="HK.00001",
+                currency="HKD",
+                fx_to_base="0.125",
+            ),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        base_currency="USD",
+    )
+
+    assert report.round_trips[0].realized_pl_base is None
+    assert report.coverage["realized_pl_base_coverage"] == "PARTIAL"
+    assert report.metrics.expectancy_base is None
+    assert report.metrics.pnl_statistics_by_currency["HKD"]["average_win"] == Decimal("8")
+    assert report.metrics.pnl_statistics_by_currency["HKD"]["expectancy"] == Decimal("8")
+    assert report.data_quality_status == "PARTIAL"
+    validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("round_trips", 0, "realized_pl_base"), "999"),
+        (("metrics", "expectancy_base"), "999"),
+        (("metrics", "pnl_statistics_by_currency", "USD", "expectancy"), "999"),
+        (("coverage", "realized_pl_base_coverage"), "PARTIAL"),
+    ],
+)
+def test_base_currency_fifo_authority_rejects_rehashed_pnl_tampering(path, value):
+    payload = build_trade_review(
+        orders=[],
+        deals=[
+            _deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00"),
+            _deal("d2", "o2", "SELL", "1", "12", "2026-08-04 10:00:00"),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        base_currency="USD",
+    ).to_dict()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    _rehash_trade(payload)
+    with pytest.raises(Exception):
+        validate_trade_review_document(payload)
+
+
 def test_observed_behavior_is_structured_without_policy_but_policy_metrics_are_unavailable():
     report = build_trade_review(
         orders=[],
@@ -331,6 +458,35 @@ def test_rebalance_semantics_reject_rehashed_formula_state_and_evidence_tamperin
             snapshot().snapshot_id,
             "USD",
             changes=(RebalanceChange("US.AAA", "AMOUNT_DELTA", Decimal("-10")),),
+        ),
+    ).to_dict()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    _rehash_simulation(payload)
+    with pytest.raises(Exception):
+        validate_rebalance_result_document(payload)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("after", "short_market_value_base"), "1"),
+        (("after", "exposure_views", "short", "sector", "TECH"), "0.1"),
+        (("risk_changes", "status"), "STRUCTURAL_ONLY"),
+        (("risk_changes", "exposure_views", "gross", "sector", "TECH"), "1"),
+    ],
+)
+def test_signed_rebalance_semantics_reject_rehashed_authority_tampering(path, value):
+    source = snapshot()
+    payload = simulate_rebalance(
+        source,
+        RebalanceRequest(
+            source.snapshot_id,
+            "USD",
+            changes=(RebalanceChange("US.AAA", "SHARE_DELTA", Decimal("-2")),),
+            allow_short=True,
         ),
     ).to_dict()
     target = payload

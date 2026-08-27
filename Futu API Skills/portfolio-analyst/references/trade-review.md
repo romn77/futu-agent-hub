@@ -1,6 +1,6 @@
 # Trade review contract
 
-The authoritative report contract is version `1.4`; earlier reports without total-source
+The authoritative report contract is version `1.5`; earlier reports without total-source
 unavailability semantics or canonical context markets are rejected.
 
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
@@ -43,9 +43,11 @@ are excluded from FIFO and trade metrics.
 Every fill is currency-qualified. Local monetary metrics are emitted only as currency buckets.
 Base-currency notional and NAV turnover are computed only when one immutable source snapshot supplies
 base currency, NAV, security currency, and FX for every analyzed fill. Snapshot FX is current
-valuation evidence, not transaction-date FX: exact historical `realized_pl_base`, payoff, profit
-factor, and expectancy remain `null` and the limitation is explicit. Currencies are never added
-together directly.
+valuation evidence, not transaction-date FX. When a fill currency equals `base_currency`, currency
+identity is exact 1:1 transaction evidence, so FIFO `realized_pl_base`, average win/loss, payoff,
+profit factor, and expectancy are exact. Cross-currency trips remain `null` without transaction-date
+FX and make base P&L coverage partial. Per-currency local P&L pools and statistics remain available;
+currencies are never added together directly.
 
 Raw order and deal IDs must be non-empty and unique in their account/context. Masked identities are
 HMAC-derived from raw identity plus account/canonical market, so aliases and report identity do not

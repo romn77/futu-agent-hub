@@ -150,6 +150,7 @@ class TradeMetrics:
     distinct_symbols: int | None
     notional_by_currency: Mapping[str, Mapping[str, Decimal]] | None
     realized_pl_by_currency: Mapping[str, Decimal] | None
+    pnl_statistics_by_currency: Mapping[str, Mapping[str, Any]] | None
     buy_notional_base: Decimal | None
     sell_notional_base: Decimal | None
     portfolio_turnover: Decimal | None
@@ -191,6 +192,17 @@ class TradeMetrics:
                 self,
                 "realized_pl_by_currency",
                 MappingProxyType(dict(self.realized_pl_by_currency)),
+            )
+        if self.pnl_statistics_by_currency is not None:
+            object.__setattr__(
+                self,
+                "pnl_statistics_by_currency",
+                MappingProxyType(
+                    {
+                        key: MappingProxyType(dict(value))
+                        for key, value in self.pnl_statistics_by_currency.items()
+                    }
+                ),
             )
         if self.per_symbol_turnover is not None:
             object.__setattr__(
@@ -292,6 +304,7 @@ class TradeReview:
             f"- Account/context coverage: {self.coverage['accounts_covered']} of {self.coverage['accounts_requested']} accounts; {self.coverage['contexts_read']} of {self.coverage['contexts_requested']} contexts read",
             f"- Failed / budget-omitted contexts: {self.coverage['contexts_failed']} / {self.coverage['contexts_omitted_budget']}",
             f"- Monetary base coverage: {safe(self.coverage['monetary_base_coverage'])}",
+            f"- Realized P&L base coverage: {safe(self.coverage['realized_pl_base_coverage'])}",
             f"- Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
             f"- Data quality: {self.data_quality_status}",
             f"- Policy status: {self.policy_status}",
@@ -301,6 +314,7 @@ class TradeReview:
             f"- Closed FIFO trips: {_shown(metrics.closed_trips)}",
             f"- Win rate: {metrics.win_rate if metrics.win_rate is not None else 'Unavailable'}",
             f"- Local-currency notional buckets: {safe(json.dumps(_json_value(metrics.notional_by_currency), sort_keys=True)) if metrics.notional_by_currency is not None else 'Unavailable'}",
+            f"- Local-currency P&L statistics: {safe(json.dumps(_json_value(metrics.pnl_statistics_by_currency), sort_keys=True)) if metrics.pnl_statistics_by_currency is not None else 'Unavailable'}",
             f"- Buy / sell notional ({safe(self.base_currency or 'base unavailable')}): {metrics.buy_notional_base if metrics.buy_notional_base is not None else 'Unavailable'} / {metrics.sell_notional_base if metrics.sell_notional_base is not None else 'Unavailable'}",
             f"- Portfolio turnover: {_shown(metrics.portfolio_turnover)}",
             f"- Per-symbol turnover: {safe(json.dumps(_json_value(metrics.per_symbol_turnover), sort_keys=True)) if metrics.per_symbol_turnover is not None else 'Unavailable'}",
@@ -364,6 +378,7 @@ class TradeReview:
                 f"Source snapshot as of: {self.source_snapshot_as_of.isoformat() if self.source_snapshot_as_of is not None else 'Unavailable'}",
                 f"Coverage: {self.coverage['accounts_covered']}/{self.coverage['accounts_requested']} accounts; {self.coverage['contexts_read']}/{self.coverage['contexts_requested']} contexts; {self.coverage['contexts_failed']} failed; {self.coverage['contexts_omitted_budget']} budget-omitted",
                 f"Monetary base coverage: {safe(self.coverage['monetary_base_coverage'])}",
+                f"Realized P&L base coverage: {safe(self.coverage['realized_pl_base_coverage'])}",
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
                 f"Policy: {self.policy_status}",
@@ -372,6 +387,7 @@ class TradeReview:
                 f"Orders: {_shown(self.metrics.order_count)}",
                 f"Fills: {_shown(self.metrics.fill_count)}",
                 f"Closed FIFO trips: {_shown(self.metrics.closed_trips)}",
+                f"Local-currency P&L statistics: {safe(json.dumps(_json_value(self.metrics.pnl_statistics_by_currency), sort_keys=True)) if self.metrics.pnl_statistics_by_currency is not None else 'Unavailable'}",
                 f"Portfolio turnover: {_shown(self.metrics.portfolio_turnover)}",
                 f"Holding average/median seconds: {_shown(self.metrics.average_holding_seconds)}/{_shown(self.metrics.median_holding_seconds)}",
                 f"Expectancy/profit factor: {_shown(self.metrics.expectancy_base)}/{_shown(self.metrics.profit_factor_base)}",
@@ -755,7 +771,7 @@ def _group_orders(fills: Sequence[NormalizedFill]) -> tuple[OrderGroup, ...]:
 
 
 def _fifo(
-    fills: Sequence[NormalizedFill],
+    fills: Sequence[NormalizedFill], base_currency: str | None
 ) -> tuple[tuple[RoundTrip, ...], tuple[OpenLot, ...], int]:
     inventories: dict[tuple[str, str], list[list[Any]]] = {}
     trips: list[RoundTrip] = []
@@ -776,9 +792,9 @@ def _fifo(
             if lot[3] != fill.currency:
                 raise TradeReviewInputError("one security has conflicting fill currencies")
             realized_local = (fill.price - lot[1]) * matched
-            # Snapshot FX is current valuation evidence, not transaction-date FX.
-            # Exact historical base-currency realized P&L therefore remains unavailable.
-            realized_base = None
+            # Currency identity is exact transaction evidence. A base-currency
+            # transaction therefore has an exact 1:1 conversion without snapshot FX.
+            realized_base = realized_local if fill.currency == base_currency else None
             trips.append(
                 RoundTrip(
                     fill.account_ref,
@@ -815,6 +831,38 @@ def _median(values: Sequence[Decimal]) -> Decimal | None:
     ordered = sorted(values)
     middle = len(ordered) // 2
     return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _pnl_statistics_by_currency(
+    trips: Sequence[RoundTrip],
+) -> dict[str, dict[str, Any]]:
+    pools: dict[str, list[Decimal]] = {}
+    for trip in trips:
+        if trip.currency != "UNKNOWN":
+            pools.setdefault(trip.currency, []).append(trip.realized_pl_local)
+    result: dict[str, dict[str, Any]] = {}
+    for currency, values in sorted(pools.items()):
+        wins = [value for value in values if value > 0]
+        losses = [value for value in values if value < 0]
+        win_total = sum(wins, Decimal(0))
+        loss_total = -sum(losses, Decimal(0))
+        average_win = None if not wins else win_total / len(wins)
+        average_loss = None if not losses else -loss_total / len(losses)
+        result[currency] = {
+            "closed_trips": len(values),
+            "wins": len(wins),
+            "losses": len(losses),
+            "gross_profit": win_total,
+            "gross_loss_absolute": loss_total,
+            "average_win": average_win,
+            "average_loss": average_loss,
+            "payoff_ratio": (
+                None if average_win is None or average_loss is None else average_win / -average_loss
+            ),
+            "profit_factor": None if loss_total == 0 else win_total / loss_total,
+            "expectancy": sum(values, Decimal(0)) / len(values),
+        }
+    return result
 
 
 def build_trade_review(
@@ -866,6 +914,13 @@ def build_trade_review(
             key=lambda item: (item.account_ref, item.order_id),
         )
     )
+    if base_currency is not None and any(
+        fill.currency == base_currency
+        and fill.fx_to_base is not None
+        and fill.fx_to_base != Decimal(1)
+        for fill in normalized_all
+    ):
+        raise TradeReviewInputError("base-currency fill FX must equal one")
     source_unavailable = (
         not coverage_context.get("successful_contexts", ())
         if coverage_context is not None
@@ -897,7 +952,7 @@ def build_trade_review(
     excluded_events = tuple(fill for fill in normalized_all if fill.event_type != "TRADE")
     normalized = tuple(fill for fill in normalized_all if fill.event_type == "TRADE")
     groups = _group_orders(normalized)
-    trips, open_lots, unmatched_sells = _fifo(normalized)
+    trips, open_lots, unmatched_sells = _fifo(normalized, base_currency)
 
     orders_by_key = {(item.account_ref, item.order_id): item for item in normalized_orders}
     fills_by_key: dict[tuple[str, str], list[NormalizedFill]] = {}
@@ -955,6 +1010,7 @@ def build_trade_review(
             realized_by_currency[trip.currency] = (
                 realized_by_currency.get(trip.currency, Decimal(0)) + trip.realized_pl_local
             )
+    pnl_statistics_by_currency = _pnl_statistics_by_currency(trips)
     base_complete = (
         not source_unavailable
         and bool(base_currency and source_snapshot_id and source_snapshot_as_of)
@@ -1001,7 +1057,7 @@ def build_trade_review(
         else {}
     )
     holdings = [x.holding_seconds for x in trips]
-    pnl_base_complete = base_complete and all(trip.realized_pl_base is not None for trip in trips)
+    pnl_base_complete = bool(trips) and all(trip.realized_pl_base is not None for trip in trips)
     profitable_trips = [x for x in trips if x.realized_pl_local > 0]
     profits = [
         x.realized_pl_base
@@ -1120,6 +1176,7 @@ def build_trade_review(
         len({fill.identity for fill in normalized}),
         currency_buckets,
         realized_by_currency,
+        pnl_statistics_by_currency,
         buy_base,
         sell_base,
         None
@@ -1210,10 +1267,10 @@ def build_trade_review(
             *notes,
             "base-currency monetary aggregation is unavailable because fill currency/FX evidence is incomplete",
         )
-    if base_complete and trips:
+    if trips and not pnl_base_complete:
         notes = (
             *notes,
-            "snapshot FX supports current-value notional normalization only; exact historical base-currency realized P&L requires transaction-date FX and is UNAVAILABLE",
+            "cross-currency historical base P&L is unavailable without transaction-date FX; snapshot FX is current-valuation evidence only",
         )
     if cooldown is None:
         notes = (*notes, "reentry metric is UNAVAILABLE because no cooldown policy is configured")
@@ -1359,13 +1416,16 @@ def build_trade_review(
         "excluded_nontrade_events": len(excluded_events),
         "corporate_action_evidence_status": corporate_action_evidence_status,
         "monetary_base_coverage": "COMPLETE" if base_complete else "PARTIAL",
+        "realized_pl_base_coverage": (
+            "UNAVAILABLE" if not trips else "COMPLETE" if pnl_base_complete else "PARTIAL"
+        ),
     }
     coverage.update(dict(coverage_context or {}))
     provenance = {
         "orders_command": "get_history_orders",
         "deals_command": "get_history_order_fill_list",
         "timezone_basis": "EXCHANGE_LOCAL",
-        "monetary_basis": "LOCAL_CURRENCY_BUCKETS_AND_VERIFIED_SNAPSHOT_FX",
+        "monetary_basis": "LOCAL_CURRENCY_BUCKETS_BASE_IDENTITY_PNL_AND_VERIFIED_SNAPSHOT_FX",
         "orders_option_policy": "acc-id,market,trd-env,start,end,security-firm,ctx-type,limit=200,json",
         "deals_option_policy": "acc-id,market,trd-env,start,end,security-firm,ctx-type,json",
     }
@@ -1373,7 +1433,7 @@ def build_trade_review(
     identity_body = json.dumps(
         _json_value(
             {
-                "schema_version": "1.4",
+                "schema_version": "1.5",
                 "as_of": acquisition,
                 "source": "futuapi",
                 "base_currency": base_currency,
@@ -1408,7 +1468,7 @@ def build_trade_review(
     )
     review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
     return TradeReview(
-        "1.4",
+        "1.5",
         review_id,
         acquisition,
         "futuapi",

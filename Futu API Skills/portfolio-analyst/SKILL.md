@@ -161,6 +161,8 @@ private `config/trade-policy.yaml` follows `config/trade-policy.example.yaml` an
 [references/trade-review.md](references/trade-review.md).
 The report embeds that normalized policy body so semantic validation can rebuild policy-window
 observations and verified behavior findings from exchange-local OrderGroups.
+Base-currency fills have exact 1:1 FIFO realized P&L and base win/loss statistics. Cross-currency
+trips without transaction-date FX stay null/partial while per-currency local P&L pools remain exact.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
@@ -174,7 +176,8 @@ python scripts/portfolio.py simulate \
 The strict request supports `TARGET_WEIGHT`, `AMOUNT_DELTA`, and `SHARE_DELTA`, plus explicit new
 cash (`new_cash_base`), sell-only, new-cash-only, margin, and short constraints. Results carry
 the authoritative request plus immutable per-symbol unit-price/FX evidence, and the complete body is
-bound by `simulation_id`. Signed source or hypothetical states fail `UNSUPPORTED_PORTFOLIO`.
+bound by `simulation_id`. Signed states require explicit `allow_short=true`, expose long, absolute
+short, gross, and net monetary/weight/exposure views, and suppress long-only Top-N/HHI as unavailable.
 Results carry `as_of`, `base_currency`, coverage and quality notes. Every result says `HYPOTHETICAL` and
 `execution_disabled=true`; there is no order generation or trading-write path. `--output DIR`
 transactionally saves `request.json`, `result.json`, and `summary.md` without replacement. See

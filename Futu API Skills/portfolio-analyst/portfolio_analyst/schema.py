@@ -475,6 +475,13 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         fills = [item for item in payload["normalized_fills"] if item["event_type"] == "TRADE"]
         orders = payload["normalized_orders"]
         coverage = payload["coverage"]
+        if payload["base_currency"] is not None and any(
+            fill["currency"] == payload["base_currency"]
+            and fill["fx_to_base"] is not None
+            and Decimal(fill["fx_to_base"]) != Decimal(1)
+            for fill in payload["normalized_fills"]
+        ):
+            raise ValueError("base-currency fill FX must equal one")
         if (coverage["source_snapshot_id"] is None) != (payload["source_snapshot_as_of"] is None):
             raise ValueError("source snapshot identity and as-of must be supplied together")
         if coverage["orders_received"] != len(orders) or coverage["deals_received"] != len(
@@ -568,6 +575,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 or payload["data_quality_status"] != "UNAVAILABLE"
                 or not payload["data_quality_notes"]
                 or coverage["monetary_base_coverage"] != "PARTIAL"
+                or coverage["realized_pl_base_coverage"] != "UNAVAILABLE"
                 or any(
                     coverage[name] != 0
                     for name in (
@@ -594,6 +602,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             "distinct_symbols",
             "notional_by_currency",
             "realized_pl_by_currency",
+            "pnl_statistics_by_currency",
             "per_symbol_turnover",
             "closed_trips",
             "same_day_reversals",
@@ -660,6 +669,8 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             while remaining and lots:
                 lot = lots[0]
                 matched = min(remaining, lot[0])
+                if lot[3] != fill["currency"]:
+                    raise ValueError("one security has conflicting FIFO currencies")
                 opened = datetime.fromisoformat(lot[2].replace("Z", "+00:00"))
                 closed = datetime.fromisoformat(fill["executed_at"].replace("Z", "+00:00"))
                 expected_trips.append(
@@ -673,7 +684,11 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                         "opened_at": lot[2],
                         "closed_at": fill["executed_at"],
                         "realized_pl_local": (price - lot[1]) * matched,
-                        "realized_pl_base": None,
+                        "realized_pl_base": (
+                            (price - lot[1]) * matched
+                            if fill["currency"] == payload["base_currency"]
+                            else None
+                        ),
                         "holding_seconds": Decimal(str((closed - opened).total_seconds())),
                     }
                 )
@@ -964,10 +979,47 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             for currency, value in metrics["realized_pl_by_currency"].items()
         } != realized_buckets:
             raise ValueError("local-currency realized P&L buckets do not reconcile")
+        local_pools: dict[str, list[Decimal]] = {}
+        for trip in trips:
+            if trip["currency"] != "UNKNOWN":
+                local_pools.setdefault(trip["currency"], []).append(
+                    Decimal(trip["realized_pl_local"])
+                )
+        expected_local_statistics: dict[str, dict[str, Any]] = {}
+        for currency, values in sorted(local_pools.items()):
+            wins = [value for value in values if value > 0]
+            losses = [value for value in values if value < 0]
+            win_total = sum(wins, Decimal(0))
+            loss_total = -sum(losses, Decimal(0))
+            average_win = None if not wins else win_total / len(wins)
+            average_loss = None if not losses else -loss_total / len(losses)
+            expected_local_statistics[currency] = {
+                "closed_trips": len(values),
+                "wins": len(wins),
+                "losses": len(losses),
+                "gross_profit": win_total,
+                "gross_loss_absolute": loss_total,
+                "average_win": average_win,
+                "average_loss": average_loss,
+                "payoff_ratio": (
+                    None
+                    if average_win is None or average_loss is None
+                    else average_win / -average_loss
+                ),
+                "profit_factor": None if loss_total == 0 else win_total / loss_total,
+                "expectancy": sum(values, Decimal(0)) / len(values),
+            }
+        observed_local_statistics = {
+            currency: {
+                name: value if isinstance(value, int) else None if value is None else Decimal(value)
+                for name, value in statistics.items()
+            }
+            for currency, statistics in metrics["pnl_statistics_by_currency"].items()
+        }
+        if observed_local_statistics != expected_local_statistics:
+            raise ValueError("local-currency P&L statistics do not reconcile")
         base_complete = payload["coverage"]["monetary_base_coverage"] == "COMPLETE"
-        base_fields = (
-            "buy_notional_base",
-            "sell_notional_base",
+        pnl_fields = (
             "average_win_base",
             "average_loss_base",
             "payoff_ratio_base",
@@ -997,19 +1049,47 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 )
                 if Decimal(metrics[name]) != expected:
                     raise ValueError(f"{name} does not reconcile")
-            if any(item["realized_pl_base"] is not None for item in trips) or any(
-                metrics[name] is not None
-                for name in (
-                    "average_win_base",
-                    "average_loss_base",
-                    "payoff_ratio_base",
-                    "profit_factor_base",
-                    "expectancy_base",
-                )
-            ):
-                raise ValueError("historical base P&L requires transaction-date FX evidence")
-        elif any(metrics[name] is not None for name in base_fields):
-            raise ValueError("base monetary metrics require complete FX evidence")
+        elif metrics["buy_notional_base"] is not None or metrics["sell_notional_base"] is not None:
+            raise ValueError("base notional metrics require complete FX evidence")
+        expected_pnl_coverage = (
+            "UNAVAILABLE"
+            if not trips
+            else "COMPLETE"
+            if all(item["realized_pl_base"] is not None for item in trips)
+            else "PARTIAL"
+        )
+        if coverage["realized_pl_base_coverage"] != expected_pnl_coverage:
+            raise ValueError("base realized P&L coverage does not reconcile")
+        base_trip_values = [
+            Decimal(item["realized_pl_base"])
+            for item in trips
+            if item["realized_pl_base"] is not None
+        ]
+        if expected_pnl_coverage == "COMPLETE":
+            profits = [value for value in base_trip_values if value > 0]
+            losses = [value for value in base_trip_values if value < 0]
+            win_total = sum(profits, Decimal(0))
+            loss_total = -sum(losses, Decimal(0))
+            average_win = None if not profits else win_total / len(profits)
+            average_loss = None if not losses else -loss_total / len(losses)
+            expected_pnl = {
+                "average_win_base": average_win,
+                "average_loss_base": average_loss,
+                "payoff_ratio_base": (
+                    None
+                    if average_win is None or average_loss is None
+                    else average_win / -average_loss
+                ),
+                "profit_factor_base": None if loss_total == 0 else win_total / loss_total,
+                "expectancy_base": sum(base_trip_values, Decimal(0)) / len(base_trip_values),
+            }
+        else:
+            expected_pnl = {name: None for name in pnl_fields}
+        if any(
+            (None if metrics[name] is None else Decimal(metrics[name])) != expected
+            for name, expected in expected_pnl.items()
+        ):
+            raise ValueError("base-currency P&L statistics do not reconcile")
         nav = (
             None
             if payload["portfolio_nav_base"] is None
@@ -1221,6 +1301,7 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             or any(coverage[name] for name in expected_reconciliation)
             or coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE"
             or (coverage["monetary_base_coverage"] == "PARTIAL" and fills)
+            or (coverage["realized_pl_base_coverage"] == "PARTIAL" and trips)
         )
         if required_partial and not payload["data_quality_notes"]:
             raise ValueError("required source-quality limitations are missing")
@@ -1276,27 +1357,85 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             for identity, item in state["positions"].items():
                 if decimal(item["weight"]) != values[identity] / nav:
                     raise ValueError("position weight does not reconcile")
-            weights = sorted((value / nav for value in values.values()), reverse=True)
-            expected = {
-                "top_1": sum(weights[:1], Decimal(0)),
-                "top_3": sum(weights[:3], Decimal(0)),
-                "top_5": sum(weights[:5], Decimal(0)),
-                "hhi": sum((weight * weight for weight in weights), Decimal(0)),
+            long_value = sum((max(value, Decimal(0)) for value in values.values()), Decimal(0))
+            short_value = sum((max(-value, Decimal(0)) for value in values.values()), Decimal(0))
+            expected_monetary = {
+                "long_market_value_base": long_value,
+                "short_market_value_base": short_value,
+                "gross_exposure_base": long_value + short_value,
+                "net_exposure_base": long_value - short_value,
+                "long_weight": long_value / nav,
+                "short_weight": short_value / nav,
+                "gross_weight": (long_value + short_value) / nav,
+                "net_weight": (long_value - short_value) / nav,
             }
-            if any(
-                decimal(state["concentration"][name]) != value for name, value in expected.items()
-            ):
-                raise ValueError("concentration does not reconcile")
-            position_weight = sum((value / nav for value in values.values()), Decimal(0))
-            for dimension in ("sector", "region", "theme_split"):
-                if (
-                    sum(
-                        (decimal(value) for value in state["exposures"][dimension].values()),
-                        Decimal(0),
+            if any(decimal(state[name]) != value for name, value in expected_monetary.items()):
+                raise ValueError("long/short/gross/net state values do not reconcile")
+            for dimension in ("sector", "region", "theme_full", "theme_split"):
+                labels = set().union(
+                    *(
+                        set(state["exposure_views"][view][dimension])
+                        for view in ("long", "short", "gross", "net")
+                    ),
+                    set(state["exposures"][dimension]),
+                )
+                for label in labels:
+                    long_weight = decimal(
+                        state["exposure_views"]["long"][dimension].get(label, "0")
                     )
-                    != position_weight
+                    short_weight = decimal(
+                        state["exposure_views"]["short"][dimension].get(label, "0")
+                    )
+                    gross_weight = decimal(
+                        state["exposure_views"]["gross"][dimension].get(label, "0")
+                    )
+                    net_weight = decimal(state["exposure_views"]["net"][dimension].get(label, "0"))
+                    if (
+                        long_weight < 0
+                        or short_weight < 0
+                        or gross_weight != long_weight + short_weight
+                        or net_weight != long_weight - short_weight
+                        or decimal(state["exposures"][dimension].get(label, "0")) != net_weight
+                    ):
+                        raise ValueError("signed exposure views do not reconcile")
+                if dimension != "theme_full":
+                    expected_totals = {
+                        "long": expected_monetary["long_weight"],
+                        "short": expected_monetary["short_weight"],
+                        "gross": expected_monetary["gross_weight"],
+                        "net": expected_monetary["net_weight"],
+                    }
+                    if any(
+                        sum(
+                            (
+                                decimal(value)
+                                for value in state["exposure_views"][view][dimension].values()
+                            ),
+                            Decimal(0),
+                        )
+                        != total
+                        for view, total in expected_totals.items()
+                    ):
+                        raise ValueError("additive signed exposure totals do not reconcile")
+            if short_value:
+                if state["concentration_status"] != "UNAVAILABLE_SIGNED" or any(
+                    state["concentration"][name] is not None
+                    for name in ("top_1", "top_3", "top_5", "hhi")
                 ):
-                    raise ValueError("additive exposure does not reconcile")
+                    raise ValueError("signed state must not claim long-only concentration")
+            else:
+                weights = sorted((value / nav for value in values.values()), reverse=True)
+                expected = {
+                    "top_1": sum(weights[:1], Decimal(0)),
+                    "top_3": sum(weights[:3], Decimal(0)),
+                    "top_5": sum(weights[:5], Decimal(0)),
+                    "hhi": sum((weight * weight for weight in weights), Decimal(0)),
+                }
+                if state["concentration_status"] != "AVAILABLE" or any(
+                    decimal(state["concentration"][name]) != value
+                    for name, value in expected.items()
+                ):
+                    raise ValueError("long-only concentration does not reconcile")
 
         validate_state(before)
         validate_state(after)
@@ -1394,16 +1533,36 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
         expected_cash = decimal(before["cash_base"]) + nav_delta - sum(deltas.values(), Decimal(0))
         if decimal(after["cash_base"]) != expected_cash:
             raise ValueError("cash delta does not reconcile")
-        for name in ("top_1", "top_3", "top_5", "hhi"):
-            expected_change = decimal(after["concentration"][name]) - decimal(
-                before["concentration"][name]
-            )
-            if decimal(payload["risk_changes"][name]) != expected_change:
-                raise ValueError("risk delta does not reconcile")
-            if decimal(payload["risk_changes"]["concentration"][name]) != decimal(
-                after["concentration"][name]
+        before_signed = any(value < 0 for value in before_quantities.values())
+        after_signed = any(value < 0 for value in after_quantities.values())
+        signed_authority = before_signed or after_signed
+        if signed_authority:
+            if not constraints["allow_short"]:
+                raise ValueError("signed quantities require explicit short authority")
+            if (
+                payload["risk_changes"]["status"] != "STRUCTURAL_ONLY_SIGNED"
+                or payload["risk_changes"]["concentration"] is not None
+                or any(
+                    payload["risk_changes"][name] is not None
+                    for name in ("top_1", "top_3", "top_5", "hhi")
+                )
             ):
-                raise ValueError("after concentration evidence does not reconcile")
+                raise ValueError("signed risk must not claim long-only concentration")
+            if not any("signed" in warning.lower() for warning in payload["warnings"]):
+                raise ValueError("signed authority requires an explicit warning")
+        else:
+            if payload["risk_changes"]["status"] != "STRUCTURAL_ONLY":
+                raise ValueError("long-only risk status is inconsistent")
+            for name in ("top_1", "top_3", "top_5", "hhi"):
+                expected_change = decimal(after["concentration"][name]) - decimal(
+                    before["concentration"][name]
+                )
+                if decimal(payload["risk_changes"][name]) != expected_change:
+                    raise ValueError("risk delta does not reconcile")
+                if decimal(payload["risk_changes"]["concentration"][name]) != decimal(
+                    after["concentration"][name]
+                ):
+                    raise ValueError("after concentration evidence does not reconcile")
         for dimension in ("sector", "region", "theme_full", "theme_split"):
             labels = set(before["exposures"][dimension]) | set(after["exposures"][dimension])
             expected_deltas = {
@@ -1416,12 +1575,26 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             }
             if observed_deltas != expected_deltas:
                 raise ValueError(f"{dimension} exposure deltas do not reconcile")
+        for view in ("long", "short", "gross", "net"):
+            for dimension in ("sector", "region", "theme_full", "theme_split"):
+                labels = set(before["exposure_views"][view][dimension]) | set(
+                    after["exposure_views"][view][dimension]
+                )
+                expected_deltas = {
+                    label: decimal(after["exposure_views"][view][dimension].get(label, "0"))
+                    - decimal(before["exposure_views"][view][dimension].get(label, "0"))
+                    for label in labels
+                }
+                observed_deltas = {
+                    label: decimal(value)
+                    for label, value in payload["risk_changes"]["exposure_views"][view][
+                        dimension
+                    ].items()
+                }
+                if observed_deltas != expected_deltas:
+                    raise ValueError("signed exposure-view risk deltas do not reconcile")
         violations = (
             (decimal(after["cash_base"]) < 0 and not constraints["allow_margin"])
-            or (
-                any(value < 0 for value in after_quantities.values())
-                and not constraints["allow_short"]
-            )
             or (constraints["sell_only"] and any(value > 0 for value in deltas.values()))
             or (
                 constraints["new_cash_only"]
@@ -1458,9 +1631,5 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             "fx_evidence"
         ] != len(payload["evidence"]):
             raise ValueError("price/FX evidence coverage does not reconcile")
-        if any(value < 0 for value in (*before_quantities.values(), *after_quantities.values())):
-            raise ValueError("UNSUPPORTED_PORTFOLIO: signed states are outside long-only authority")
-        if payload["risk_changes"]["status"] != "STRUCTURAL_ONLY":
-            raise ValueError("risk status does not match signed-position semantics")
     except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise ReportSemanticError(f"rebalance semantic validation failed: {exc}") from exc
