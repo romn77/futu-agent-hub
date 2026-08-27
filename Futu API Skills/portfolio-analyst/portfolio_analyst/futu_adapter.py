@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -12,30 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from .child_environment import controlled_child_environment
 from .skill_trust import audited_command, audited_command_names, load_audited_skill
-
-
-# Paths, home/temp locations, locale, and core Windows process settings are the
-# minimum inherited runtime context. Everything else is denied by construction.
-_SAFE_RUNTIME_ENVIRONMENT = (
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "LANG",
-    "LANGUAGE",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TZ",
-    "SYSTEMROOT",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-)
 
 
 class UnsafeFutuCommand(ValueError):
@@ -67,6 +44,7 @@ class FutuAdapter:
     SENSITIVE_JSON_KEYS = frozenset(
         {
             "accid",
+            "futuaccid",
             "accountid",
             "orderid",
             "dealid",
@@ -143,6 +121,7 @@ class FutuAdapter:
                 destination.write_bytes(content)
             command = [
                 self.python_executable,
+                "-s",
                 str(snapshot_root / command_record.script_path),
                 *request.arguments,
             ]
@@ -153,7 +132,7 @@ class FutuAdapter:
                     check=False,
                     encoding="utf-8",
                     errors="replace",
-                    env=self._controlled_environment(),
+                    env=controlled_child_environment(),
                     timeout=timeout,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -169,23 +148,6 @@ class FutuAdapter:
             stdout=self.sanitize_output(completed.stdout),
             stderr=self.sanitize_output(completed.stderr),
         )
-
-    @staticmethod
-    def _controlled_environment() -> dict[str, str]:
-        """Build a minimal child environment with no inherited credentials or code paths."""
-
-        environment = {
-            key: os.environ[key] for key in _SAFE_RUNTIME_ENVIRONMENT if key in os.environ
-        }
-        environment.update(
-            {
-                "FUTU_OPEND_HOST": os.environ.get("FUTU_OPEND_HOST", "127.0.0.1"),
-                "FUTU_OPEND_PORT": os.environ.get("FUTU_OPEND_PORT", "11111"),
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONUTF8": "1",
-            }
-        )
-        return environment
 
     @classmethod
     def sanitize_output(cls, output: str | bytes | None) -> str:

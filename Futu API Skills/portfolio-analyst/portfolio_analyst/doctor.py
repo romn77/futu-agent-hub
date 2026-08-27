@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from .child_environment import controlled_child_environment, isolated_python_command
 from .settings import discover_futuapi_skill_source
 from .skill_trust import validate_futuapi_skill
 
@@ -45,7 +45,7 @@ def probe_environment(
     """Probe SDK import and OpenD handshake together in one killable worker."""
 
     execute = runner or subprocess.run
-    command = [sys.executable, str(OPEND_PROBE_WORKER), host, str(port)]
+    command = isolated_python_command(OPEND_PROBE_WORKER, [host, str(port)])
     try:
         completed = execute(
             command,
@@ -53,6 +53,7 @@ def probe_environment(
             check=False,
             encoding="utf-8",
             errors="replace",
+            env=controlled_child_environment(),
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:

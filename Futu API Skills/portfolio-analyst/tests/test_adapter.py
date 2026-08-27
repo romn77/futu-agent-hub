@@ -101,6 +101,12 @@ def test_json_string_values_are_recursively_text_sanitized():
     assert "safe message" in sanitized
 
 
+def test_preserved_environment_account_id_is_masked_if_a_script_echoes_it():
+    sanitized = FutuAdapter.sanitize_output('{"FUTU_ACC_ID":"123456789"}')
+
+    assert "123456789" not in sanitized
+
+
 @pytest.mark.parametrize(
     ("label", "value", "fragments"),
     [
@@ -210,6 +216,7 @@ def test_run_uses_utf8_decoding_with_safe_error_replacement(monkeypatch, tmp_pat
     observed = {}
 
     def fake_run(args, **kwargs):
+        observed["args"] = args
         observed.update(kwargs)
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
 
@@ -234,11 +241,14 @@ def test_run_uses_controlled_environment_without_credentials_or_python_injection
         "SYSTEMROOT": "C:\\Windows",
         "FUTU_OPEND_HOST": "192.0.2.10",
         "FUTU_OPEND_PORT": "22222",
+        "FUTU_TRD_ENV": "REAL",
+        "FUTU_DEFAULT_MARKET": "HK",
+        "FUTU_SECURITY_FIRM": "FUTUSECURITIES",
+        "FUTU_ACC_ID": "123456789",
     }
     unsafe_parent = {
         "FUTU_LOGIN_ACCOUNT": "private-login",
         "FUTU_LOGIN_PWD": "trade-password",
-        "FUTU_ACC_ID": "123456789",
         "PASSWORD": "generic-password",
         "API_KEY": "generic-api-key",
         "ACCESS_TOKEN": "generic-token",
@@ -252,6 +262,7 @@ def test_run_uses_controlled_environment_without_credentials_or_python_injection
     observed = {}
 
     def fake_run(args, **kwargs):
+        observed["args"] = args
         observed.update(kwargs)
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
 
@@ -264,7 +275,9 @@ def test_run_uses_controlled_environment_without_credentials_or_python_injection
         assert child_env[key] == value
     assert child_env["PYTHONIOENCODING"] == "utf-8"
     assert child_env["PYTHONUTF8"] == "1"
+    assert child_env["PYTHONNOUSERSITE"] == "1"
     assert unsafe_parent.keys().isdisjoint(child_env)
+    assert observed["args"][1] == "-s"
 
 
 def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_path):

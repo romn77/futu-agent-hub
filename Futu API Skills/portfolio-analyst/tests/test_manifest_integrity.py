@@ -64,8 +64,8 @@ def test_execution_uses_verified_snapshot_when_source_changes_after_open(monkeyp
 
     def fake_run(args, **_kwargs):
         source_script.write_text("place_order()\n", encoding="utf-8")
-        observed["executed"] = Path(args[1]).read_bytes()
-        observed["snapshot_root"] = Path(args[1]).parents[2]
+        observed["executed"] = Path(args[2]).read_bytes()
+        observed["snapshot_root"] = Path(args[2]).parents[2]
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -74,7 +74,7 @@ def test_execution_uses_verified_snapshot_when_source_changes_after_open(monkeyp
 
     assert observed["executed"] == original
     assert not observed["snapshot_root"].exists()
-    assert not Path(result.args[1]).exists()
+    assert not Path(result.args[2]).exists()
 
 
 @pytest.mark.parametrize("failure", ["return", "raise", "timeout"])
@@ -84,7 +84,7 @@ def test_private_snapshot_is_cleaned_for_all_subprocess_outcomes(monkeypatch, tm
     observed = {}
 
     def fake_run(args, **_kwargs):
-        observed["snapshot_root"] = Path(args[1]).parents[2]
+        observed["snapshot_root"] = Path(args[2]).parents[2]
         if failure == "raise":
             raise RuntimeError("subprocess failed")
         if failure == "timeout":

@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import shutil
 import subprocess
@@ -111,10 +112,55 @@ def test_environment_probe_parses_independent_sdk_and_opend_results():
 
     assert result == expected
     assert observed["args"][0] == sys.executable
-    assert observed["args"][1] == str(doctor.OPEND_PROBE_WORKER)
+    assert observed["args"][1] == "-s"
+    assert observed["args"][2] == str(doctor.OPEND_PROBE_WORKER)
     assert observed["timeout"] == doctor.DIAGNOSTIC_TIMEOUT_SECONDS
     assert observed["encoding"] == "utf-8"
     assert observed["errors"] == "replace"
+
+
+def test_environment_probe_uses_shared_controlled_environment(monkeypatch):
+    safe_parent = {
+        "HOME": "/runtime/home",
+        "TEMP": "/runtime/temp",
+        "FUTU_OPEND_HOST": "192.0.2.20",
+        "FUTU_OPEND_PORT": "33333",
+        "FUTU_TRD_ENV": "REAL",
+        "FUTU_DEFAULT_MARKET": "US",
+        "FUTU_SECURITY_FIRM": "FUTUINC",
+        "FUTU_ACC_ID": "88776655",
+    }
+    unsafe_parent = {
+        "FUTU_LOGIN_ACCOUNT": "private-login",
+        "FUTU_LOGIN_PWD": "private-password",
+        "API_TOKEN": "private-token",
+        "CLIENT_SECRET": "private-secret",
+        "PYTHONPATH": "/tmp/injected",
+        "PYTHONHOME": "/tmp/runtime",
+        "PYTHONUSERBASE": "/tmp/user-site",
+        "LD_PRELOAD": "/tmp/injected.so",
+    }
+    for key, value in {**safe_parent, **unsafe_parent}.items():
+        monkeypatch.setenv(key, value)
+    observed = {}
+
+    def completed(args, **kwargs):
+        observed.update(kwargs)
+        payload = {
+            "sdk": {"available": False, "version": None, "detail": "missing"},
+            "opend": {"available": False, "detail": "not attempted"},
+        }
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout=json.dumps(payload), stderr=""
+        )
+
+    probe_environment("127.0.0.1", 11111, runner=completed)
+
+    child_env = observed["env"]
+    for key, value in safe_parent.items():
+        assert child_env[key] == value
+    assert child_env["PYTHONNOUSERSITE"] == "1"
+    assert unsafe_parent.keys().isdisjoint(child_env)
 
 
 def test_worker_launch_succeeds_from_unrelated_cwd(monkeypatch, tmp_path):
@@ -132,6 +178,47 @@ def test_worker_launch_succeeds_from_unrelated_cwd(monkeypatch, tmp_path):
     assert completed.returncode == 2
     assert "ModuleNotFoundError" not in completed.stderr
     assert json.loads(completed.stdout)["detail"] == "invalid diagnostic worker arguments"
+
+
+def test_real_worker_ignores_parent_pythonpath_injection_from_unrelated_cwd(monkeypatch, tmp_path):
+    injected = tmp_path / "injected"
+    injected.mkdir()
+    fake_futu = (
+        "__version__ = 'injected-user-code'\n"
+        "RET_OK = 0\n"
+        "class OpenQuoteContext:\n"
+        "    def __init__(self, **kwargs): pass\n"
+        "    def get_global_state(self): return (RET_OK, {})\n"
+        "    def close(self): pass\n"
+    )
+    (injected / "futu.py").write_text(fake_futu, encoding="utf-8")
+    isolated_home = tmp_path / "isolated-home"
+    site_env = dict(os.environ)
+    for key in ("PYTHONUSERBASE", "APPDATA", "LOCALAPPDATA"):
+        site_env.pop(key, None)
+    site_env.update({"HOME": str(isolated_home), "USERPROFILE": str(isolated_home)})
+    user_site_result = subprocess.run(
+        [sys.executable, "-c", "import site; print(site.getusersitepackages())"],
+        capture_output=True,
+        check=True,
+        encoding="utf-8",
+        env=site_env,
+    )
+    user_site = Path(user_site_result.stdout.strip())
+    assert user_site.is_relative_to(tmp_path)
+    user_site.mkdir(parents=True)
+    (user_site / "futu.py").write_text(fake_futu, encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(injected))
+    monkeypatch.setenv("PYTHONUSERBASE", str(tmp_path / "ignored-user-base"))
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.chdir(tmp_path)
+
+    result = probe_environment("127.0.0.1", 11111, timeout=2)
+
+    assert result["sdk"]["available"] is False
+    assert result["sdk"]["version"] is None
+    assert "injected-user-code" not in json.dumps(result)
 
 
 def test_successful_handshake_with_close_failure_is_unavailable():
