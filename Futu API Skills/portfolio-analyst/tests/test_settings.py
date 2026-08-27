@@ -8,6 +8,7 @@ from portfolio_analyst.settings import Settings, resolve_output_path
 def test_data_home_defaults_outside_repository(monkeypatch, tmp_path):
     monkeypatch.delenv("PORTFOLIO_AGENT_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     settings = Settings.from_env()
 

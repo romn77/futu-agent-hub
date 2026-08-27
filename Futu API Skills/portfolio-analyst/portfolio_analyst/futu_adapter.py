@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from .skill_trust import READ_ONLY_SCRIPTS as VERIFIED_READ_ONLY_SCRIPTS
+from .skill_trust import validate_futuapi_skill
+
 
 class UnsafeFutuCommand(ValueError):
     """Raised when a command falls outside the fixed read-only boundary."""
@@ -17,11 +20,7 @@ class UnsafeFutuCommand(ValueError):
 class FutuAdapter:
     """Execute only audited, read-only scripts from the official futuapi Skill."""
 
-    READ_ONLY_SCRIPTS = {
-        "get_accounts": Path("scripts/trade/get_accounts.py"),
-        "get_portfolio": Path("scripts/trade/get_portfolio.py"),
-        "get_all_portfolios": Path("scripts/trade/get_all_portfolios.py"),
-    }
+    READ_ONLY_SCRIPTS = VERIFIED_READ_ONLY_SCRIPTS
     DENY_TERMS = frozenset(
         {
             "place_order",
@@ -67,14 +66,16 @@ class FutuAdapter:
         r"|账户\s+(?=\d)"
         r")"
         r")"
-        r"(?P<value>[\"'][^\"'\r\n]*[\"']|[^\s,}\]\r\n]+)"
+        r"(?P<value>[^,}\]\r\n]+)"
     )
 
     def __init__(self, skill_dir: Path, *, python_executable: str | None = None) -> None:
-        self.skill_dir = skill_dir.expanduser().resolve()
+        validation = validate_futuapi_skill(skill_dir)
+        if not validation.valid:
+            raise ValueError(f"verified futuapi Skill required: {validation.detail}")
+        assert validation.root is not None
+        self.skill_dir = validation.root
         self.python_executable = python_executable or sys.executable
-        if not self.skill_dir.is_dir():
-            raise FileNotFoundError(f"futuapi Skill directory not found: {self.skill_dir}")
 
     def command(self, name: str, arguments: Sequence[str]) -> list[str]:
         """Build an argument-array command for an approved script."""
@@ -100,13 +101,23 @@ class FutuAdapter:
     ) -> subprocess.CompletedProcess[str]:
         """Run an approved read-only command without a shell."""
 
-        completed = subprocess.run(
-            self.command(name, arguments),
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=timeout,
-        )
+        command = self.command(name, arguments)
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.TimeoutExpired(
+                cmd=self._sanitize_args(exc.cmd),
+                timeout=exc.timeout,
+                output=self.sanitize_output(exc.output),
+                stderr=self.sanitize_output(exc.stderr),
+            ) from None
         return subprocess.CompletedProcess(
             args=self._sanitize_args(completed.args),
             returncode=completed.returncode,
@@ -115,11 +126,13 @@ class FutuAdapter:
         )
 
     @classmethod
-    def sanitize_output(cls, output: str | None) -> str:
+    def sanitize_output(cls, output: str | bytes | None) -> str:
         """Mask sensitive identifiers and credentials in JSON or human-readable output."""
 
         if not output:
             return ""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
         try:
             payload = json.loads(output)
         except (json.JSONDecodeError, TypeError):
@@ -135,6 +148,8 @@ class FutuAdapter:
             }
         if isinstance(value, list):
             return [cls._mask_json(item) for item in value]
+        if isinstance(value, str):
+            return cls._mask_text(value)
         return value
 
     @classmethod

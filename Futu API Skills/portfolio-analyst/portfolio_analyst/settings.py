@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .skill_trust import validate_futuapi_skill
+
 
 DEFAULT_DATA_HOME = Path("~/.moomoo-portfolio-agent")
 
@@ -55,10 +57,6 @@ def resolve_output_path(data_home: Path, requested: str | Path) -> Path:
     return candidate
 
 
-def _valid_skill_dir(path: Path) -> bool:
-    return path.is_dir() and (path / "SKILL.md").is_file()
-
-
 def discover_futuapi_skill(
     *, repo_root: Path | None = None, cwd: Path | None = None
 ) -> Path | None:
@@ -85,7 +83,7 @@ def discover_futuapi_skill(
         ]
     )
     for candidate in candidates:
-        resolved = candidate.expanduser().resolve()
-        if _valid_skill_dir(resolved):
-            return resolved
+        validation = validate_futuapi_skill(candidate)
+        if validation.valid:
+            return validation.root
     return None
