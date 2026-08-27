@@ -13,7 +13,7 @@ from typing import Any, Sequence
 from .doctor import run_doctor
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .futu_adapter import FutuAdapter, FutuReadError
-from .persistence import SnapshotAlreadyExists, SnapshotStore
+from .persistence import SnapshotAlreadyExists, SnapshotStore, bundle_manifest
 from .private_home import PrivateHomeError, ensure_private_home
 from .reporting import build_portfolio_report
 from .rendering import terminal_text
@@ -34,7 +34,12 @@ from .schema import (
     validate_risk_document,
 )
 from .journal_repository import JournalError, JournalRepository
-from .lifecycle import LifecycleInputError, analyze_lifecycle, unavailable_lifecycle_report
+from .lifecycle import (
+    MAX_HISTORY_SNAPSHOTS,
+    LifecycleInputError,
+    analyze_lifecycle,
+    unavailable_lifecycle_report,
+)
 from .lifecycle_repository import LifecycleConfigError, LifecycleRepository, record_from_document
 from .snapshot_repository import SnapshotRepository, SnapshotRepositoryError
 from .service import ConfigError, generate_snapshot
@@ -405,7 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else load_snapshot(settings.data_home, args.snapshot)
             )
             try:
-                history = SnapshotRepository(settings.data_home).list(end=source_snapshot.as_of)
+                history = SnapshotRepository(settings.data_home).list(
+                    end=source_snapshot.as_of, limit=MAX_HISTORY_SNAPSHOTS
+                )
                 history_issue = None
             except SnapshotRepositoryError as exc:
                 history = ()
@@ -417,12 +424,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_lifecycle_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
             if args.output and not args.no_save:
+                artifact_files = {
+                    "lifecycle_report.json": rendered + "\n",
+                    "lifecycle_report.md": lifecycle_report.to_markdown(
+                        json_artifact="lifecycle_report.json"
+                    ),
+                }
                 SnapshotStore(settings.data_home).save_bundle(
                     args.output,
                     {
-                        "lifecycle_report.json": rendered + "\n",
-                        "lifecycle_report.md": lifecycle_report.to_markdown(
-                            json_artifact="lifecycle_report.json"
+                        **artifact_files,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=source_snapshot.snapshot_id,
+                            as_of=source_snapshot.to_dict()["as_of"],
+                            report_id=lifecycle_report.lifecycle_report_id,
+                            files=artifact_files,
                         ),
                     },
                 )
@@ -476,7 +492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lifecycle_repository = LifecycleRepository(settings.data_home)
                 try:
                     lifecycle_history = SnapshotRepository(settings.data_home).list(
-                        end=source_snapshot.as_of
+                        end=source_snapshot.as_of, limit=MAX_HISTORY_SNAPSHOTS
                     )
                     lifecycle_history_issue = None
                 except SnapshotRepositoryError as exc:
@@ -523,22 +539,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         json_artifact="portfolio_report.json"
                     ),
                 }
-                manifest = {
-                    "schema_version": "1.0",
-                    "source_snapshot_id": source_snapshot.snapshot_id,
-                    "artifacts": {
-                        name: hashlib.sha256(content.encode("utf-8")).hexdigest()
-                        for name, content in sorted(artifact_files.items())
-                    },
-                }
                 SnapshotStore(settings.data_home).save_bundle(
                     output,
                     {
                         **artifact_files,
-                        "manifest.json": json.dumps(
-                            manifest, ensure_ascii=False, indent=2, sort_keys=True
-                        )
-                        + "\n",
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=source_snapshot.snapshot_id,
+                            as_of=source_snapshot.to_dict()["as_of"],
+                            report_id=lifecycle_report.lifecycle_report_id,
+                            files=artifact_files,
+                        ),
                     },
                 )
             print(
@@ -561,16 +571,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result_bytes = (rendered + "\n").encode("utf-8")
                 result_digest = hashlib.sha256(result_bytes).hexdigest()
                 resolve_output_path(settings.data_home, Path(args.output) / "result.json")
+                artifact_files = {
+                    "request.json": json.dumps(
+                        request_payload, ensure_ascii=False, indent=2, sort_keys=True
+                    )
+                    + "\n",
+                    "result.json": rendered + "\n",
+                    "summary.md": result.to_markdown(
+                        json_artifact="result.json", json_digest=result_digest
+                    ),
+                }
                 SnapshotStore(settings.data_home).save_bundle(
                     args.output,
                     {
-                        "request.json": json.dumps(
-                            request_payload, ensure_ascii=False, indent=2, sort_keys=True
-                        )
-                        + "\n",
-                        "result.json": rendered + "\n",
-                        "summary.md": result.to_markdown(
-                            json_artifact="result.json", json_digest=result_digest
+                        **artifact_files,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=source_snapshot.snapshot_id,
+                            as_of=source_snapshot.to_dict()["as_of"],
+                            report_id=result.simulation_id,
+                            files=artifact_files,
                         ),
                     },
                 )
@@ -600,6 +619,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 nav_snapshot = load_latest_snapshot(settings.data_home)
             elif args.snapshot:
                 nav_snapshot = load_snapshot(settings.data_home, args.snapshot)
+            if should_save and nav_snapshot is None:
+                raise TradeReviewInputError(
+                    "saved multi-file trade review requires a source portfolio snapshot"
+                )
             if nav_snapshot is not None and nav_snapshot.trd_env != args.trd_env:
                 raise TradeReviewInputError(
                     "turnover snapshot environment must match the trade review environment"
@@ -620,28 +643,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 review_bytes = (rendered + "\n").encode("utf-8")
                 review_digest = hashlib.sha256(review_bytes).hexdigest()
                 resolve_output_path(settings.data_home, Path(args.output) / "trade_review.json")
+                artifact_files = {
+                    "normalized_trades.json": json.dumps(
+                        {
+                            "normalized_orders": payload["normalized_orders"],
+                            "normalized_fills": payload["normalized_fills"],
+                            "order_groups": payload["order_groups"],
+                            "round_trips": payload["round_trips"],
+                            "open_lots": payload["open_lots"],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    "trade_metrics.json": json.dumps(
+                        payload["metrics"], ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "trade_review.json": rendered + "\n",
+                    "trade_review.md": review.to_markdown(
+                        json_artifact="trade_review.json", json_digest=review_digest
+                    ),
+                }
                 SnapshotStore(settings.data_home).save_bundle(
                     args.output,
                     {
-                        "normalized_trades.json": json.dumps(
-                            {
-                                "normalized_orders": payload["normalized_orders"],
-                                "normalized_fills": payload["normalized_fills"],
-                                "order_groups": payload["order_groups"],
-                                "round_trips": payload["round_trips"],
-                                "open_lots": payload["open_lots"],
-                            },
-                            ensure_ascii=False,
-                            indent=2,
-                        )
-                        + "\n",
-                        "trade_metrics.json": json.dumps(
-                            payload["metrics"], ensure_ascii=False, indent=2
-                        )
-                        + "\n",
-                        "trade_review.json": rendered + "\n",
-                        "trade_review.md": review.to_markdown(
-                            json_artifact="trade_review.json", json_digest=review_digest
+                        **artifact_files,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=nav_snapshot.snapshot_id,
+                            as_of=nav_snapshot.to_dict()["as_of"],
+                            report_id=review.review_id,
+                            files=artifact_files,
                         ),
                     },
                 )

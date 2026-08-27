@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 from typing import Any
 
 import yaml
@@ -264,15 +265,36 @@ class LifecycleRepository:
             except PrivateHomeError as exc:
                 raise LifecycleConfigError(str(exc)) from exc
 
-    def list(self) -> tuple[LifecycleRecord, ...]:
+    def list(
+        self,
+        *,
+        limit: int = MAX_LIFECYCLE_RECORDS,
+        max_total_bytes: int = MAX_LIFECYCLE_TOTAL_BYTES,
+        max_operations: int = 100_000,
+        max_seconds: float = 10.0,
+        clock: Any = time.monotonic,
+    ) -> tuple[LifecycleRecord, ...]:
+        if limit < 0 or max_total_bytes < 0 or max_operations <= 0 or max_seconds <= 0:
+            raise LifecycleConfigError("lifecycle repository budget is invalid")
+        started = clock()
+        operations = 0
+
+        def consume(amount: int = 1) -> None:
+            nonlocal operations
+            operations += amount
+            if operations > max_operations or clock() - started > max_seconds:
+                raise LifecycleConfigError(
+                    "lifecycle repository operation or wall-time budget exceeded"
+                )
+
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         if not self.data_home.exists():
             return ()
         try:
             self.data_home = ensure_private_home(self.data_home)
         except PrivateHomeError as exc:
             raise LifecycleConfigError(str(exc)) from exc
-        if os.name != "posix":
-            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         directory = self.data_home / "positions"
         if not directory.exists():
             return ()
@@ -288,18 +310,22 @@ class LifecycleRepository:
         paths: list[Path] = []
         total_bytes = 0
         for path in directory.iterdir():
+            consume()
             paths.append(path)
-            if len(paths) > MAX_LIFECYCLE_RECORDS or path.suffix != ".yaml":
+            if len(paths) > min(limit, MAX_LIFECYCLE_RECORDS) or path.suffix != ".yaml":
                 raise LifecycleConfigError(
                     "positions directory contains unexpected or excessive entries"
                 )
             total_bytes += path.lstat().st_size
-            if total_bytes > MAX_LIFECYCLE_TOTAL_BYTES:
+            if total_bytes > min(max_total_bytes, MAX_LIFECYCLE_TOTAL_BYTES):
                 raise LifecycleConfigError(
                     "positions directory contains unexpected or excessive entries"
                 )
         paths.sort()
-        records = [self.read(path.stem) for path in paths]
+        records = []
+        for path in paths:
+            consume(2)
+            records.append(self.read(path.stem))
         if len({item.symbol for item in records}) != len(records):
             raise LifecycleConfigError("duplicate lifecycle symbols are forbidden")
         return tuple(sorted(records, key=lambda item: item.symbol))
@@ -307,6 +333,8 @@ class LifecycleRepository:
     def create(self, value: LifecycleRecord | dict[str, Any]) -> Path:
         """Explicitly create one current record; existing records are never overwritten."""
 
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle mutation disabled")
         record = record_from_document(
             value.to_dict() if isinstance(value, LifecycleRecord) else value
         )
@@ -314,8 +342,6 @@ class LifecycleRepository:
             self.data_home = ensure_private_home(self.data_home, create=True)
         except PrivateHomeError as exc:
             raise LifecycleConfigError(str(exc)) from exc
-        if os.name != "posix":
-            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle mutation disabled")
         directory = self.data_home / "positions"
         if directory.exists():
             metadata = directory.lstat()
@@ -334,12 +360,12 @@ class LifecycleRepository:
             ) from exc
 
     def read(self, symbol: str) -> LifecycleRecord:
+        if os.name != "posix":
+            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         try:
             self.data_home = ensure_private_home(self.data_home)
         except PrivateHomeError as exc:
             raise LifecycleConfigError(str(exc)) from exc
-        if os.name != "posix":
-            raise LifecycleConfigError("UNSUPPORTED_PLATFORM_SECURITY: lifecycle reads disabled")
         canonical = str(symbol).strip().upper()
         if SYMBOL.fullmatch(canonical) is None:
             raise LifecycleConfigError("lifecycle symbol must be canonical and market-qualified")

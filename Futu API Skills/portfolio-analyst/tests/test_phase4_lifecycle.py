@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.account_alias import AccountAliasError, AccountAliasStore
 from portfolio_analyst.journal_repository import JournalError, JournalRepository
 from portfolio_analyst.lifecycle import analyze_lifecycle
 from portfolio_analyst.lifecycle import LifecycleInputError
@@ -465,6 +466,41 @@ def test_lifecycle_repository_entry_budget_is_checked_before_yaml_reads(monkeypa
         LifecycleRepository(home).list()
 
 
+def test_repository_consumer_budgets_fail_before_snapshot_or_yaml_parse(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    snapshot_repository = SnapshotRepository(home)
+    snapshot_repository.save(make_snapshot())
+    snapshot_reads: list[str] = []
+    monkeypatch.setattr(
+        snapshot_repository,
+        "read",
+        lambda value: snapshot_reads.append(value),
+    )
+    with pytest.raises(SnapshotRepositoryError, match="consumer limit"):
+        snapshot_repository.list(limit=0)
+    assert snapshot_reads == []
+
+    _write_record(home)
+    lifecycle_repository = LifecycleRepository(home)
+    yaml_reads: list[str] = []
+    monkeypatch.setattr(
+        lifecycle_repository,
+        "read",
+        lambda value: yaml_reads.append(value),
+    )
+    with pytest.raises(LifecycleConfigError, match="excessive"):
+        lifecycle_repository.list(limit=0)
+    assert yaml_reads == []
+
+
+def test_lifecycle_validator_preflights_shape_and_operation_budget_before_schema():
+    with pytest.raises(ReportSemanticError, match="array or observation budget"):
+        validate_lifecycle_document({"positions": [{}] * 20_001})
+
+    with pytest.raises(ReportSemanticError, match="operation or wall-time budget"):
+        validate_lifecycle_document({"positions": [{}]}, max_validation_operations=1)
+
+
 def test_windows_repository_security_fallbacks_fail_closed(monkeypatch, tmp_path):
     home = _home(tmp_path)
     monkeypatch.setattr(snapshot_repository_module, "os", SimpleNamespace(name="nt"))
@@ -479,6 +515,54 @@ def test_windows_repository_security_fallbacks_fail_closed(monkeypatch, tmp_path
         JournalRepository(home)._append_fallback("decisions.jsonl", {})
     with pytest.raises(ValueError, match="UNSUPPORTED_PLATFORM_SECURITY"):
         SnapshotStore(home)._save_fallback(("snapshot.json",), "{}")
+
+
+def test_unsupported_platform_mutations_have_zero_filesystem_side_effect(monkeypatch, tmp_path):
+    home = tmp_path / "never-created"
+    snap = make_snapshot()
+
+    monkeypatch.setattr(snapshot_repository_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(SnapshotRepositoryError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        SnapshotRepository(home).save(snap)
+    assert not home.exists()
+
+    monkeypatch.setattr(lifecycle_repository_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(LifecycleConfigError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        LifecycleRepository(home).create(
+            {
+                "schema_version": "1.0",
+                "symbol": "US.AAA",
+                "role": "CORE",
+                "status": "ACTIVE",
+                "opened_at": "2026-01-01",
+                "holding_horizon": "12 months",
+                "target_weight": {"min": "0.1", "max": "0.2"},
+                "original_thesis": "User fact",
+                "invalidation_conditions": [],
+                "review_triggers": [],
+                "notes": [],
+                "last_reviewed_at": "2026-01-01",
+            }
+        )
+    assert not home.exists()
+
+    monkeypatch.setattr(journal_repository_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(JournalError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        JournalRepository(home).append_decision(
+            timestamp=snap.as_of,
+            source_snapshot_id=snap.snapshot_id,
+            summary="review",
+            decision="ACCEPTED",
+            metadata={},
+        )
+    assert not home.exists()
+
+    import portfolio_analyst.account_alias as account_alias_module
+
+    monkeypatch.setattr(account_alias_module, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(AccountAliasError, match="UNSUPPORTED_PLATFORM_SECURITY"):
+        AccountAliasStore(home).load_or_create()
+    assert not home.exists()
 
 
 def test_analyze_saved_bundle_is_complete_manifested_and_transactional(
@@ -512,8 +596,10 @@ def test_analyze_saved_bundle_is_complete_manifested_and_transactional(
     import hashlib
 
     assert manifest["source_snapshot_id"] == snap.snapshot_id
-    for name, digest in manifest["artifacts"].items():
-        assert hashlib.sha256((output / name).read_bytes()).hexdigest() == digest
+    for name, evidence in manifest["artifacts"].items():
+        body = (output / name).read_bytes()
+        assert hashlib.sha256(body).hexdigest() == evidence["sha256"]
+        assert len(body) == evidence["size_bytes"]
     assert set(SnapshotStore(home).validate_bundle("reports/run")) == set(manifest["artifacts"])
 
 
@@ -531,14 +617,18 @@ def test_bundle_manifest_is_published_last_and_missing_or_bad_digest_is_incomple
 
     monkeypatch.setattr(os, "link", observe_link)
     files = {"artifact.json": "{}\n"}
-    manifest = {
-        "schema_version": "1.0",
-        "source_snapshot_id": make_snapshot().snapshot_id,
-        "artifacts": {"artifact.json": __import__("hashlib").sha256(b"{}\n").hexdigest()},
-    }
+    snap = make_snapshot()
+    from portfolio_analyst.persistence import bundle_manifest
+
+    manifest = bundle_manifest(
+        source_snapshot_id=snap.snapshot_id,
+        as_of=snap.to_dict()["as_of"],
+        report_id="test-report",
+        files=files,
+    )
     store.save_bundle(
         "reports/atomic",
-        {**files, "manifest.json": json.dumps(manifest, sort_keys=True)},
+        {**files, "manifest.json": manifest},
     )
     assert published[-1] == "manifest.json"
     assert set(store.validate_bundle("reports/atomic")) == {"artifact.json"}
@@ -571,6 +661,140 @@ def test_bundle_manifest_publish_failure_rolls_back_all_artifacts(monkeypatch, t
     assert not any(path for path in output.iterdir() if not path.name.startswith("."))
     with pytest.raises(IncompleteBundle, match="INCOMPLETE"):
         store.validate_bundle("reports/interrupted")
+
+
+def test_bundle_uses_artifact_barrier_before_manifest_barrier(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    store = SnapshotStore(home)
+    snap = make_snapshot()
+    files = {"a.json": "a\n", "b.md": "b\n"}
+    from portfolio_analyst.persistence import bundle_manifest
+
+    events: list[str] = []
+    real_link = os.link
+    real_fsync = os.fsync
+
+    def observe_link(*args, **kwargs):
+        events.append(f"link:{args[1]}")
+        return real_link(*args, **kwargs)
+
+    def observe_fsync(fd):
+        if __import__("stat").S_ISDIR(os.fstat(fd).st_mode):
+            events.append("fsync:dir")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "link", observe_link)
+    monkeypatch.setattr(os, "fsync", observe_fsync)
+    store.save_bundle(
+        "reports/barriers",
+        {
+            **files,
+            "manifest.json": bundle_manifest(
+                source_snapshot_id=snap.snapshot_id,
+                as_of=snap.to_dict()["as_of"],
+                report_id="barrier-test",
+                files=files,
+            ),
+        },
+    )
+    relevant = [event for event in events if event.startswith("link:") or event == "fsync:dir"]
+    assert relevant[:5] == [
+        "link:a.json",
+        "link:b.md",
+        "fsync:dir",
+        "link:manifest.json",
+        "fsync:dir",
+    ]
+
+
+def test_bundle_second_directory_fsync_failure_rolls_back_published_manifest(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    store = SnapshotStore(home)
+    snap = make_snapshot()
+    files = {"artifact.json": "{}\n"}
+    from portfolio_analyst.persistence import bundle_manifest
+
+    real_fsync = os.fsync
+    directory_calls = 0
+
+    def fail_second_directory_fsync(fd):
+        nonlocal directory_calls
+        if __import__("stat").S_ISDIR(os.fstat(fd).st_mode):
+            directory_calls += 1
+            if directory_calls == 2:
+                raise OSError("injected manifest barrier failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_second_directory_fsync)
+    with pytest.raises(OSError, match="manifest barrier"):
+        store.save_bundle(
+            "reports/fsync-failure",
+            {
+                **files,
+                "manifest.json": bundle_manifest(
+                    source_snapshot_id=snap.snapshot_id,
+                    as_of=snap.to_dict()["as_of"],
+                    report_id="fsync-test",
+                    files=files,
+                ),
+            },
+        )
+    visible = [
+        item
+        for item in (home / "reports" / "fsync-failure").iterdir()
+        if not item.name.startswith(".")
+    ]
+    assert visible == []
+
+
+def test_bundle_manifest_rejects_impossible_source_calendar_and_symlink_swap(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    store = SnapshotStore(home)
+    snap = make_snapshot()
+    files = {"artifact.json": "{}\n"}
+    from portfolio_analyst.persistence import bundle_manifest
+
+    manifest = json.loads(
+        bundle_manifest(
+            source_snapshot_id=snap.snapshot_id,
+            as_of=snap.to_dict()["as_of"],
+            report_id="swap-test",
+            files=files,
+        )
+    )
+    manifest["source_snapshot_id"] = "ps-20269999T999999Z-real-usd-0123456789abcdef"
+    store.save_bundle(
+        "reports/invalid-calendar",
+        {**files, "manifest.json": json.dumps(manifest)},
+    )
+    with pytest.raises(IncompleteBundle, match="manifest invalid"):
+        store.validate_bundle("reports/invalid-calendar")
+
+    valid = bundle_manifest(
+        source_snapshot_id=snap.snapshot_id,
+        as_of=snap.to_dict()["as_of"],
+        report_id="swap-test",
+        files=files,
+    )
+    store.save_bundle("reports/swap", {**files, "manifest.json": valid})
+    directory = home / "reports" / "swap"
+    outside = home / "outside"
+    outside.write_text("{}\n")
+    outside.chmod(0o600)
+    real_open = os.open
+    swapped = False
+
+    def swap_before_artifact(path, *args, **kwargs):
+        nonlocal swapped
+        if path == "artifact.json" and kwargs.get("dir_fd") is not None and not swapped:
+            swapped = True
+            (directory / "artifact.json").unlink()
+            (directory / "artifact.json").symlink_to(outside)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_before_artifact)
+    with pytest.raises(IncompleteBundle, match="unsafe anchored read"):
+        store.validate_bundle("reports/swap")
 
 
 def test_doctor_explicit_save_uses_private_immutable_store(monkeypatch, tmp_path, capsys):

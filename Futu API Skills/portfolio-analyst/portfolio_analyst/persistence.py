@@ -7,9 +7,16 @@ import secrets
 import stat
 import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Mapping
+
+from .identity import parse_snapshot_identity
+
+
+MAX_BUNDLE_ENTRIES = 128
+MAX_BUNDLE_FILE_BYTES = 16 * 1024 * 1024
+MAX_BUNDLE_TOTAL_BYTES = 128 * 1024 * 1024
+MAX_BUNDLE_MANIFEST_BYTES = 1024 * 1024
 
 
 class SnapshotAlreadyExists(FileExistsError):
@@ -18,6 +25,41 @@ class SnapshotAlreadyExists(FileExistsError):
 
 class IncompleteBundle(ValueError):
     pass
+
+
+def bundle_manifest(
+    *, source_snapshot_id: str, as_of: str, report_id: str, files: Mapping[str, str]
+) -> str:
+    identity = parse_snapshot_identity(source_snapshot_id)
+    from datetime import datetime, timezone
+
+    timestamp = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None or timestamp.astimezone(timezone.utc) != identity.timestamp:
+        raise ValueError("bundle as_of must match source snapshot identity")
+    if not report_id or len(report_id) > 256:
+        raise ValueError("bundle report_id is invalid")
+    artifacts = {
+        name: {
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "size_bytes": len(content.encode("utf-8")),
+        }
+        for name, content in sorted(files.items())
+    }
+    return (
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source_snapshot_id": source_snapshot_id,
+                "as_of": as_of,
+                "report_id": report_id,
+                "artifacts": artifacts,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 class SnapshotStore:
@@ -92,11 +134,23 @@ class SnapshotStore:
         ordered = tuple(
             sorted(files.items(), key=lambda item: (item[0] == "manifest.json", item[0]))
         )
+        if len(ordered) > MAX_BUNDLE_ENTRIES + 1:
+            raise ValueError("bundle entry budget exceeded")
+        aggregate_bytes = 0
         for name, content in ordered:
             if Path(name).parts != (name,) or name in {"", ".", ".."}:
                 raise ValueError("bundle filenames must be simple relative names")
             if not isinstance(content, str):
                 raise ValueError("bundle content must be text")
+            encoded_size = len(content.encode("utf-8"))
+            maximum = (
+                MAX_BUNDLE_MANIFEST_BYTES if name == "manifest.json" else MAX_BUNDLE_FILE_BYTES
+            )
+            if encoded_size > maximum:
+                raise ValueError("bundle file byte budget exceeded")
+            aggregate_bytes += encoded_size
+            if aggregate_bytes > MAX_BUNDLE_TOTAL_BYTES:
+                raise ValueError("bundle aggregate byte budget exceeded")
         if os.name != "posix":
             raise ValueError("UNSUPPORTED_PLATFORM_SECURITY: bundle mutation disabled")
 
@@ -138,7 +192,9 @@ class SnapshotStore:
                     handle.flush()
                     os.fsync(handle.fileno())
             try:
-                for name, _content in ordered:
+                artifacts = tuple(item for item in ordered if item[0] != "manifest.json")
+                manifest = tuple(item for item in ordered if item[0] == "manifest.json")
+                for name, _content in artifacts:
                     try:
                         os.link(
                             staged[name],
@@ -155,6 +211,28 @@ class SnapshotStore:
                 os.fsync(current_fd)
                 if not self._parent_anchor_matches(directory_parts, current_fd, directory_flags):
                     raise ValueError("output directory changed during transactional persistence")
+                for name, _content in manifest:
+                    try:
+                        os.link(
+                            staged[name],
+                            name,
+                            src_dir_fd=current_fd,
+                            dst_dir_fd=current_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileExistsError as exc:
+                        raise SnapshotAlreadyExists(
+                            f"bundle destination already exists: {name}"
+                        ) from exc
+                    committed.append(name)
+                if manifest:
+                    os.fsync(current_fd)
+                    if not self._parent_anchor_matches(
+                        directory_parts, current_fd, directory_flags
+                    ):
+                        raise ValueError(
+                            "output directory changed during transactional persistence"
+                        )
             except BaseException:
                 for name in committed:
                     try:
@@ -189,74 +267,156 @@ class SnapshotStore:
         parts = self._validated_parts(relative_directory)
         if os.name != "posix":
             raise IncompleteBundle("UNSUPPORTED_PLATFORM_SECURITY: bundle reads disabled")
-        directory = self.data_home.joinpath(*parts)
-        for private_directory in (self.data_home, *directory.parents[::-1], directory):
-            if private_directory == private_directory.parent:
-                continue
-            if private_directory == self.data_home or self.data_home in private_directory.parents:
-                metadata = private_directory.lstat()
-                if (
-                    not stat.S_ISDIR(metadata.st_mode)
-                    or private_directory.is_symlink()
-                    or stat.S_IMODE(metadata.st_mode) != 0o700
-                ):
-                    raise IncompleteBundle("bundle is INCOMPLETE: directory is unsafe")
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
         try:
-            entries = sorted(directory.iterdir())
+            root_fd = os.open(self.data_home, directory_flags)
         except OSError as exc:
             raise IncompleteBundle("bundle is INCOMPLETE: directory unavailable") from exc
-        visible = [
-            entry
-            for entry in entries
-            if not (entry.name.startswith(".") and entry.name.endswith(".tmp"))
-        ]
-        manifest_path = directory / "manifest.json"
-        if manifest_path not in visible:
-            raise IncompleteBundle("bundle is INCOMPLETE: manifest missing")
+        directory_fd = os.dup(root_fd)
         try:
-            manifest_metadata = manifest_path.lstat()
+            self._require_private_directory(root_fd, "PORTFOLIO_AGENT_HOME")
+            for component in parts:
+                next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+                self._require_private_directory(next_fd, "bundle directory")
+                os.close(directory_fd)
+                directory_fd = next_fd
+            entries = os.listdir(directory_fd)
+            if len(entries) > 4096:
+                raise IncompleteBundle("bundle is INCOMPLETE: entry budget exceeded")
+            visible = {
+                name for name in entries if not (name.startswith(".") and name.endswith(".tmp"))
+            }
+            if len(visible) > MAX_BUNDLE_ENTRIES + 1:
+                raise IncompleteBundle("bundle is INCOMPLETE: entry budget exceeded")
+            if "manifest.json" not in visible:
+                raise IncompleteBundle("bundle is INCOMPLETE: manifest missing")
+            manifest_bytes, _manifest_digest = self._read_anchored_bundle_file(
+                directory_fd, "manifest.json", MAX_BUNDLE_MANIFEST_BYTES, retain=True
+            )
+            if not self._parent_anchor_matches(parts, directory_fd, directory_flags):
+                raise IncompleteBundle("bundle is INCOMPLETE: directory anchor changed")
+            try:
+                manifest = json.loads(manifest_bytes, object_pairs_hook=self._unique_json)
+                if not isinstance(manifest, dict) or set(manifest) != {
+                    "schema_version",
+                    "source_snapshot_id",
+                    "as_of",
+                    "report_id",
+                    "artifacts",
+                }:
+                    raise ValueError
+                if manifest["schema_version"] != "1.0":
+                    raise ValueError
+                identity = parse_snapshot_identity(manifest["source_snapshot_id"])
+                from datetime import datetime, timezone
+
+                as_of = datetime.fromisoformat(str(manifest["as_of"]).replace("Z", "+00:00"))
+                if as_of.tzinfo is None or as_of.astimezone(timezone.utc) != identity.timestamp:
+                    raise ValueError
+                report_id = manifest["report_id"]
+                if not isinstance(report_id, str) or not report_id or len(report_id) > 256:
+                    raise ValueError
+                expected = manifest["artifacts"]
+            except Exception as exc:
+                raise IncompleteBundle("bundle is INCOMPLETE: manifest invalid") from exc
             if (
-                not stat.S_ISREG(manifest_metadata.st_mode)
-                or manifest_metadata.st_nlink != 1
-                or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
-                or manifest_metadata.st_size > 1024 * 1024
+                not isinstance(expected, dict)
+                or len(expected) > MAX_BUNDLE_ENTRIES
+                or set(expected) != visible - {"manifest.json"}
             ):
-                raise ValueError
-            manifest = json.loads(manifest_path.read_bytes(), object_pairs_hook=self._unique_json)
-            if (
-                not isinstance(manifest, dict)
-                or set(manifest) != {"schema_version", "source_snapshot_id", "artifacts"}
-                or manifest["schema_version"] != "1.0"
-                or re.fullmatch(
-                    r"ps-[0-9]{8}T[0-9]{6}Z-(?:real|simulate)-[a-z]{3}-[0-9a-f]{16}",
-                    str(manifest["source_snapshot_id"]),
+                raise IncompleteBundle("bundle is INCOMPLETE: artifact enumeration mismatch")
+            result: dict[str, Path] = {}
+            total_bytes = len(manifest_bytes)
+            for name, evidence in sorted(expected.items()):
+                if (
+                    Path(name).parts != (name,)
+                    or not isinstance(evidence, dict)
+                    or set(evidence) != {"sha256", "size_bytes"}
+                ):
+                    raise IncompleteBundle("bundle is INCOMPLETE: artifact manifest invalid")
+                size = evidence["size_bytes"]
+                digest = evidence["sha256"]
+                if (
+                    not isinstance(size, int)
+                    or isinstance(size, bool)
+                    or size < 0
+                    or size > MAX_BUNDLE_FILE_BYTES
+                    or not isinstance(digest, str)
+                    or len(digest) != 64
+                ):
+                    raise IncompleteBundle("bundle is INCOMPLETE: artifact manifest invalid")
+                _unused, actual_digest, actual_size = self._read_anchored_bundle_file(
+                    directory_fd, name, MAX_BUNDLE_FILE_BYTES, retain=False, include_size=True
                 )
-                is None
-            ):
-                raise ValueError
-            expected = manifest["artifacts"]
-        except Exception as exc:
-            raise IncompleteBundle("bundle is INCOMPLETE: manifest invalid") from exc
-        if (
-            not isinstance(expected, dict)
-            or len(expected) > 128
-            or set(expected) != {entry.name for entry in visible if entry.name != "manifest.json"}
-        ):
-            raise IncompleteBundle("bundle is INCOMPLETE: artifact enumeration mismatch")
-        result: dict[str, Path] = {}
-        for name, digest in sorted(expected.items()):
-            path = directory / name
-            metadata = path.lstat()
+                if not self._parent_anchor_matches(parts, directory_fd, directory_flags):
+                    raise IncompleteBundle("bundle is INCOMPLETE: directory anchor changed")
+                total_bytes += actual_size
+                if total_bytes > MAX_BUNDLE_TOTAL_BYTES:
+                    raise IncompleteBundle("bundle is INCOMPLETE: aggregate byte budget exceeded")
+                if actual_size != size or actual_digest != digest:
+                    raise IncompleteBundle("bundle is INCOMPLETE: artifact digest or size mismatch")
+                result[name] = self.data_home.joinpath(*parts, name)
+            if not self._parent_anchor_matches(parts, directory_fd, directory_flags):
+                raise IncompleteBundle("bundle is INCOMPLETE: directory anchor changed")
+            return result
+        except IncompleteBundle:
+            raise
+        except (OSError, ValueError) as exc:
+            raise IncompleteBundle("bundle is INCOMPLETE: unsafe anchored read") from exc
+        finally:
+            os.close(directory_fd)
+            os.close(root_fd)
+
+    @staticmethod
+    def _read_anchored_bundle_file(
+        directory_fd: int,
+        name: str,
+        maximum: int,
+        *,
+        retain: bool,
+        include_size: bool = False,
+    ) -> tuple[bytes, str] | tuple[bytes, str, int]:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(name, flags, dir_fd=directory_fd)
+        try:
+            before = os.fstat(fd)
             if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or stat.S_IMODE(metadata.st_mode) != 0o600
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size > maximum
             ):
                 raise IncompleteBundle("bundle is INCOMPLETE: artifact is unsafe")
-            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                raise IncompleteBundle("bundle is INCOMPLETE: artifact digest mismatch")
-            result[name] = path
-        return result
+            digest = hashlib.sha256()
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(fd, min(65536, maximum + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum:
+                    raise IncompleteBundle("bundle is INCOMPLETE: artifact size limit exceeded")
+                digest.update(chunk)
+                if retain:
+                    chunks.append(chunk)
+            after = os.fstat(fd)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            identity_before = (before.st_dev, before.st_ino, before.st_size)
+            if identity_before != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+            ) or identity_before != (
+                current.st_dev,
+                current.st_ino,
+                current.st_size,
+            ):
+                raise IncompleteBundle("bundle is INCOMPLETE: artifact changed during read")
+            result = (b"".join(chunks), digest.hexdigest())
+            return (*result, total) if include_size else result
+        finally:
+            os.close(fd)
 
     @staticmethod
     def _unique_json(pairs: list[tuple[str, object]]) -> dict[str, object]:

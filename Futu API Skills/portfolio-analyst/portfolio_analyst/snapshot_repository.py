@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import PortfolioSnapshot
+from .identity import InvalidSnapshotIdentity, parse_snapshot_identity
 from .persistence import SnapshotAlreadyExists, SnapshotStore
 from .private_home import PrivateHomeError, ensure_private_home
 from .schema import validate_snapshot_document
 from .snapshot_io import InvalidSnapshot, snapshot_from_document
 
 
-_ID = re.compile(r"^ps-(\d{4})(\d{2})\d{2}T\d{6}Z-(?:real|simulate)-[a-z]{3}-[0-9a-f]{16}$")
 MAX_SNAPSHOT_ENTRIES = 10_000
 MAX_SNAPSHOT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
@@ -43,17 +43,23 @@ class SnapshotRepository:
 
     @staticmethod
     def _relative(snapshot_id: str) -> Path:
-        match = _ID.fullmatch(snapshot_id)
-        if match is None:
-            raise SnapshotRepositoryError("snapshot ID is not canonical")
         try:
-            datetime.strptime(snapshot_id[3:19], "%Y%m%dT%H%M%SZ")
-        except ValueError as exc:
-            raise SnapshotRepositoryError("snapshot ID timestamp is not canonical") from exc
-        return Path("snapshots", match.group(1), match.group(2), f"{snapshot_id}.json")
+            identity = parse_snapshot_identity(snapshot_id)
+        except InvalidSnapshotIdentity as exc:
+            raise SnapshotRepositoryError("snapshot ID is not canonical") from exc
+        return Path(
+            "snapshots",
+            identity.timestamp.strftime("%Y"),
+            identity.timestamp.strftime("%m"),
+            f"{snapshot_id}.json",
+        )
 
     def save(self, snapshot: PortfolioSnapshot) -> Path:
         # Reconstruction validates schema, identity and all financial semantics before persistence.
+        if os.name != "posix":
+            raise SnapshotRepositoryError(
+                "UNSUPPORTED_PLATFORM_SECURITY: snapshot mutation disabled"
+            )
         try:
             self.data_home = ensure_private_home(self.data_home, create=True)
         except PrivateHomeError as exc:
@@ -66,10 +72,6 @@ class SnapshotRepository:
             raise SnapshotRepositoryError(
                 "snapshot schema, identity, or semantics are invalid"
             ) from exc
-        if os.name != "posix":
-            raise SnapshotRepositoryError(
-                "UNSUPPORTED_PLATFORM_SECURITY: snapshot mutation disabled"
-            )
         relative = self._relative(validated.snapshot_id)
         rendered = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
         self._preflight_private_parents(relative)
@@ -89,9 +91,9 @@ class SnapshotRepository:
             return self.data_home / relative
 
     def read(self, snapshot_id: str) -> PortfolioSnapshot:
-        self._revalidate_home()
         if os.name != "posix":
             raise SnapshotRepositoryError("UNSUPPORTED_PLATFORM_SECURITY: snapshot reads disabled")
+        self._revalidate_home()
         relative = self._relative(snapshot_id)
         try:
             raw = self._read_anchored(relative)
@@ -212,19 +214,29 @@ class SnapshotRepository:
                 raise SnapshotRepositoryError("snapshot directories must have mode 0700")
 
     def list(
-        self, *, start: datetime | None = None, end: datetime | None = None
+        self,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int | None = None,
+        max_total_bytes: int | None = None,
     ) -> tuple[PortfolioSnapshot, ...]:
+        if limit is not None and limit < 0:
+            raise SnapshotRepositoryError("snapshot list limit must be non-negative")
+        byte_limit = MAX_SNAPSHOT_TOTAL_BYTES if max_total_bytes is None else max_total_bytes
+        if byte_limit < 0:
+            raise SnapshotRepositoryError("snapshot byte budget must be non-negative")
         if start is not None and (start.tzinfo is None or start.utcoffset() is None):
             raise SnapshotRepositoryError("snapshot range start must be timezone-aware")
         if end is not None and (end.tzinfo is None or end.utcoffset() is None):
             raise SnapshotRepositoryError("snapshot range end must be timezone-aware")
         if start is not None and end is not None and start > end:
             raise SnapshotRepositoryError("snapshot range start cannot follow end")
-        self._revalidate_home()
         if os.name != "posix":
             raise SnapshotRepositoryError(
                 "UNSUPPORTED_PLATFORM_SECURITY: snapshot enumeration disabled"
             )
+        self._revalidate_home()
         root = self.data_home / "snapshots"
         if not root.exists():
             return ()
@@ -270,10 +282,22 @@ class SnapshotRepository:
                     relative = path.relative_to(self.data_home)
                     if self._relative(path.stem) != relative:
                         raise SnapshotRepositoryError("snapshot history path is not canonical")
+                    try:
+                        timestamp = parse_snapshot_identity(path.stem).timestamp
+                    except InvalidSnapshotIdentity as exc:
+                        raise SnapshotRepositoryError(
+                            "snapshot history identity is invalid"
+                        ) from exc
+                    if start is not None and timestamp < start.astimezone(timestamp.tzinfo):
+                        continue
+                    if end is not None and timestamp > end.astimezone(timestamp.tzinfo):
+                        continue
                     metadata = path.lstat()
                     candidates.append((path, metadata.st_size))
+                    if limit is not None and len(candidates) > limit:
+                        raise SnapshotRepositoryError("snapshot list consumer limit exceeded")
                     total_bytes += metadata.st_size
-                    if total_bytes > MAX_SNAPSHOT_TOTAL_BYTES:
+                    if total_bytes > byte_limit:
                         raise SnapshotRepositoryError("snapshot enumeration byte budget exceeded")
         results: list[PortfolioSnapshot] = []
         seen: set[str] = set()

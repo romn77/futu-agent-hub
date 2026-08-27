@@ -276,5 +276,9 @@ only stale private `.tmp` leaves. Journal JSON is canonical and duplicate-key-sa
 checked inside the interprocess lock. POSIX persistence revalidates `0700` directories and `0600`,
 single-link regular files on opened descriptors. Platforms without equivalent handle-level
 no-follow/reparse and interprocess locking fail closed with `UNSUPPORTED_PLATFORM_SECURITY`.
-Multi-file bundles publish `manifest.json` last; missing manifests or digest failures are
-`INCOMPLETE`, never valid report bundles.
+Every CLI multi-file bundle records its canonical source snapshot time/ID, report ID, and each
+artifact's byte size and SHA-256. Artifacts are linked and directory-fsynced before
+`manifest.json` is linked and directory-fsynced; missing manifests, unsafe descriptor metadata,
+size/digest failures, or anchor changes are `INCOMPLETE`. Snapshot/lifecycle enumeration accepts
+consumer count/byte limits, and lifecycle report shape/operation/wall budgets run before schema
+validation. No repository operation is enabled on a platform lacking the required secure handles.

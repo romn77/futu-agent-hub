@@ -55,7 +55,9 @@ class AccountAliasStore:
 
     def load_or_create(self) -> AccountAliaser:
         if os.name != "posix":
-            return self._load_or_create_fallback()
+            raise AccountAliasError(
+                "UNSUPPORTED_PLATFORM_SECURITY: account alias repository mutation disabled"
+            )
         flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
         try:
             root_fd = os.open(self.data_home, flags)
@@ -146,25 +148,9 @@ class AccountAliasStore:
             os.close(fd)
 
     def _load_or_create_fallback(self) -> AccountAliaser:
-        config = self.data_home / "config"
-        config.mkdir(parents=True, exist_ok=True)
-        if self._is_reparse(config) or not config.is_dir():
-            raise AccountAliasError("private config path must not be a reparse point")
-        path = config / self.KEY_NAME
-        if self._is_reparse(path):
-            raise AccountAliasError("account alias key must not be a symlink")
-        try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            descriptor = None
-        if descriptor is not None:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(secrets.token_bytes(32))
-                handle.flush()
-                os.fsync(handle.fileno())
-        if self._is_reparse(path) or not path.is_file():
-            raise AccountAliasError("account alias key must be a regular file")
-        return AccountAliaser(path.read_bytes(), provenance="STABLE")
+        raise AccountAliasError(
+            "UNSUPPORTED_PLATFORM_SECURITY: account alias repository mutation disabled"
+        )
 
     @staticmethod
     def _is_reparse(path: Path) -> bool:

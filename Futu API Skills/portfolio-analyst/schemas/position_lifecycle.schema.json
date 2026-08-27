@@ -19,21 +19,21 @@
         "configured_records": {"type": "integer", "minimum": 0, "maximum": 10000},
         "assessed_positions": {"type": "integer", "minimum": 0, "maximum": 20000},
         "unconfigured_positions": {"type": "integer", "minimum": 0, "maximum": 10000},
-        "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 1000},
         "history": {
           "type": "object", "additionalProperties": false,
           "required": ["status", "candidate_snapshots", "accepted_snapshots", "duplicate_snapshots", "future_snapshots", "pre_open_observations", "position_observations", "window_start", "window_end", "snapshots", "issue"],
           "properties": {
             "status": {"enum": ["AVAILABLE", "PARTIAL", "UNAVAILABLE"]},
-            "candidate_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
-            "accepted_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
-            "duplicate_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
-            "future_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
-            "pre_open_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
-            "position_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
+            "candidate_snapshots": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "accepted_snapshots": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "duplicate_snapshots": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "future_snapshots": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "pre_open_observations": {"type": "integer", "minimum": 0, "maximum": 2000000},
+            "position_observations": {"type": "integer", "minimum": 0, "maximum": 2000000},
             "window_start": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
             "window_end": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
-            "snapshots": {"type": "array", "maxItems": 10000, "items": {"type": "object", "additionalProperties": false, "required": ["snapshot_id", "as_of"], "properties": {"snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"}, "as_of": {"type": "string", "format": "date-time"}}}},
+            "snapshots": {"type": "array", "maxItems": 1000, "items": {"type": "object", "additionalProperties": false, "required": ["snapshot_id", "as_of"], "properties": {"snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"}, "as_of": {"type": "string", "format": "date-time"}}}},
             "issue": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["code", "detail"], "properties": {"code": {"enum": ["HISTORY_INVALID", "HISTORY_UNAVAILABLE"]}, "detail": {"type": "string", "minLength": 1, "maxLength": 4096}}}, {"type": "null"}]}
           }
         }
@@ -102,9 +102,9 @@
         "holding_horizon": {"type": ["string", "null"], "maxLength": 128},
         "last_reviewed_at": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
         "history_evidence_status": {"enum": ["AVAILABLE", "PARTIAL", "NOT_REQUIRED"]},
-        "history_excluded_pre_open": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "history_excluded_pre_open": {"type": "integer", "minimum": 0, "maximum": 1000},
         "history_evidence": {
-          "type": "array", "maxItems": 10000,
+          "type": "array", "maxItems": 1000,
           "items": {
             "type": "object", "additionalProperties": false,
             "required": ["snapshot_id", "as_of", "identity", "present", "weight"],

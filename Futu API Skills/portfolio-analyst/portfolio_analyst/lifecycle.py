@@ -769,7 +769,16 @@ def analyze_lifecycle(
     ):
         raise LifecycleInputError("signed lifecycle portfolios are unsupported")
     current = {item.identity: item for item in economic}
-    records = {item.symbol: item for item in repository.list()}
+    records = {
+        item.symbol: item
+        for item in repository.list(
+            limit=MAX_CONFIG_RECORDS,
+            max_operations=max_operations,
+            max_seconds=max_seconds,
+            clock=clock,
+        )
+    }
+    consume(len(records) + 1)
     if len(records) > MAX_CONFIG_RECORDS:
         raise LifecycleInputError("lifecycle configuration record budget exceeded")
     history_index: list[tuple[PortfolioSnapshot, Mapping[str, EconomicPosition]]] = []

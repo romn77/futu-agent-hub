@@ -18,6 +18,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from .models import _json_value
+from .identity import InvalidSnapshotIdentity, parse_snapshot_identity
 from .normalization import canonical_unknown
 from .risk import _latest_complete_market_close_date
 from .trade_quality import canonical_external_source_evidence, canonical_quality_issues
@@ -28,13 +29,10 @@ class ReportSemanticError(ValueError):
 
 
 def _snapshot_id_timestamp(value: str, *, label: str) -> datetime:
-    match = re.fullmatch(r"ps-(\d{8}T\d{6}Z)-(?:real|simulate)-[a-z]{3}-[0-9a-f]{16}", value)
-    if match is None:
-        raise ReportSemanticError(f"{label} snapshot identity is not canonical")
     try:
-        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise ReportSemanticError(f"{label} snapshot identity timestamp is invalid") from exc
+        return parse_snapshot_identity(value).timestamp
+    except InvalidSnapshotIdentity as exc:
+        raise ReportSemanticError(f"{label} snapshot identity is invalid") from exc
 
 
 _TRADE_ARRAY_LIMITS = {
@@ -699,10 +697,91 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             raise ReportSemanticError("lifecycle and risk modules reference different snapshots")
 
 
-def validate_lifecycle_document(payload: dict[str, Any]) -> None:
+_LIFECYCLE_MAX_BYTES = 128 * 1024 * 1024
+_LIFECYCLE_MAX_NODES = 3_000_000
+_LIFECYCLE_MAX_PROPERTIES = 64
+_LIFECYCLE_MAX_POSITIONS = 20_000
+_LIFECYCLE_MAX_HISTORY = 1_000
+_LIFECYCLE_MAX_OBSERVATIONS = 2_000_000
+
+
+def _preflight_lifecycle_shape(payload: object, consume: Callable[[int], None]) -> None:
+    stack: list[tuple[str, object]] = [("", payload)]
+    containers: set[int] = set()
+    observations = 0
+    nodes = 0
+    while stack:
+        path, value = stack.pop()
+        nodes += 1
+        if nodes > _LIFECYCLE_MAX_NODES:
+            raise ReportSemanticError("lifecycle report node budget exceeded")
+        consume()
+        if isinstance(value, dict):
+            identity = id(value)
+            if identity in containers:
+                raise ReportSemanticError("lifecycle report contains a cyclic container")
+            containers.add(identity)
+            if len(value) > _LIFECYCLE_MAX_PROPERTIES:
+                raise ReportSemanticError("lifecycle report object property budget exceeded")
+            stack.extend(
+                (f"{path}.{key}" if path else str(key), item) for key, item in value.items()
+            )
+        elif isinstance(value, (list, tuple)):
+            identity = id(value)
+            if identity in containers:
+                raise ReportSemanticError("lifecycle report contains a cyclic container")
+            containers.add(identity)
+            leaf = path.rsplit(".", 1)[-1]
+            maximum = {
+                "positions": _LIFECYCLE_MAX_POSITIONS,
+                "coverage.history.snapshots": _LIFECYCLE_MAX_HISTORY,
+                "data_quality_reasons": 400_000,
+                "data_quality_notes": 400_000,
+            }.get(path, _LIFECYCLE_MAX_OBSERVATIONS)
+            if leaf in {"invalidation_conditions", "review_triggers", "notes"}:
+                maximum = 32
+            elif leaf == "findings":
+                maximum = 80_000 if path == "findings" else 8
+            elif leaf == "data_quality_notes" and path != "data_quality_notes":
+                maximum = 16
+            if path.endswith("history_evidence"):
+                observations += len(value)
+                maximum = _LIFECYCLE_MAX_HISTORY
+            if len(value) > maximum or observations > _LIFECYCLE_MAX_OBSERVATIONS:
+                raise ReportSemanticError("lifecycle report array or observation budget exceeded")
+            stack.extend((path, item) for item in value)
+
+
+def validate_lifecycle_document(
+    payload: dict[str, Any],
+    *,
+    max_validation_operations: int = 3_000_000,
+    max_validation_seconds: float = 10.0,
+    validation_clock: Callable[[], float] = time.monotonic,
+) -> None:
     """Validate shape, complete identity, coverage, ordering, and flattened findings."""
 
+    if max_validation_operations <= 0 or max_validation_seconds <= 0:
+        raise ReportSemanticError("lifecycle validation budget is invalid")
+    started = validation_clock()
+    remaining = max_validation_operations
+
+    def consume(amount: int = 1) -> None:
+        nonlocal remaining
+        remaining -= amount
+        if remaining < 0 or validation_clock() - started > max_validation_seconds:
+            raise ReportSemanticError("lifecycle validation operation or wall-time budget exceeded")
+
+    _preflight_lifecycle_shape(payload, consume)
+    try:
+        encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ReportSemanticError("lifecycle report is not bounded JSON") from exc
+    if len(encoded) > _LIFECYCLE_MAX_BYTES:
+        raise ReportSemanticError("lifecycle report byte budget exceeded")
+    consume()
     _validate(payload, "position_lifecycle.schema.json")
+    consume()
     body = dict(payload)
     claimed = body.pop("lifecycle_report_id")
     expected = (
@@ -756,6 +835,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     ):
         raise ReportSemanticError("lifecycle accepted history catalog is inconsistent")
     for entry in history_catalog:
+        consume()
         catalog_timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
         if (
             _snapshot_id_timestamp(entry["snapshot_id"], label="lifecycle accepted history")
@@ -904,6 +984,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     )
     report_date = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00")).date()
     for item in positions:
+        consume(len(item["history_evidence"]) + len(item["findings"]) + 1)
         types = {finding["type"] for finding in item["findings"]}
         for finding in item["findings"]:
             expected_severity = {

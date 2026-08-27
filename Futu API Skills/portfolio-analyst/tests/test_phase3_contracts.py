@@ -161,6 +161,7 @@ def test_simulate_cli_reads_confined_request_and_transactionally_saves_bundle(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "HYPOTHETICAL"
     assert sorted(path.name for path in (home / "reports/sim-1").iterdir()) == [
+        "manifest.json",
         "request.json",
         "result.json",
         "summary.md",

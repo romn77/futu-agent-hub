@@ -175,6 +175,8 @@ class JournalRepository:
         return self._read("analyses.jsonl")
 
     def _append(self, filename: str, **fields: Any) -> JournalRecord:
+        if os.name != "posix":
+            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal append disabled")
         if _SNAPSHOT_ID.fullmatch(str(fields["source_snapshot_id"])) is None:
             raise JournalError("source_snapshot_id is not canonical")
         try:
@@ -193,8 +195,6 @@ class JournalRepository:
             "decision": fields["decision"],
             "metadata": _safe_metadata(fields["metadata"]),
         }
-        if os.name != "posix":
-            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal append disabled")
         import fcntl
 
         journal_fd = self._journal_directory_fd(create=True)
@@ -278,14 +278,14 @@ class JournalRepository:
             os.close(root_fd)
 
     def _read(self, filename: str) -> tuple[JournalRecord, ...]:
+        if os.name != "posix":
+            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal reads disabled")
         if not self.data_home.exists():
             return ()
         try:
             self.data_home = ensure_private_home(self.data_home)
         except PrivateHomeError as exc:
             raise JournalError(str(exc)) from exc
-        if os.name != "posix":
-            raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal reads disabled")
         try:
             journal_fd = self._journal_directory_fd(create=False)
         except FileNotFoundError:

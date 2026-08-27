@@ -4,7 +4,8 @@ Phase 2 answers one question: what does one immutable portfolio snapshot say abo
 structure and its largest review risks? It does not produce independent buy/sell conclusions or
 orders. Every JSON and Markdown report repeats the snapshot's `snapshot_id`, `as_of`, coverage,
 quality state, and quality notes. Snapshot bytes use descriptor-relative `O_NOFOLLOW` traversal with
-file and parent inode revalidation (Windows uses lstat/reparse checks). After schema and full-body
+file and parent inode revalidation. Platforms without equivalent secure handles fail closed rather
+than falling back to path checks. After schema and full-body
 identity checks, a dedicated Phase 1 validator recomputes FX, valuation, weight, NAV, exposure,
 alias, and quality invariants before analysis trusts the document.
 

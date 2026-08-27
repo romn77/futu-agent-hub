@@ -67,9 +67,14 @@ Snapshots are immutable and content-addressed under `snapshots/YYYY/MM`. Journal
 analysis references are explicit `decisions.jsonl` and `analyses.jsonl` appends. Each record has a
 full-body identity and previous-record hash. Existing records are never silently repaired.
 Snapshot enumeration validates exact year/month placement, legal months, entry/byte budgets, and
-descriptor permissions before parsing. Journal JSON is canonical and duplicate-key-safe. Analysis
-bundles publish `manifest.json` last; missing manifests, unexpected artifacts, unsafe files, or
-digest mismatches are `INCOMPLETE`.
+descriptor permissions before parsing. Journal JSON is canonical and duplicate-key-safe. Every CLI
+multi-file bundle publishes artifacts, fsyncs the directory, then publishes `manifest.json` and
+fsyncs again. The manifest binds a real-calendar canonical source snapshot ID and `as_of`, report
+ID, and every artifact's byte size and SHA-256. Validation uses anchored no-follow descriptors,
+bounded streaming digests, descriptor mode/link checks, aggregate budgets, and post-read
+inode/parent revalidation. Missing manifests, unexpected artifacts, unsafe files, anchor changes,
+or size/digest mismatches are `INCOMPLETE`. Repository consumer limits and lifecycle
+shape/node/observation/operation/wall limits apply before bulk parsing or JSON Schema work.
 
 Comprehensive analysis treats lifecycle as an independent local module. Invalid or inaccessible
 lifecycle configuration produces an `UNAVAILABLE` lifecycle section while the risk report remains
