@@ -1,4 +1,4 @@
-"""Central trust validation for the official futuapi Skill."""
+"""Central compatibility validation for a futuapi Skill source."""
 
 from __future__ import annotations
 
@@ -75,4 +75,4 @@ def validate_futuapi_skill(candidate: Path) -> SkillValidation:
         if not resolved_script.is_file():
             return SkillValidation(None, f"required script is not a file: {relative_script}")
 
-    return SkillValidation(root, "verified futuapi Skill identity and read-only script layout")
+    return SkillValidation(root, "compatible futuapi Skill identity and read-only script layout")

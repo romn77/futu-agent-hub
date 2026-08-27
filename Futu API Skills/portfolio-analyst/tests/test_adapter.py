@@ -98,6 +98,48 @@ def test_json_string_values_are_recursively_text_sanitized():
     assert "safe message" in sanitized
 
 
+@pytest.mark.parametrize(
+    ("label", "value", "fragments"),
+    [
+        ("比赛账户名称", "Private, Competition Display", ("Private", "Competition", "Display")),
+        ("api_key", "Alpha, Key Material", ("Alpha", "Key Material")),
+        ("api-key", "hyphen, key material", ("hyphen", "key material")),
+        ("secret", "deep, private value", ("deep", "private value")),
+        ("access_token", "Gamma, Delta Value", ("Gamma", "Delta Value")),
+        ("password_hash", "Omega, Sigma Value", ("Omega", "Sigma Value")),
+        ("client_secret", "Theta, Private Value", ("Theta", "Private Value")),
+        ("trading-password", "Lambda, Hidden Value", ("Lambda", "Hidden Value")),
+    ],
+)
+def test_plain_text_sensitive_labels_over_redact_to_end_of_line(label, value, fragments):
+    sanitized = FutuAdapter.sanitize_output(f"{label}: {value}\nstatus: safe")
+
+    assert all(fragment not in sanitized for fragment in fragments)
+    assert "status: safe" in sanitized
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "api_key",
+        "api-key",
+        "secret",
+        "client_secret",
+        "refresh-token",
+        "auth_token",
+        "password_file",
+        "trading-password",
+    ],
+)
+def test_json_scalar_sensitive_labels_are_fully_redacted(label):
+    raw = json.dumps({"error": f"{label}=Alpha, Beta Credential"})
+
+    sanitized = FutuAdapter.sanitize_output(raw)
+
+    assert "Alpha" not in sanitized
+    assert "Beta Credential" not in sanitized
+
+
 def test_run_masks_official_human_account_output(monkeypatch, tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
     raw = (
@@ -198,3 +240,16 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
     )
     for secret in ("123456789", "secret-token", "ORDER-7788", "private-file"):
         assert secret not in exposed
+
+
+def test_adapter_revalidates_skill_before_each_command(tmp_path):
+    skill = _skill(tmp_path)
+    adapter = FutuAdapter(skill)
+    script = skill / adapter.READ_ONLY_SCRIPTS["get_accounts"]
+    script.unlink()
+    outside = tmp_path / "swapped.py"
+    outside.write_text("print('swapped')\n", encoding="utf-8")
+    script.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="escapes Skill directory"):
+        adapter.command("get_accounts", ["--json"])

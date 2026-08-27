@@ -1,13 +1,11 @@
 import json
 import socket
 import subprocess
+import sys
 from types import SimpleNamespace
 
-import pytest
-
-from portfolio_analyst import doctor
-from portfolio_analyst.doctor import probe_opend, probe_sdk, run_doctor
-from portfolio_analyst.settings import discover_futuapi_skill
+from portfolio_analyst import doctor, opend_probe_worker, settings
+from portfolio_analyst.doctor import probe_environment, run_doctor
 
 
 def _trusted_skill(path):
@@ -22,30 +20,36 @@ def test_skill_discovery_prefers_explicit_environment(monkeypatch, tmp_path):
     explicit = _trusted_skill(tmp_path / "futuapi")
     monkeypatch.setenv("FUTUAPI_SKILL_DIR", str(explicit))
 
-    assert discover_futuapi_skill(repo_root=tmp_path) == explicit.resolve()
+    source = settings.discover_futuapi_skill_source(repo_root=tmp_path, global_roots=[])
+
+    assert source.path == explicit.resolve()
+    assert source.kind == "explicit"
 
 
 def test_invalid_skill_override_falls_back_to_repository(monkeypatch, tmp_path):
     fallback = _trusted_skill(tmp_path / "Futu API Skills" / "futuapi")
     monkeypatch.setenv("FUTUAPI_SKILL_DIR", str(tmp_path / "missing"))
 
-    assert discover_futuapi_skill(repo_root=tmp_path, cwd=tmp_path) == fallback.resolve()
+    assert (
+        settings.discover_futuapi_skill(repo_root=tmp_path, global_roots=[]) == fallback.resolve()
+    )
 
 
-def test_sdk_probe_rejects_broken_import(monkeypatch):
+def test_worker_reports_broken_sdk_import(monkeypatch):
     def broken_import(_name):
         raise RuntimeError("native dependency failed")
 
-    monkeypatch.setattr(doctor.importlib, "import_module", broken_import)
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", broken_import)
 
-    module, sdk_version, detail = probe_sdk()
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
 
-    assert module is None
-    assert sdk_version is None
-    assert "import failed" in detail
+    assert result["sdk"]["available"] is False
+    assert result["sdk"]["version"] is None
+    assert "import failed" in result["sdk"]["detail"]
+    assert result["opend"]["available"] is False
 
 
-def test_opend_probe_rejects_unrelated_tcp_listener_when_handshake_fails():
+def test_worker_rejects_unrelated_tcp_listener_when_handshake_fails():
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen()
@@ -63,7 +67,7 @@ def test_opend_probe_rejects_unrelated_tcp_listener_when_handshake_fails():
 
     fake_sdk = SimpleNamespace(OpenQuoteContext=NotOpenDContext, RET_OK=0)
     try:
-        available, detail = doctor.perform_opend_handshake(fake_sdk, host, port)
+        available, detail = opend_probe_worker.perform_opend_handshake(fake_sdk, host, port)
     finally:
         listener.close()
 
@@ -71,37 +75,56 @@ def test_opend_probe_rejects_unrelated_tcp_listener_when_handshake_fails():
     assert "handshake failed" in detail
 
 
-def test_opend_probe_has_bounded_timeout(monkeypatch):
-    def time_out(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd=["worker"], timeout=2)
+def test_environment_probe_bounds_sdk_import_and_handshake_together():
+    def hanging_worker(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["worker-importing-sdk"], timeout=2)
 
-    monkeypatch.setattr(doctor.subprocess, "run", time_out)
+    result = probe_environment("127.0.0.1", 11111, runner=hanging_worker)
 
-    available, detail = probe_opend(SimpleNamespace(), "127.0.0.1", 11111)
+    assert result["sdk"]["available"] is False
+    assert "deadline exceeded" in result["sdk"]["detail"]
+    assert result["opend"]["available"] is False
+    assert "unverified" in result["opend"]["detail"]
 
-    assert available is False
-    assert "deadline exceeded" in detail
 
-
-def test_opend_probe_parses_worker_success_with_utf8_and_deadline(monkeypatch):
+def test_environment_probe_parses_independent_sdk_and_opend_results():
     observed = {}
+    expected = {
+        "sdk": {"available": True, "version": "10.5.1", "detail": "SDK imported"},
+        "opend": {"available": True, "detail": "quote handshake succeeded"},
+    }
 
     def completed(args, **kwargs):
         observed["args"] = args
         observed.update(kwargs)
-        output = 'SDK log\n{"available": true, "detail": "verified quote handshake"}\n'
+        output = f"SDK log\n{json.dumps(expected)}\n"
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
-    monkeypatch.setattr(doctor.subprocess, "run", completed)
+    result = probe_environment("127.0.0.1", 11111, runner=completed)
 
-    available, detail = probe_opend(SimpleNamespace(), "127.0.0.1", 11111)
-
-    assert available is True
-    assert detail == "verified quote handshake"
-    assert observed["args"][1:3] == ["-m", "portfolio_analyst.opend_probe_worker"]
-    assert observed["timeout"] == doctor.OPEND_PROBE_TIMEOUT_SECONDS
+    assert result == expected
+    assert observed["args"][0] == sys.executable
+    assert observed["args"][1] == str(doctor.OPEND_PROBE_WORKER)
+    assert observed["timeout"] == doctor.DIAGNOSTIC_TIMEOUT_SECONDS
     assert observed["encoding"] == "utf-8"
     assert observed["errors"] == "replace"
+
+
+def test_worker_launch_succeeds_from_unrelated_cwd(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    completed = subprocess.run(
+        [sys.executable, str(doctor.OPEND_PROBE_WORKER)],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+        timeout=2,
+    )
+
+    assert completed.returncode == 2
+    assert "ModuleNotFoundError" not in completed.stderr
+    assert json.loads(completed.stdout)["detail"] == "invalid diagnostic worker arguments"
 
 
 def test_successful_handshake_with_close_failure_is_unavailable():
@@ -114,25 +137,26 @@ def test_successful_handshake_with_close_failure_is_unavailable():
 
     fake_sdk = SimpleNamespace(OpenQuoteContext=lambda **_kwargs: Context(), RET_OK=0)
 
-    available, detail = doctor.perform_opend_handshake(fake_sdk, "127.0.0.1", 11111)
+    available, detail = opend_probe_worker.perform_opend_handshake(fake_sdk, "127.0.0.1", 11111)
 
     assert available is False
     assert "cleanup failed" in detail
 
 
-def test_doctor_reports_missing_sdk_and_opend_without_faking_success(tmp_path):
+def test_doctor_reports_independent_worker_results(tmp_path):
     skill = _trusted_skill(tmp_path / "futuapi")
+    environment = {
+        "sdk": {"available": False, "version": None, "detail": "SDK missing"},
+        "opend": {"available": False, "detail": "not attempted; SDK unavailable"},
+    }
 
-    report = run_doctor(
-        skill_dir=skill,
-        sdk_probe=lambda: (None, None, "futu module is not installed"),
-        opend_probe=lambda *_args: pytest.fail("OpenD must not be claimed without a working SDK"),
-    )
+    report = run_doctor(skill_dir=skill, environment_probe=lambda *_args: environment)
 
     assert report["ok"] is False
     assert report["checks"]["futuapi_skill"]["available"] is True
-    assert report["checks"]["sdk"]["available"] is False
+    assert report["checks"]["sdk"] == environment["sdk"]
     assert report["checks"]["opend"]["available"] is False
+    assert report["checks"]["opend"]["detail"] == environment["opend"]["detail"]
 
 
 def test_cli_doctor_json_supports_no_save(monkeypatch, tmp_path, capsys):
@@ -144,7 +168,7 @@ def test_cli_doctor_json_supports_no_save(monkeypatch, tmp_path, capsys):
     expected = {
         "ok": False,
         "checks": {
-            "futuapi_skill": {"available": True, "detail": "verified"},
+            "futuapi_skill": {"available": True, "detail": "compatible"},
             "sdk": {"available": False, "detail": "missing"},
             "opend": {"available": False, "detail": "not checked"},
         },

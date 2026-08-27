@@ -12,6 +12,13 @@ from .skill_trust import validate_futuapi_skill
 DEFAULT_DATA_HOME = Path("~/.moomoo-portfolio-agent")
 
 
+@dataclass(frozen=True)
+class FutuSkillSource:
+    path: Path | None
+    kind: str
+    detail: str
+
+
 def _repository_root() -> Path | None:
     for parent in Path(__file__).resolve().parents:
         if (parent / ".git").exists():
@@ -57,33 +64,55 @@ def resolve_output_path(data_home: Path, requested: str | Path) -> Path:
     return candidate
 
 
-def discover_futuapi_skill(
-    *, repo_root: Path | None = None, cwd: Path | None = None
-) -> Path | None:
-    """Find the official futuapi Skill without accepting user-selected scripts."""
+def discover_futuapi_skill_source(
+    *, repo_root: Path | None = None, global_roots: list[Path] | None = None
+) -> FutuSkillSource:
+    """Find a compatible Skill in explicit, repository, then known global locations."""
 
     explicit = os.environ.get("FUTUAPI_SKILL_DIR")
     here = Path(__file__).resolve()
     inferred_repo = here.parents[3]
     root = (repo_root or inferred_repo).resolve()
-    current = (cwd or Path.cwd()).resolve()
-    candidates = []
+    roots = global_roots
+    if roots is None:
+        roots = [
+            Path.home() / ".claude" / "skills",
+            Path.home() / ".codex" / "skills",
+            Path.home() / ".agents" / "skills",
+        ]
+    candidates: list[tuple[Path, str, str]] = []
     if explicit:
-        candidates.append(Path(explicit))
+        candidates.append(
+            (
+                Path(explicit),
+                "explicit",
+                "compatible futuapi Skill from user-configured FUTUAPI_SKILL_DIR",
+            )
+        )
     candidates.extend(
         [
-            root / "Futu API Skills" / "futuapi",
-            root / "futuapi",
-            current / "Futu API Skills" / "futuapi",
-            current / "futuapi",
-            current / "skills" / "futuapi",
-            Path.home() / ".claude" / "skills" / "futuapi",
-            Path.home() / ".codex" / "skills" / "futuapi",
-            Path.home() / ".agents" / "skills" / "futuapi",
+            (
+                root / "Futu API Skills" / "futuapi",
+                "repository",
+                "compatible futuapi Skill from repository layout",
+            ),
+            (root / "futuapi", "repository", "compatible futuapi Skill from repository layout"),
         ]
     )
-    for candidate in candidates:
+    candidates.extend(
+        (global_root / "futuapi", "global", "compatible futuapi Skill from known global root")
+        for global_root in roots
+    )
+    for candidate, kind, detail in candidates:
         validation = validate_futuapi_skill(candidate)
         if validation.valid:
-            return validation.root
-    return None
+            return FutuSkillSource(validation.root, kind, detail)
+    return FutuSkillSource(None, "missing", "compatible futuapi Skill not found")
+
+
+def discover_futuapi_skill(
+    *, repo_root: Path | None = None, global_roots: list[Path] | None = None
+) -> Path | None:
+    """Return only the path from ordered compatible-Skill discovery."""
+
+    return discover_futuapi_skill_source(repo_root=repo_root, global_roots=global_roots).path

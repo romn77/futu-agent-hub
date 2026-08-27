@@ -1,4 +1,4 @@
-"""Narrow subprocess boundary around approved read-only official scripts."""
+"""Narrow subprocess boundary around compatible read-only Skill scripts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .skill_trust import READ_ONLY_SCRIPTS as VERIFIED_READ_ONLY_SCRIPTS
+from .skill_trust import READ_ONLY_SCRIPTS as ALLOWED_READ_ONLY_SCRIPTS
 from .skill_trust import validate_futuapi_skill
 
 
@@ -18,9 +18,9 @@ class UnsafeFutuCommand(ValueError):
 
 
 class FutuAdapter:
-    """Execute only audited, read-only scripts from the official futuapi Skill."""
+    """Execute only fixed read-only scripts from a compatible futuapi Skill."""
 
-    READ_ONLY_SCRIPTS = VERIFIED_READ_ONLY_SCRIPTS
+    READ_ONLY_SCRIPTS = ALLOWED_READ_ONLY_SCRIPTS
     DENY_TERMS = frozenset(
         {
             "place_order",
@@ -61,24 +61,30 @@ class FutuAdapter:
         r"(?:"
         r"(?:[\"']?(?:acc(?:ount)?[ _-]?id|order[ _-]?id|deal[ _-]?id|card[ _-]?num|"
         r"login[ _-]?account|acc(?:ount)?[ _-]?name|competition[ _-]?acc[ _-]?name|"
-        r"password|passwd|pwd|token|credentials?)[\"']?|账户\s*ID|订单\s*ID|成交\s*ID|"
+        r"api[ _-]?key|secret|password(?:[ _-]?(?:value|file|hash))?|passwd|pwd|"
+        r"(?:(?:access|refresh)[ _-]?)?token(?:[ _-]?(?:value|file))?|credentials?)[\"']?|"
+        r"账户\s*ID|订单\s*ID|成交\s*ID|"
         r"比赛账户名称|账户名称|账户名|账号|密码)\s*[:=]\s*"
         r"|账户\s+(?=\d)"
         r")"
         r")"
-        r"(?P<value>[^,}\]\r\n]+)"
+        r"(?P<value>[^\r\n]+)"
     )
 
     def __init__(self, skill_dir: Path, *, python_executable: str | None = None) -> None:
         validation = validate_futuapi_skill(skill_dir)
         if not validation.valid:
-            raise ValueError(f"verified futuapi Skill required: {validation.detail}")
+            raise ValueError(f"compatible futuapi Skill required: {validation.detail}")
         assert validation.root is not None
         self.skill_dir = validation.root
         self.python_executable = python_executable or sys.executable
 
     def command(self, name: str, arguments: Sequence[str]) -> list[str]:
         """Build an argument-array command for an approved script."""
+
+        validation = validate_futuapi_skill(self.skill_dir)
+        if not validation.valid:
+            raise ValueError(f"compatible futuapi Skill required: {validation.detail}")
 
         normalized = name.lower()
         if any(term in normalized for term in self.DENY_TERMS):
