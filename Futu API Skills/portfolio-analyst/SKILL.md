@@ -183,8 +183,10 @@ Externally supplied source notes are preserved in bounded `external_source_evide
 are ambiguity evidence only, not independently verified facts or inferred motives. Before becoming
 authoritative JSON, its raw Python string is type/length checked at 512 characters before any
 normalization or scan. A bounded NFKC detection copy deletes C* controls and Zl/Zp separators while
-retaining ordinary word spaces. Boundary-aware credential syntax requires labelled `:`/`=` values,
-a sufficiently token-like Bearer value, or a sufficiently long `sk-` suffix; matches replace the
+retaining ordinary word spaces. Boundary-aware credential labels accept `:`, `=`, or whitespace
+before a value; values are credential-like when at least 6 characters with a digit/punctuation or
+at least 16 pure letters. Bearer uses the corresponding 8/16 thresholds, while `sk-` requires a
+sufficiently long suffix. Matches replace the
 whole note with `[REDACTED_EXTERNAL_CREDENTIAL]`. A separate copy folds whitespace only between
 digits, and any rejoined 8+-digit identifier replaces the whole note with
 `[REDACTED_EXTERNAL_IDENTIFIER]`. Otherwise the display copy safely becomes one line and passes the shared account

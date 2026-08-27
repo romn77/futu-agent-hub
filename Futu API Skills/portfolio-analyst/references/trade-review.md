@@ -44,8 +44,10 @@ detection copy deletes Unicode C* controls and Zl/Zp while preserving ordinary w
 reconnects labels and values split by newline, tab, C1, zero-width, line/paragraph separators, or bidi
 controls without treating words such as `tokenized`, `secretary`, or ordinary “bearer shares” prose
 as credentials. Password/secret/token/API-key/credential labels require a complete word followed by
-`:` or `=` and a nonempty value; Bearer requires a complete word plus a sufficiently long value with
-a digit or punctuation; `sk-` requires a complete prefix and sufficiently long suffix. Matches
+`:`, `=`, or whitespace and a value that is at least 6 characters with a digit/punctuation or at
+least 16 pure letters. Bearer requires a complete word plus one token that is at least 8 characters
+with a digit/punctuation or at least 16 pure letters; `sk-` requires a complete prefix and
+sufficiently long suffix. Matches
 fail-close the entire note to `[REDACTED_EXTERNAL_CREDENTIAL]`. A separate detection copy removes
 whitespace only between digits; a rejoined 8+-digit identifier fail-closes the whole note to
 `[REDACTED_EXTERNAL_IDENTIFIER]`. Only a noncredential display copy is

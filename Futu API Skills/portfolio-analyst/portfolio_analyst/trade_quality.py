@@ -14,7 +14,7 @@ MAX_EXTERNAL_SOURCE_NOTE_CHARS = 512
 
 _LABELLED_CREDENTIAL = re.compile(
     r"(?ix)(?<!\w)(?:password|passwd|pwd|secret|token|api[-_ ]?key|credential)"
-    r"(?!\w)\s*[:=]\s*\S"
+    r"(?!\w)(?:\s*[:=]\s*|\s+)(?P<value>\S+)"
 )
 _BEARER_CREDENTIAL = re.compile(r"(?i)(?<!\w)bearer(?!\w)\s+(?P<value>\S+)")
 _SK_CREDENTIAL = re.compile(r"(?i)(?<!\w)sk-(?P<suffix>[a-z0-9._-]{8,})(?![a-z0-9._-])")
@@ -23,11 +23,19 @@ _LONG_IDENTIFIER = re.compile(r"(?<!\d)\d{8,}(?!\d)")
 
 
 def _has_credential_syntax(text: str) -> bool:
-    if _LABELLED_CREDENTIAL.search(text) or _SK_CREDENTIAL.search(text):
+    if _SK_CREDENTIAL.search(text):
         return True
+    for match in _LABELLED_CREDENTIAL.finditer(text):
+        value = match.group("value")
+        if (len(value) >= 6 and any(not character.isalpha() for character in value)) or (
+            len(value) >= 16 and value.isalpha()
+        ):
+            return True
     for match in _BEARER_CREDENTIAL.finditer(text):
         value = match.group("value")
-        if len(value) >= 8 and any(not character.isalpha() for character in value):
+        if (len(value) >= 8 and any(not character.isalpha() for character in value)) or (
+            len(value) >= 16 and value.isalpha()
+        ):
             return True
     return False
 

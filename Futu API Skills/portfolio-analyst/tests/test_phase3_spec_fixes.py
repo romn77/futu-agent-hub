@@ -1327,9 +1327,9 @@ def test_trade_external_source_evidence_scrubs_secrets_and_unicode_controls_ever
 @pytest.mark.parametrize(
     ("raw", "secret"),
     [
-        ("password: hunter2", "hunter2"),
-        ("secret=private-value", "private-value"),
-        ("api key: key-material", "key-material"),
+        ("password hunter2", "hunter2"),
+        ("secret private-value", "private-value"),
+        ("api key key-material", "key-material"),
         ("Bearer bearer-material", "bearer-material"),
         ("standalone sk-private-material", "sk-private-material"),
     ],
@@ -1342,6 +1342,7 @@ def test_trade_external_source_evidence_scrubs_common_credential_forms(raw, secr
         end=date(2026, 8, 27),
         source_notes=[raw],
     )
+    assert report.external_source_evidence[0]["detail"] == ("[REDACTED_EXTERNAL_CREDENTIAL]")
     assert secret not in json.dumps(report.to_dict())
 
 
@@ -1420,6 +1421,7 @@ def test_trade_external_source_credential_detection_collapses_all_separators_and
     "raw",
     [
         "bearer shares transfer",
+        "bearer securities transfer",
         "tokenized asset",
         "secretary reported",
         "token count unavailable",
@@ -1436,6 +1438,28 @@ def test_trade_external_source_credential_detection_preserves_benign_words(raw):
     )
 
     assert report.external_source_evidence[0]["detail"] == raw
+    validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "password abcdefghijklmnop",
+        "token abcdefghijklmnop",
+        "Bearer abcdefghijklmnopqrstuvwxyz",
+    ],
+)
+def test_trade_external_source_credential_detection_redacts_long_alphabetic_values(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+
+    assert report.external_source_evidence[0]["detail"] == ("[REDACTED_EXTERNAL_CREDENTIAL]")
+    assert "abcdefghijklmnop" not in json.dumps(report.to_dict())
     validate_trade_review_document(report.to_dict())
 
 
