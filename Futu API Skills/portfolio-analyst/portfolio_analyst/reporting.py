@@ -189,15 +189,65 @@ class PortfolioReport:
         )
         if data["lifecycle"]["status"] != "UNAVAILABLE_UNTIL_PHASE_4":
             lifecycle = data["lifecycle"]
-            lines.extend(["", "## Lifecycle findings", ""])
             lines.extend(
                 [
-                    f"- {md(item['symbol'])}: {item['lifecycle_status']} "
-                    f"({item['review_priority']}); thesis={item['thesis_status']}"
-                    for item in lifecycle["positions"]
+                    "",
+                    "## Lifecycle findings and audit",
+                    "",
+                    f"- source_snapshot_id: `{md(lifecycle['source_snapshot_id'])}`",
+                    f"- Status: {lifecycle['status']}",
+                    "- Coverage: "
+                    + md(json.dumps(lifecycle["coverage"], ensure_ascii=False, sort_keys=True)),
+                    "- Quality notes: "
+                    + ("; ".join(md(note) for note in lifecycle["data_quality_notes"]) or "None"),
                 ]
-                or ["- None"]
             )
+            for item in lifecycle["positions"]:
+                thesis = item["original_thesis_evidence"]
+                thesis_display = (
+                    "not configured"
+                    if thesis is None
+                    else f"configured (sha256={thesis['sha256']}, characters={thesis['characters']})"
+                )
+                lines.extend(
+                    [
+                        "",
+                        f"### Lifecycle {md(item['symbol'])}",
+                        "",
+                        f"- {md(item['symbol'])}: {item['lifecycle_status']}",
+                        f"- Role / record status / lifecycle: {md(item['role'])} / {md(item['record_status'] or 'UNCONFIGURED')} / {item['lifecycle_status']}",
+                        f"- Current weight: {item['current_weight'] if item['current_weight'] is not None else 'N/A'}",
+                        "- Target bounds: "
+                        + (
+                            f"{item['target_weight']['min']} to {item['target_weight']['max']}"
+                            if item["target_weight"] is not None
+                            else "N/A"
+                        ),
+                        f"- Opened / horizon / last review: {item['opened_at'] or 'N/A'} / {md(item['holding_horizon'] or 'N/A')} / {item['last_reviewed_at'] or 'N/A'}",
+                        f"- Thesis status: {item['thesis_status']}; Original thesis: {thesis_display}",
+                        f"- Review priority: {item['review_priority']}",
+                        f"- History status: {item['history_evidence_status']}; excluded pre-open={item['history_excluded_pre_open']}; role policy: {md(json.dumps(item['role_drift_policy'], sort_keys=True))}",
+                        "- Position quality: "
+                        + ("; ".join(md(note) for note in item["data_quality_notes"]) or "None"),
+                        "- History provenance: "
+                        + (
+                            "; ".join(
+                                f"{md(entry['snapshot_id'])} | {entry['as_of']} | {md(entry['identity'])} | weight={entry['weight']}"
+                                for entry in item["history_evidence"]
+                            )
+                            or "None"
+                        ),
+                        "- Findings: "
+                        + (
+                            "; ".join(
+                                f"type={finding['type']}, severity={finding['severity']}, priority={finding['review_priority']}, "
+                                f"summary={md(finding['summary'])}, evidence={md(json.dumps(finding['evidence'], ensure_ascii=False, sort_keys=True))}"
+                                for finding in item["findings"]
+                            )
+                            or "None"
+                        ),
+                    ]
+                )
         return "\n".join(lines) + "\n"
 
 

@@ -710,6 +710,56 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
         item["lifecycle_status"] == "UNCONFIGURED" for item in positions
     ):
         raise ReportSemanticError("lifecycle unconfigured coverage is inconsistent")
+    history_coverage = coverage["history"]
+    observed_history_ids = {
+        entry["snapshot_id"] for item in positions for entry in item["history_evidence"]
+    }
+    if (
+        coverage["history_snapshots"] != history_coverage["accepted_snapshots"]
+        or history_coverage["candidate_snapshots"]
+        != history_coverage["accepted_snapshots"]
+        + history_coverage["duplicate_snapshots"]
+        + history_coverage["future_snapshots"]
+        or history_coverage["position_observations"]
+        != sum(len(item["history_evidence"]) for item in positions)
+        or len(observed_history_ids) > history_coverage["accepted_snapshots"]
+        or history_coverage["pre_open_observations"]
+        != sum(item["history_excluded_pre_open"] for item in positions)
+    ):
+        raise ReportSemanticError("lifecycle history coverage is inconsistent")
+    if (history_coverage["accepted_snapshots"] == 0) != (
+        history_coverage["window_start"] is None and history_coverage["window_end"] is None
+    ):
+        raise ReportSemanticError("lifecycle history window availability is inconsistent")
+    if history_coverage["window_start"] is not None:
+        window_start = datetime.fromisoformat(
+            history_coverage["window_start"].replace("Z", "+00:00")
+        )
+        window_end = datetime.fromisoformat(history_coverage["window_end"].replace("Z", "+00:00"))
+        if window_start > window_end or window_end > datetime.fromisoformat(
+            payload["as_of"].replace("Z", "+00:00")
+        ):
+            raise ReportSemanticError("lifecycle history window is inconsistent")
+        if any(
+            not window_start
+            <= datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
+            <= window_end
+            for item in positions
+            for entry in item["history_evidence"]
+        ):
+            raise ReportSemanticError("lifecycle history evidence falls outside coverage window")
+    expected_history_coverage_status = (
+        "PARTIAL"
+        if history_coverage["future_snapshots"]
+        or history_coverage["duplicate_snapshots"]
+        or history_coverage["pre_open_observations"]
+        or any(item["history_evidence_status"] == "PARTIAL" for item in positions)
+        else "AVAILABLE"
+        if history_coverage["accepted_snapshots"]
+        else "UNAVAILABLE"
+    )
+    if history_coverage["status"] != expected_history_coverage_status:
+        raise ReportSemanticError("lifecycle history quality status is inconsistent")
     flattened = [finding for item in positions for finding in item["findings"]]
     ordered = sorted(
         flattened, key=lambda item: (item["review_priority"], item["type"], item["symbol"])
@@ -734,13 +784,46 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     report_date = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00")).date()
     for item in positions:
         types = {finding["type"] for finding in item["findings"]}
+        for finding in item["findings"]:
+            expected_severity = {
+                "P0": "HIGH",
+                "P1": "MEDIUM",
+                "P2": "LOW",
+                "P3": "INFORMATIONAL",
+            }[finding["review_priority"]]
+            if finding["severity"] != expected_severity:
+                raise ReportSemanticError("lifecycle finding severity is inconsistent")
         if any(finding["symbol"] != item["symbol"] for finding in item["findings"]):
             raise ReportSemanticError("lifecycle finding symbol is inconsistent")
+        history = item["history_evidence"]
+        history_keys = [(entry["as_of"], entry["snapshot_id"]) for entry in history]
+        if history_keys != sorted(history_keys) or len(
+            {entry["snapshot_id"] for entry in history}
+        ) != len(history):
+            raise ReportSemanticError("lifecycle history evidence is not stable and unique")
+        if any(
+            entry["identity"] != item["symbol"]
+            or datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
+            > datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
+            for entry in history
+        ):
+            raise ReportSemanticError("lifecycle history identity or time bound is invalid")
+        for entry in history:
+            timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
+            encoded = datetime.strptime(entry["snapshot_id"][3:19], "%Y%m%dT%H%M%SZ").replace(
+                tzinfo=timezone.utc
+            )
+            if timestamp.astimezone(timezone.utc) != encoded:
+                raise ReportSemanticError("lifecycle history identity timestamp is inconsistent")
+        if item["history_excluded_pre_open"] and not any(
+            "pre-open" in note for note in item["data_quality_notes"]
+        ):
+            raise ReportSemanticError("excluded pre-open history lacks a quality note")
         if item["record_status"] is None:
             expected_status = "UNCONFIGURED"
             if (
                 item["target_weight"] is not None
-                or item["original_thesis"] is not None
+                or item["original_thesis_evidence"] is not None
                 or item["opened_at"] is not None
                 or item["holding_horizon"] is not None
                 or item["last_reviewed_at"] is not None
@@ -762,6 +845,30 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             expected_status = "EXITED"
             if types != {"EXITED"} or item["thesis_status"] != "UNREVIEWED":
                 raise ReportSemanticError("exited lifecycle assessment is inconsistent")
+            if any(
+                item[field] is None
+                for field in (
+                    "target_weight",
+                    "original_thesis_evidence",
+                    "opened_at",
+                    "holding_horizon",
+                    "last_reviewed_at",
+                )
+            ):
+                raise ReportSemanticError("exited lifecycle assessment omitted user facts")
+            exited_opened = date.fromisoformat(item["opened_at"])
+            exited_reviewed = date.fromisoformat(item["last_reviewed_at"])
+            if (
+                exited_reviewed < exited_opened
+                or exited_reviewed > report_date
+                or exited_opened > report_date
+                or any(
+                    datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00")).date()
+                    < exited_opened
+                    for entry in history
+                )
+            ):
+                raise ReportSemanticError("exited lifecycle dates or history are inconsistent")
             only = item["findings"][0]
             if (
                 only["summary"] != "Recorded position is absent from the current economic portfolio"
@@ -777,7 +884,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 item[field] is None
                 for field in (
                     "target_weight",
-                    "original_thesis",
+                    "original_thesis_evidence",
                     "opened_at",
                     "holding_horizon",
                     "last_reviewed_at",
@@ -801,6 +908,11 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             reviewed = datetime.fromisoformat(item["last_reviewed_at"]).date()
             if reviewed < opened or reviewed > report_date or opened > report_date:
                 raise ReportSemanticError("lifecycle record dates are inconsistent")
+            if any(
+                datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00")).date() < opened
+                for entry in history
+            ):
+                raise ReportSemanticError("lifecycle history includes pre-open evidence")
             horizon = re.fullmatch(
                 r"(\d+)(?:\s*-\s*(\d+))?\s*(day|days|week|weeks|month|months|year|years)",
                 item["holding_horizon"],
@@ -910,12 +1022,35 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                     raise ReportSemanticError(
                         f"lifecycle {finding_type.lower()} evidence is inconsistent"
                     )
-            if "ROLE_DRIFT" in types and coverage["history_snapshots"] < 3:
-                raise ReportSemanticError("lifecycle role drift lacks sufficient history coverage")
-            if "ROLE_DRIFT" in types and (
-                item["role"] != "SATELLITE" or Decimal(current) < Decimal("0.10")
+            role_check_required = item["role"] == "SATELLITE" and Decimal(current) >= Decimal(
+                "0.10"
+            )
+            history_times = [
+                datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00")) for entry in history
+            ]
+            sufficient_history = bool(
+                len(history) >= 3 and (history_times[-1] - history_times[0]).days >= 30
+            )
+            expected_history_status = (
+                "AVAILABLE"
+                if role_check_required and sufficient_history
+                else "PARTIAL"
+                if role_check_required
+                else "NOT_REQUIRED"
+            )
+            if item["history_evidence_status"] != expected_history_status:
+                raise ReportSemanticError("lifecycle history availability is inconsistent")
+            expected_role_drift = bool(
+                role_check_required
+                and sufficient_history
+                and all(Decimal(entry["weight"]) >= Decimal("0.10") for entry in history)
+            )
+            if expected_role_drift != ("ROLE_DRIFT" in types):
+                raise ReportSemanticError("lifecycle role drift is not supported by history")
+            if expected_history_status == "PARTIAL" and not any(
+                "role drift unavailable" in note for note in item["data_quality_notes"]
             ):
-                raise ReportSemanticError("lifecycle role drift conflicts with role or weight")
+                raise ReportSemanticError("partial lifecycle history lacks a quality note")
             thesis = item["thesis_status"]
             for state in ("BROKEN", "WEAKENING", "STRENGTHENING"):
                 if (thesis == state) != (state in types):

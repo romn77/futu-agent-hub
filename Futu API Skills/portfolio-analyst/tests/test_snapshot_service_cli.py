@@ -56,6 +56,7 @@ def _configured_home(tmp_path):
     home = tmp_path / "private"
     config = home / "config"
     config.mkdir(parents=True)
+    home.chmod(0o700)
     shutil.copy2(FIXTURES / "fx_rates.json", config / "fx_rates.json")
     shutil.copy2(FIXTURES / "classifications.json", config / "classifications.json")
     shutil.copy2(FIXTURES / "security_metadata.json", config / "security_metadata.json")
@@ -568,13 +569,13 @@ def test_snapshot_cli_save_uses_immutable_default_name(monkeypatch, tmp_path, ca
 
     assert cli.main(["snapshot", "--save", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    destination = home / "snapshots" / f"{payload['snapshot_id']}.json"
+    destination = home / "snapshots" / "2026" / "08" / f"{payload['snapshot_id']}.json"
     assert json.loads(destination.read_text(encoding="utf-8")) == payload
+    assert not (home / "snapshots" / f"{payload['snapshot_id']}.json").exists()
 
-    assert cli.main(["snapshot", "--save", "--json"]) == 2
-    error = json.loads(capsys.readouterr().out)
-    assert error["ok"] is False
-    assert error["error"]["code"] == "SNAPSHOT_EXISTS"
+    # Exact content-addressed duplicates are explicit idempotent saves, never replacements.
+    assert cli.main(["snapshot", "--save", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["snapshot_id"] == payload["snapshot_id"]
 
 
 def test_snapshot_cli_json_errors_are_structured_and_stdout_stays_machine_readable(
@@ -669,6 +670,25 @@ def test_output_escape_is_rejected_as_structured_json(monkeypatch, tmp_path, cap
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "INVALID_OUTPUT"
     assert not (tmp_path / "escape.json").exists()
+
+
+def test_snapshot_custom_output_is_rejected_instead_of_creating_legacy_flat_history(
+    monkeypatch, tmp_path, capsys
+):
+    home = _configured_home(tmp_path)
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    called = False
+
+    def unexpected(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError
+
+    monkeypatch.setattr(cli, "generate_snapshot", unexpected)
+    assert cli.main(["snapshot", "--json", "--output", "snapshots/custom.json"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_OUTPUT"
+    assert called is False
+    assert not (home / "snapshots").exists()
 
 
 @pytest.mark.parametrize(

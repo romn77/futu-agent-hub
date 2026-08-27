@@ -33,10 +33,10 @@ Build a Phase 1 snapshot without saving it:
 python scripts/portfolio.py snapshot --trd-env REAL --base-currency USD --json --no-save
 ```
 
-`snapshot` is read-only and defaults to no persistence. `--save` writes once to
-`snapshots/<snapshot_id>.json`; `--output` implies saving to that relative path; and `--no-save`
-always wins over `--output`. Every path remains below `PORTFOLIO_AGENT_HOME`, and an existing file is
-never replaced.
+`snapshot` is read-only and defaults to no persistence. `--save` writes to the canonical
+`snapshots/YYYY/MM/<snapshot_id>.json` content-addressed repository. Exact duplicates are idempotent;
+conflicting or invalid bodies fail closed and existing files are never replaced. Custom snapshot
+`--output` paths are rejected so CLI-created history cannot become invisible to repository listing.
 
 Currency rates are manual facts loaded from `config/fx_rates.json` under the data home:
 
@@ -242,7 +242,11 @@ must be `0600` non-linked files. Missing records produce `UNCONFIGURED`, and mis
 persistent role-drift evidence unavailable rather than guessed. Weight boundaries are inclusive.
 Holding horizons support bounded days, weeks, months, or years and use the documented deterministic
 upper bound. Thesis status changes only from an explicit user review; price and performance never
-create a thesis fact. See [references/position-lifecycle.md](references/position-lifecycle.md).
+create a thesis fact. History evidence is semantically validated, deduplicated and limited to each
+record's opened/current window; reports serialize snapshot IDs, timestamps, canonical identities,
+weights and the exact role-drift policy so runtime validation can rebuild persistence. Human and
+Markdown output never prints the original thesis, only its configured digest/length proof. See
+[references/position-lifecycle.md](references/position-lifecycle.md).
 
 Journal writes are explicit, append-only operations:
 

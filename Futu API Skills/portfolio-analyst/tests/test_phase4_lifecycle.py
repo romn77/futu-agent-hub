@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -11,8 +12,13 @@ import pytest
 
 from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.journal_repository import JournalError, JournalRepository
-from portfolio_analyst.lifecycle import LifecycleConfigError, analyze_lifecycle
-from portfolio_analyst.lifecycle_repository import LifecycleRepository
+from portfolio_analyst.lifecycle import analyze_lifecycle
+from portfolio_analyst.lifecycle_repository import (
+    LifecycleConfigError,
+    LifecycleRecord,
+    LifecycleRepository,
+    TargetWeight,
+)
 from portfolio_analyst.snapshot_repository import SnapshotConflict, SnapshotRepository
 from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst.reporting import build_portfolio_report
@@ -200,10 +206,15 @@ def test_lifecycle_horizon_exit_and_role_drift_need_history(tmp_path):
         )
         history.append(replace(candidate, snapshot_id=snapshot_identity(candidate)))
     with_history = analyze_lifecycle(snap, LifecycleRepository(home), history=tuple(history))
-    assert (
-        next(item for item in with_history.positions if item.symbol == "US.AAA").lifecycle_status
-        == "ROLE_DRIFT"
-    )
+    aaa = next(item for item in with_history.positions if item.symbol == "US.AAA")
+    assert aaa.lifecycle_status == "ROLE_DRIFT"
+    assert aaa.history_evidence_status == "AVAILABLE"
+    assert len(aaa.history_evidence) == 3
+    assert aaa.role_drift_policy == {
+        "threshold": Decimal("0.10"),
+        "minimum_snapshots": 3,
+        "minimum_span_days": 30,
+    }
 
 
 def test_lifecycle_yaml_is_strict_private_and_never_invents_thesis(tmp_path):
@@ -409,3 +420,151 @@ def test_doctor_explicit_save_uses_private_immutable_store(monkeypatch, tmp_path
     assert oct((home / "reports/doctor.json").stat().st_mode & 0o777) == "0o600"
     assert cli.main(["doctor", "--json", "--output", "reports/doctor.json"]) == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "SNAPSHOT_EXISTS"
+
+
+def _historical_snapshot(source, *, days: int):
+    historical_as_of = source.as_of + timedelta(days=days)
+    candidate = replace(
+        source,
+        as_of=historical_as_of,
+        fx_evidence=tuple(
+            replace(item, effective_at=historical_as_of) for item in source.fx_evidence
+        ),
+        snapshot_id="",
+    )
+    return replace(candidate, snapshot_id=snapshot_identity(candidate))
+
+
+def test_history_excludes_future_preopen_and_duplicates_with_auditable_quality(tmp_path):
+    home = _home(tmp_path)
+    snap = make_snapshot()
+    _write_record(
+        home,
+        role="SATELLITE",
+        opened_at="2026-08-10",
+        last_reviewed_at="2026-08-15",
+        holding_horizon="24 months",
+        target_weight={"min": 0.1, "max": 0.5},
+    )
+    pre_open = _historical_snapshot(snap, days=-30)
+    eligible = _historical_snapshot(snap, days=-10)
+    future = _historical_snapshot(snap, days=10)
+
+    report = analyze_lifecycle(
+        snap,
+        LifecycleRepository(home),
+        history=(future, eligible, eligible, pre_open),
+    )
+    aaa = next(item for item in report.positions if item.symbol == "US.AAA")
+
+    assert aaa.lifecycle_status == "INTACT"
+    assert aaa.history_evidence_status == "PARTIAL"
+    assert [item.snapshot_id for item in aaa.history_evidence] == [eligible.snapshot_id]
+    assert report.coverage["history"]["candidate_snapshots"] == 4
+    assert report.coverage["history"]["accepted_snapshots"] == 2
+    assert report.coverage["history"]["duplicate_snapshots"] == 1
+    assert report.coverage["history"]["future_snapshots"] == 1
+    assert any("pre-open" in note for note in aaa.data_quality_notes)
+    assert any("future" in note for note in report.data_quality_notes)
+
+
+def test_lifecycle_semantics_reject_forged_role_history_after_rehash(tmp_path):
+    home = _home(tmp_path)
+    snap = make_snapshot()
+    _write_record(
+        home,
+        role="SATELLITE",
+        opened_at="2026-01-01",
+        holding_horizon="24 months",
+        target_weight={"min": 0.1, "max": 0.5},
+    )
+    history = tuple(_historical_snapshot(snap, days=days) for days in (-40, -20, 0))
+    payload = analyze_lifecycle(snap, LifecycleRepository(home), history=history).to_dict()
+    aaa = next(item for item in payload["positions"] if item["symbol"] == "US.AAA")
+    assert aaa["lifecycle_status"] == "ROLE_DRIFT"
+    aaa["history_evidence"][0]["as_of"] = aaa["history_evidence"][1]["as_of"]
+    body = dict(payload)
+    body.pop("lifecycle_report_id")
+    import hashlib
+
+    payload["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="role|history"):
+        validate_lifecycle_document(payload)
+
+
+def test_typed_lifecycle_record_cannot_bypass_canonical_validation():
+    with pytest.raises(LifecycleConfigError):
+        LifecycleRecord(
+            schema_version="1.0",
+            symbol="../US.BAD",
+            role="FAKE",
+            status="ACTIVE",
+            opened_at=date(2026, 1, 1),
+            holding_horizon="forever",
+            target_weight=TargetWeight(Decimal("-1"), Decimal("2")),
+            original_thesis="api_key=secret\x1b[31m",
+            invalidation_conditions=(),
+            review_triggers=(),
+            notes=(),
+            last_reviewed_at=date(2025, 1, 1),
+        )
+
+
+def test_typed_lifecycle_record_uses_same_sanitized_round_trip_as_document(tmp_path):
+    home = _home(tmp_path)
+    typed = LifecycleRecord(
+        schema_version="1.0",
+        symbol="us.safe",
+        role="core",
+        status="active",
+        opened_at=date(2026, 1, 1),
+        holding_horizon="12 MONTHS",
+        target_weight=TargetWeight(Decimal("0.1"), Decimal("0.2")),
+        original_thesis="api_key=secret\x1b[31m",
+        invalidation_conditions=("condition\x00",),
+        review_triggers=("trigger",),
+        notes=(),
+        last_reviewed_at=date(2026, 8, 1),
+    )
+    assert typed.symbol == "US.SAFE"
+    assert typed.holding_horizon == "12 months"
+    assert "secret" not in typed.original_thesis
+    path = LifecycleRepository(home).create(typed)
+    assert LifecycleRepository(home).read("US.SAFE") == typed
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+
+
+def test_lifecycle_human_markdown_and_integrated_report_are_audit_complete(tmp_path):
+    home = _home(tmp_path)
+    _write_record(
+        home,
+        role="CORE",
+        target_weight={"min": 0.1, "max": 0.3},
+        original_thesis="private <thesis> [link](evil)",
+    )
+    snap = make_snapshot()
+    lifecycle = analyze_lifecycle(snap, LifecycleRepository(home))
+    lifecycle_payload = lifecycle.to_dict()
+    human = lifecycle.to_human()
+    markdown = lifecycle.to_markdown()
+    integrated = build_portfolio_report(snap, analyze_risk(snap), lifecycle).to_markdown()
+
+    for rendered in (human, markdown, integrated):
+        assert "current_weight" in rendered or "Current weight" in rendered
+        assert "target" in rendered.lower()
+        assert "WEIGHT_DRIFT" in rendered
+        assert "P1" in rendered
+        assert "history" in rendered.lower()
+        assert "source_snapshot_id" in rendered
+    assert "private <thesis>" not in human
+    assert "private <thesis>" not in markdown
+    assert "private <thesis>" not in integrated
+    assert "private <thesis>" not in json.dumps(lifecycle_payload)
+    assert "original_thesis" not in lifecycle_payload["positions"][0]
+    assert lifecycle_payload["positions"][0]["original_thesis_evidence"]["configured"] is True
+    assert "Original thesis: configured" in markdown

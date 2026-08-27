@@ -19,6 +19,19 @@ the snapshot's timezone-aware `as_of` calendar date. Unsupported horizons fail r
 at least 30 days. Without that evidence the report records the check as unavailable/partial. Thesis
 states require an explicit user review input and never derive from returns.
 
+Every accepted history observation records the full snapshot ID, timezone-aware `as_of`, canonical
+market-qualified identity, and Decimal weight. Inputs are fully schema/identity/financial-semantics
+validated, deduplicated, and stably sorted. Observations before the record's `opened_at` date or after
+the current snapshot `as_of` are excluded with explicit coverage and quality notes. Runtime report
+validation recomputes the eligible window, minimum count, 30-day duration, threshold persistence,
+history availability, and `ROLE_DRIFT` result from the serialized evidence; report-ID recomputation
+cannot turn an insufficient window into an authoritative role-drift finding.
+
+Human and Markdown views include lifecycle coverage, quality, role/status, current and target bounds,
+dates/horizon, thesis review status, every finding and history provenance. The user-authored original
+thesis is not printed; renderers expose only a SHA-256/length configuration proof. JSON remains the
+strict private authoritative artifact and all displayed untrusted fields are control-safe/escaped.
+
 ## Private persistence
 
 `PORTFOLIO_AGENT_HOME` defaults to `~/.moomoo-portfolio-agent` and must be outside the repository.

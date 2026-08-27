@@ -85,7 +85,10 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="print JSON",
     )
-    snapshot.add_argument("--output", help="save at a relative path under PORTFOLIO_AGENT_HOME")
+    snapshot.add_argument(
+        "--output",
+        help="unsupported for snapshots; use --save for the canonical content-addressed path",
+    )
     persistence = snapshot.add_mutually_exclusive_group()
     persistence.add_argument(
         "--save", action="store_true", help="save immutably (default path uses snapshot ID)"
@@ -633,7 +636,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(rendered if args.as_json else review.to_human())
             return 0
 
-        should_save = not args.no_save and (args.save or args.output is not None)
+        if args.output is not None:
+            raise ValueError(
+                "custom snapshot output is forbidden; use --save for canonical snapshot history"
+            )
+        should_save = not args.no_save and args.save
+        if should_save:
+            ensure_private_home(settings.data_home, create=True)
         snapshot = generate_snapshot(
             settings,
             trd_env=args.trd_env,
@@ -643,8 +652,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = snapshot.to_dict()
         rendered = json.dumps(payload, ensure_ascii=False, indent=2)
         if should_save:
-            relative_path = args.output or f"snapshots/{snapshot.snapshot_id}.json"
-            destination = SnapshotStore(settings.data_home).save(relative_path, rendered + "\n")
+            destination = SnapshotRepository(settings.data_home).save(snapshot)
             if args.verbose:
                 print(f"saved snapshot: {destination}", file=sys.stderr)
         if args.as_json:

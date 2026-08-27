@@ -80,6 +80,12 @@ def _bounded_list(value: object, field: str) -> tuple[str, ...]:
     return tuple(_safe_text(item, max_bytes=2048) for item in value)
 
 
+def _bounded_sequence(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or len(value) > 32:
+        raise LifecycleConfigError(f"{field} must contain at most 32 text items")
+    return tuple(_safe_text(item, max_bytes=2048) for item in value)
+
+
 def _weight(value: object, field: str) -> Decimal:
     if isinstance(value, bool):
         raise LifecycleConfigError(f"{field} is invalid")
@@ -108,6 +114,14 @@ class TargetWeight:
     minimum: Decimal
     maximum: Decimal
 
+    def __post_init__(self) -> None:
+        minimum = _weight(self.minimum, "target_weight.min")
+        maximum = _weight(self.maximum, "target_weight.max")
+        if minimum > maximum:
+            raise LifecycleConfigError("target_weight min cannot exceed max")
+        object.__setattr__(self, "minimum", minimum)
+        object.__setattr__(self, "maximum", maximum)
+
     def to_dict(self) -> dict[str, str]:
         return {"min": _decimal_text(self.minimum), "max": _decimal_text(self.maximum)}
 
@@ -126,6 +140,50 @@ class LifecycleRecord:
     review_triggers: tuple[str, ...]
     notes: tuple[str, ...]
     last_reviewed_at: date
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "1.0":
+            raise LifecycleConfigError("unsupported lifecycle schema version")
+        if not isinstance(self.symbol, str):
+            raise LifecycleConfigError("lifecycle symbol must be text")
+        symbol = self.symbol.strip().upper()
+        role, status = str(self.role).upper(), str(self.status).upper()
+        if SYMBOL.fullmatch(symbol) is None:
+            raise LifecycleConfigError("lifecycle symbol must be canonical and market-qualified")
+        if role not in ROLES or status not in STATUSES:
+            raise LifecycleConfigError("lifecycle role or position status is unsupported")
+        if not isinstance(self.target_weight, TargetWeight):
+            raise LifecycleConfigError("target_weight must use the strict target model")
+        opened = _date(self.opened_at, "opened_at")
+        reviewed = _date(self.last_reviewed_at, "last_reviewed_at")
+        if reviewed < opened:
+            raise LifecycleConfigError("last_reviewed_at cannot precede opened_at")
+        horizon = _safe_text(self.holding_horizon, max_bytes=128).lower()
+        parsed_horizon = re.fullmatch(
+            r"(\d+)(?:\s*-\s*(\d+))?\s*(day|days|week|weeks|month|months|year|years)",
+            horizon,
+        )
+        if (
+            parsed_horizon is None
+            or not 1 <= int(parsed_horizon.group(2) or parsed_horizon.group(1)) <= 1200
+        ):
+            raise LifecycleConfigError("holding_horizon is unsupported or outside its bound")
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "role", role)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "opened_at", opened)
+        object.__setattr__(self, "holding_horizon", horizon)
+        object.__setattr__(self, "original_thesis", _safe_text(self.original_thesis))
+        object.__setattr__(
+            self,
+            "invalidation_conditions",
+            _bounded_sequence(self.invalidation_conditions, "invalidation_conditions"),
+        )
+        object.__setattr__(
+            self, "review_triggers", _bounded_sequence(self.review_triggers, "review_triggers")
+        )
+        object.__setattr__(self, "notes", _bounded_sequence(self.notes, "notes"))
+        object.__setattr__(self, "last_reviewed_at", reviewed)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -232,7 +290,9 @@ class LifecycleRepository:
     def create(self, value: LifecycleRecord | dict[str, Any]) -> Path:
         """Explicitly create one current record; existing records are never overwritten."""
 
-        record = value if isinstance(value, LifecycleRecord) else record_from_document(value)
+        record = record_from_document(
+            value.to_dict() if isinstance(value, LifecycleRecord) else value
+        )
         try:
             self.data_home = ensure_private_home(self.data_home, create=True)
         except PrivateHomeError as exc:

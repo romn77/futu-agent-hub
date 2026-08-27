@@ -12,13 +12,28 @@
     "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
     "coverage": {
       "type": "object", "additionalProperties": false,
-      "required": ["current_positions", "configured_records", "assessed_positions", "unconfigured_positions", "history_snapshots"],
+      "required": ["current_positions", "configured_records", "assessed_positions", "unconfigured_positions", "history_snapshots", "history"],
       "properties": {
         "current_positions": {"type": "integer", "minimum": 0, "maximum": 10000},
         "configured_records": {"type": "integer", "minimum": 0, "maximum": 10000},
         "assessed_positions": {"type": "integer", "minimum": 0, "maximum": 20000},
         "unconfigured_positions": {"type": "integer", "minimum": 0, "maximum": 10000},
-        "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000}
+        "history_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "history": {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "candidate_snapshots", "accepted_snapshots", "duplicate_snapshots", "future_snapshots", "pre_open_observations", "position_observations", "window_start", "window_end"],
+          "properties": {
+            "status": {"enum": ["AVAILABLE", "PARTIAL", "UNAVAILABLE"]},
+            "candidate_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "accepted_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "duplicate_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "future_snapshots": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "pre_open_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
+            "position_observations": {"type": "integer", "minimum": 0, "maximum": 100000000},
+            "window_start": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+            "window_end": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+          }
+        }
       }
     },
     "positions": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/assessment"}},
@@ -29,18 +44,19 @@
     "decimal": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
     "finding": {
       "type": "object", "additionalProperties": false,
-      "required": ["type", "symbol", "summary", "evidence", "review_priority"],
+      "required": ["type", "symbol", "summary", "evidence", "review_priority", "severity"],
       "properties": {
         "type": {"enum": ["UNCONFIGURED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN", "ROLE_DRIFT", "WEIGHT_DRIFT", "HORIZON_DRIFT", "EXITED"]},
         "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
         "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
         "evidence": {"type": "object", "maxProperties": 16},
-        "review_priority": {"enum": ["P0", "P1", "P2", "P3"]}
+        "review_priority": {"enum": ["P0", "P1", "P2", "P3"]},
+        "severity": {"enum": ["HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]}
       }
     },
     "assessment": {
       "type": "object", "additionalProperties": false,
-      "required": ["symbol", "role", "record_status", "lifecycle_status", "current_weight", "target_weight", "thesis_status", "original_thesis", "invalidation_conditions", "review_triggers", "notes", "opened_at", "holding_horizon", "last_reviewed_at", "findings", "review_priority", "data_quality_notes"],
+      "required": ["symbol", "role", "record_status", "lifecycle_status", "current_weight", "target_weight", "thesis_status", "original_thesis_evidence", "invalidation_conditions", "review_triggers", "notes", "opened_at", "holding_horizon", "last_reviewed_at", "history_evidence_status", "history_evidence", "history_excluded_pre_open", "role_drift_policy", "findings", "review_priority", "data_quality_notes"],
       "properties": {
         "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
         "role": {"enum": ["CORE", "SATELLITE", "TRADING", "DEFENSIVE", "HEDGE", "CASH_ALTERNATIVE", "UNCLASSIFIED"]},
@@ -49,13 +65,50 @@
         "current_weight": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
         "target_weight": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["min", "max"], "properties": {"min": {"$ref": "#/$defs/decimal"}, "max": {"$ref": "#/$defs/decimal"}}}, {"type": "null"}]},
         "thesis_status": {"enum": ["UNREVIEWED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN"]},
-        "original_thesis": {"type": ["string", "null"], "maxLength": 8192},
+        "original_thesis_evidence": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["configured", "sha256", "characters"],
+              "properties": {
+                "configured": {"const": true},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "characters": {"type": "integer", "minimum": 1, "maximum": 8192}
+              }
+            },
+            {"type": "null"}
+          ]
+        },
         "invalidation_conditions": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
         "review_triggers": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
         "notes": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
         "opened_at": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
         "holding_horizon": {"type": ["string", "null"], "maxLength": 128},
         "last_reviewed_at": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
+        "history_evidence_status": {"enum": ["AVAILABLE", "PARTIAL", "NOT_REQUIRED"]},
+        "history_excluded_pre_open": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "history_evidence": {
+          "type": "array", "maxItems": 10000,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["snapshot_id", "as_of", "identity", "weight"],
+            "properties": {
+              "snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
+              "as_of": {"type": "string", "format": "date-time"},
+              "identity": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
+              "weight": {"$ref": "#/$defs/decimal"}
+            }
+          }
+        },
+        "role_drift_policy": {
+          "type": "object", "additionalProperties": false,
+          "required": ["threshold", "minimum_snapshots", "minimum_span_days"],
+          "properties": {
+            "threshold": {"const": "0.1"},
+            "minimum_snapshots": {"const": 3},
+            "minimum_span_days": {"const": 30}
+          }
+        },
         "findings": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/finding"}},
         "review_priority": {"enum": ["P0", "P1", "P2", "P3"]},
         "data_quality_notes": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}

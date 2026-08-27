@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 import hashlib
@@ -51,9 +51,28 @@ class LifecycleFinding:
     summary: str
     evidence: Mapping[str, Any]
     review_priority: str
+    severity: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence", _deep_freeze(dict(self.evidence)))
+        try:
+            severity = {
+                "P0": "HIGH",
+                "P1": "MEDIUM",
+                "P2": "LOW",
+                "P3": "INFORMATIONAL",
+            }[self.review_priority]
+        except KeyError as exc:
+            raise LifecycleInputError("unsupported lifecycle review priority") from exc
+        object.__setattr__(self, "severity", severity)
+
+
+@dataclass(frozen=True)
+class LifecycleHistoryEvidence:
+    snapshot_id: str
+    as_of: Any
+    identity: str
+    weight: Decimal
 
 
 @dataclass(frozen=True)
@@ -65,13 +84,17 @@ class LifecycleAssessment:
     current_weight: Decimal | None
     target_weight: Mapping[str, Decimal] | None
     thesis_status: str
-    original_thesis: str | None
+    original_thesis_evidence: Mapping[str, Any] | None
     invalidation_conditions: tuple[str, ...]
     review_triggers: tuple[str, ...]
     notes: tuple[str, ...]
     opened_at: date | None
     holding_horizon: str | None
     last_reviewed_at: date | None
+    history_evidence_status: str
+    history_evidence: tuple[LifecycleHistoryEvidence, ...]
+    history_excluded_pre_open: int
+    role_drift_policy: Mapping[str, Any]
     findings: tuple[LifecycleFinding, ...]
     review_priority: str
     data_quality_notes: tuple[str, ...]
@@ -82,10 +105,19 @@ class LifecycleAssessment:
             "target_weight",
             None if self.target_weight is None else _deep_freeze(dict(self.target_weight)),
         )
+        object.__setattr__(
+            self,
+            "original_thesis_evidence",
+            None
+            if self.original_thesis_evidence is None
+            else _deep_freeze(dict(self.original_thesis_evidence)),
+        )
         object.__setattr__(self, "findings", tuple(self.findings))
         object.__setattr__(self, "invalidation_conditions", tuple(self.invalidation_conditions))
         object.__setattr__(self, "review_triggers", tuple(self.review_triggers))
         object.__setattr__(self, "notes", tuple(self.notes))
+        object.__setattr__(self, "history_evidence", tuple(self.history_evidence))
+        object.__setattr__(self, "role_drift_policy", _deep_freeze(dict(self.role_drift_policy)))
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
 
@@ -96,7 +128,7 @@ class LifecycleReport:
     as_of: Any
     source_snapshot_id: str
     status: str
-    coverage: Mapping[str, int | str]
+    coverage: Mapping[str, Any]
     positions: tuple[LifecycleAssessment, ...]
     findings: tuple[LifecycleFinding, ...]
     data_quality_notes: tuple[str, ...]
@@ -111,15 +143,45 @@ class LifecycleReport:
         return _json_value(self)
 
     def to_human(self) -> str:
+        coverage = self.to_dict()["coverage"]
         lines = [
             f"Lifecycle report {terminal_text(self.lifecycle_report_id)}",
-            f"Source snapshot: {terminal_text(self.source_snapshot_id)}",
+            f"source_snapshot_id: {terminal_text(self.source_snapshot_id)}",
             f"Status: {self.status}",
+            f"Coverage: {terminal_text(json.dumps(coverage, ensure_ascii=False, sort_keys=True))}",
+            "Quality notes:",
+            *([f"- {terminal_text(note)}" for note in self.data_quality_notes] or ["- None"]),
         ]
-        lines.extend(
-            f"{terminal_text(item.symbol)}: {item.lifecycle_status} ({item.review_priority})"
-            for item in self.positions
-        )
+        for item in self.positions:
+            thesis = _thesis_display(item.original_thesis_evidence)
+            lines.extend(
+                [
+                    f"Position {terminal_text(item.symbol)}",
+                    f"Role / record status / lifecycle: {item.role} / {item.record_status or 'UNCONFIGURED'} / {item.lifecycle_status}",
+                    f"Current weight: {item.current_weight if item.current_weight is not None else 'N/A'}",
+                    "Target bounds: "
+                    + (
+                        f"{item.target_weight['min']}..{item.target_weight['max']}"
+                        if item.target_weight is not None
+                        else "N/A"
+                    ),
+                    f"Opened / horizon / last review: {item.opened_at or 'N/A'} / {item.holding_horizon or 'N/A'} / {item.last_reviewed_at or 'N/A'}",
+                    f"Thesis status: {item.thesis_status}; Original thesis: {thesis}",
+                    f"History status: {item.history_evidence_status}; observations={len(item.history_evidence)}; excluded_pre_open={item.history_excluded_pre_open}; policy={terminal_text(json.dumps(_json_value(item.role_drift_policy), sort_keys=True))}",
+                ]
+            )
+            lines.extend(
+                f"History evidence: {terminal_text(entry.snapshot_id)} | {entry.as_of.isoformat()} | {terminal_text(entry.identity)} | weight={entry.weight}"
+                for entry in item.history_evidence
+            )
+            lines.extend(
+                f"Finding: type={finding.type}; severity={finding.severity}; evidence={terminal_text(json.dumps(_json_value(finding.evidence), ensure_ascii=False, sort_keys=True))}; priority={finding.review_priority}; summary={terminal_text(finding.summary)}"
+                for finding in item.findings
+            )
+            lines.extend(
+                [f"Position quality: {terminal_text(note)}" for note in item.data_quality_notes]
+                or ["Position quality: None"]
+            )
         return "\n".join(lines)
 
     def to_markdown(self, *, json_artifact: str | None = None) -> str:
@@ -131,9 +193,15 @@ class LifecycleReport:
             f"- source_snapshot_id: `{md(self.source_snapshot_id)}`",
             f"- As of: {self.to_dict()['as_of']}",
             f"- Status: {self.status}",
+            "- Coverage: "
+            + md(json.dumps(self.to_dict()["coverage"], ensure_ascii=False, sort_keys=True)),
             f"- Authoritative JSON: `{md(json_artifact)}`"
             if json_artifact
             else "- Authoritative JSON: current output",
+            "",
+            "## Quality notes",
+            "",
+            *([f"- {md(note)}" for note in self.data_quality_notes] or ["- None"]),
             "",
             "## Positions",
             "",
@@ -144,25 +212,72 @@ class LifecycleReport:
                     f"### {md(item.symbol)}",
                     "",
                     f"- Lifecycle: {item.lifecycle_status}",
-                    f"- Role: {md(item.role)}",
-                    f"- Weight: {item.current_weight if item.current_weight is not None else 'N/A'}",
-                    f"- Thesis review: {item.thesis_status}",
-                    f"- Original thesis: {md(item.original_thesis) if item.original_thesis else 'Not configured'}",
+                    f"- Role: {md(item.role)}; record status: {md(item.record_status or 'UNCONFIGURED')}",
+                    f"- Current weight: {item.current_weight if item.current_weight is not None else 'N/A'}",
+                    "- Target bounds: "
+                    + (
+                        f"{item.target_weight['min']} to {item.target_weight['max']}"
+                        if item.target_weight is not None
+                        else "N/A"
+                    ),
+                    f"- Thesis status: {item.thesis_status}",
+                    f"- Original thesis: {_thesis_display(item.original_thesis_evidence)}",
                     "- Invalidation conditions: "
                     + ("; ".join(md(value) for value in item.invalidation_conditions) or "None"),
                     "- Review triggers: "
                     + ("; ".join(md(value) for value in item.review_triggers) or "None"),
                     "- User notes: " + ("; ".join(md(value) for value in item.notes) or "None"),
                     f"- Last reviewed: {item.last_reviewed_at or 'Not configured'}",
+                    f"- Opened at: {item.opened_at or 'Not configured'}",
+                    f"- Holding horizon: {md(item.holding_horizon or 'Not configured')}",
+                    f"- History status: {item.history_evidence_status}",
+                    f"- History excluded pre-open: {item.history_excluded_pre_open}",
+                    "- Role drift policy: "
+                    + md(json.dumps(_json_value(item.role_drift_policy), sort_keys=True)),
                     f"- Review priority: {item.review_priority}",
                     *(
                         [f"- Note: {md(note)}" for note in item.data_quality_notes]
                         or ["- Note: None"]
                     ),
                     "",
+                    "#### History evidence",
+                    "",
+                    *(
+                        [
+                            f"- `{md(entry.snapshot_id)}` | {entry.as_of.isoformat()} | {md(entry.identity)} | weight={entry.weight}"
+                            for entry in item.history_evidence
+                        ]
+                        or ["- None"]
+                    ),
+                    "",
+                    "#### Findings",
+                    "",
+                    *(
+                        [
+                            f"- type={finding.type}; severity={finding.severity}; priority={finding.review_priority}; "
+                            f"summary={md(finding.summary)}; evidence={md(json.dumps(_json_value(finding.evidence), ensure_ascii=False, sort_keys=True))}"
+                            for finding in item.findings
+                        ]
+                        or ["- None"]
+                    ),
+                    "",
                 ]
             )
         return "\n".join(lines) + "\n"
+
+
+def _thesis_evidence(value: str) -> Mapping[str, Any]:
+    return {
+        "configured": True,
+        "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+        "characters": len(value),
+    }
+
+
+def _thesis_display(value: Mapping[str, Any] | None) -> str:
+    if value is None:
+        return "not configured"
+    return f"configured (sha256={value['sha256']}, characters={value['characters']})"
 
 
 def _horizon_days(text: str) -> int:
@@ -191,23 +306,51 @@ def _finding(
     return LifecycleFinding(kind, symbol, summary, evidence, priority)
 
 
-def _history_role_drift(
+_ROLE_POLICY = {
+    "threshold": Decimal("0.10"),
+    "minimum_snapshots": 3,
+    "minimum_span_days": 30,
+}
+
+
+def _history_evidence(
     record: LifecycleRecord,
-    current: EconomicPosition,
     history: Sequence[PortfolioSnapshot],
-) -> tuple[bool, str | None]:
-    if record.role != "SATELLITE" or current.weight < Decimal("0.10"):
-        return False, None
-    observations: dict[str, tuple[Any, Decimal]] = {}
+) -> tuple[tuple[LifecycleHistoryEvidence, ...], int]:
+    observations: list[LifecycleHistoryEvidence] = []
+    pre_open = 0
     for snapshot in history:
         for item in aggregate_economic_positions(snapshot):
             if item.identity == record.symbol:
-                observations[snapshot.snapshot_id] = (snapshot.as_of, item.weight)
+                if snapshot.as_of.date() < record.opened_at:
+                    pre_open += 1
+                    break
+                observations.append(
+                    LifecycleHistoryEvidence(
+                        snapshot.snapshot_id, snapshot.as_of, item.identity, item.weight
+                    )
+                )
                 break
-    ordered = sorted(observations.values())
-    if len(ordered) < 3 or (ordered[-1][0] - ordered[0][0]).days < 30:
-        return False, "role drift unavailable: requires at least 3 snapshots spanning 30 days"
-    return all(weight >= Decimal("0.10") for _as_of, weight in ordered), None
+    return tuple(sorted(observations, key=lambda item: (item.as_of, item.snapshot_id))), pre_open
+
+
+def _history_role_drift(
+    record: LifecycleRecord,
+    current: EconomicPosition,
+    evidence: Sequence[LifecycleHistoryEvidence],
+) -> tuple[bool, str]:
+    if record.role != "SATELLITE" or current.weight < _ROLE_POLICY["threshold"]:
+        return False, "NOT_REQUIRED"
+    sufficient = (
+        len(evidence) >= _ROLE_POLICY["minimum_snapshots"]
+        and (evidence[-1].as_of - evidence[0].as_of).days >= _ROLE_POLICY["minimum_span_days"]
+    )
+    if not sufficient:
+        return False, "PARTIAL"
+    return (
+        all(item.weight >= _ROLE_POLICY["threshold"] for item in evidence),
+        "AVAILABLE",
+    )
 
 
 def _assessment(
@@ -220,6 +363,14 @@ def _assessment(
 ) -> LifecycleAssessment:
     symbol = current.identity if current is not None else record.symbol  # type: ignore[union-attr]
     if record is None:
+        evidence = tuple(
+            LifecycleHistoryEvidence(
+                item.snapshot_id, item.as_of, position.identity, position.weight
+            )
+            for item in history
+            for position in aggregate_economic_positions(item)
+            if position.identity == symbol
+        )
         finding = _finding(
             "UNCONFIGURED",
             symbol,
@@ -242,12 +393,22 @@ def _assessment(
             None,
             None,
             None,
+            "NOT_REQUIRED",
+            evidence,
+            0,
+            _ROLE_POLICY,
             (finding,),
             "P2",
             ("No thesis or target was inferred.",),
         )
     if record.last_reviewed_at > as_of or record.opened_at > as_of:
         raise LifecycleInputError("lifecycle record dates cannot be after snapshot as_of")
+    evidence, pre_open = _history_evidence(record, history)
+    history_notes: list[str] = []
+    if pre_open:
+        history_notes.append(
+            f"history evidence excluded {pre_open} pre-open snapshot(s) for {record.symbol}"
+        )
     if current is None:
         finding = _finding(
             "EXITED",
@@ -264,16 +425,20 @@ def _assessment(
             None,
             {"min": record.target_weight.minimum, "max": record.target_weight.maximum},
             "UNREVIEWED",
-            record.original_thesis,
+            _thesis_evidence(record.original_thesis),
             record.invalidation_conditions,
             record.review_triggers,
             record.notes,
             record.opened_at,
             record.holding_horizon,
             record.last_reviewed_at,
+            "NOT_REQUIRED",
+            evidence,
+            pre_open,
+            _ROLE_POLICY,
             (finding,),
             "P3",
-            (),
+            tuple(history_notes),
         )
 
     reviewed = "UNREVIEWED" if thesis_review is None else thesis_review.upper()
@@ -291,9 +456,12 @@ def _assessment(
                 "P0",
             )
         )
-    role_drift, role_note = _history_role_drift(record, current, history)
-    if role_note:
-        notes.append(role_note)
+    role_drift, history_status = _history_role_drift(record, current, evidence)
+    notes.extend(history_notes)
+    if history_status == "PARTIAL":
+        notes.append(
+            "role drift unavailable: requires at least 3 eligible snapshots spanning 30 days"
+        )
     if role_drift:
         findings.append(
             _finding(
@@ -372,13 +540,17 @@ def _assessment(
         current.weight,
         {"min": record.target_weight.minimum, "max": record.target_weight.maximum},
         reviewed,
-        record.original_thesis,
+        _thesis_evidence(record.original_thesis),
         record.invalidation_conditions,
         record.review_triggers,
         record.notes,
         record.opened_at,
         record.holding_horizon,
         record.last_reviewed_at,
+        history_status,
+        evidence,
+        pre_open,
+        _ROLE_POLICY,
         tuple(findings),
         priority,
         tuple(notes),
@@ -403,11 +575,26 @@ def analyze_lifecycle(
     history: Sequence[PortfolioSnapshot] = (),
     thesis_reviews: Mapping[str, str] | None = None,
 ) -> LifecycleReport:
+    candidate_history_count = len(history)
     try:
         snapshot = snapshot_from_document(snapshot.to_dict())
-        history = tuple(snapshot_from_document(item.to_dict()) for item in history)
+        validated_history = tuple(snapshot_from_document(item.to_dict()) for item in history)
     except InvalidSnapshot as exc:
         raise LifecycleInputError("lifecycle input snapshot is invalid") from exc
+    accepted_history: list[PortfolioSnapshot] = []
+    seen_history: set[str] = set()
+    duplicate_history = 0
+    future_history = 0
+    for item in sorted(validated_history, key=lambda value: (value.as_of, value.snapshot_id)):
+        if item.snapshot_id in seen_history:
+            duplicate_history += 1
+            continue
+        seen_history.add(item.snapshot_id)
+        if item.as_of > snapshot.as_of:
+            future_history += 1
+            continue
+        accepted_history.append(item)
+    history = tuple(accepted_history)
     economic = aggregate_economic_positions(snapshot)
     if any(item.weight < 0 for item in economic):
         raise LifecycleInputError("signed lifecycle portfolios are unsupported")
@@ -431,7 +618,21 @@ def analyze_lifecycle(
             key=lambda item: (item.review_priority, item.type, item.symbol),
         )
     )
-    notes = sorted({note for item in assessments for note in item.data_quality_notes})
+    global_history_notes: list[str] = []
+    if future_history:
+        global_history_notes.append(
+            f"history evidence excluded {future_history} future snapshot(s) after current as_of"
+        )
+    if duplicate_history:
+        global_history_notes.append(
+            f"history evidence deduplicated {duplicate_history} repeated snapshot(s) by full identity"
+        )
+    notes = sorted(
+        {
+            *global_history_notes,
+            *(note for item in assessments for note in item.data_quality_notes),
+        }
+    )
     unconfigured = sum(item.lifecycle_status == "UNCONFIGURED" for item in assessments)
     status = "PARTIAL" if unconfigured or notes else "COMPLETE"
     provisional = LifecycleReport(
@@ -446,6 +647,28 @@ def analyze_lifecycle(
             "assessed_positions": len(assessments),
             "unconfigured_positions": unconfigured,
             "history_snapshots": len({item.snapshot_id for item in history}),
+            "history": {
+                "status": (
+                    "PARTIAL"
+                    if future_history
+                    or duplicate_history
+                    or any(item.history_excluded_pre_open for item in assessments)
+                    or any(item.history_evidence_status == "PARTIAL" for item in assessments)
+                    else "AVAILABLE"
+                    if history
+                    else "UNAVAILABLE"
+                ),
+                "candidate_snapshots": candidate_history_count,
+                "accepted_snapshots": len(history),
+                "duplicate_snapshots": duplicate_history,
+                "future_snapshots": future_history,
+                "pre_open_observations": sum(
+                    item.history_excluded_pre_open for item in assessments
+                ),
+                "position_observations": sum(len(item.history_evidence) for item in assessments),
+                "window_start": history[0].as_of if history else None,
+                "window_end": history[-1].as_of if history else None,
+            },
         },
         assessments,
         findings,
@@ -471,6 +694,17 @@ def unavailable_lifecycle_report(snapshot: PortfolioSnapshot, note: str) -> Life
             "assessed_positions": 0,
             "unconfigured_positions": 0,
             "history_snapshots": 0,
+            "history": {
+                "status": "UNAVAILABLE",
+                "candidate_snapshots": 0,
+                "accepted_snapshots": 0,
+                "duplicate_snapshots": 0,
+                "future_snapshots": 0,
+                "pre_open_observations": 0,
+                "position_observations": 0,
+                "window_start": None,
+                "window_end": None,
+            },
         },
         (),
         (),
