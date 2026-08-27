@@ -44,6 +44,14 @@ _SAFE_QUERY_FUTU_KEYS = (
 )
 
 
+def validate_account_id(value: str) -> str:
+    """Validate the shared account-ID contract without echoing sensitive input."""
+
+    if re.fullmatch(r"[1-9][0-9]{4,19}", value) is None:
+        raise ValueError("account ID must be a valid positive decimal identifier")
+    return value
+
+
 def controlled_child_environment(
     source: Mapping[str, str] | None = None,
     *,
@@ -56,9 +64,7 @@ def controlled_child_environment(
         key: parent[key] for key in (*_SAFE_RUNTIME_KEYS, *_SAFE_QUERY_FUTU_KEYS) if key in parent
     }
     if purpose == "adapter" and "FUTU_ACC_ID" in parent:
-        account_id = parent["FUTU_ACC_ID"]
-        if re.fullmatch(r"[1-9][0-9]{4,19}", account_id) is None:
-            raise ValueError("FUTU_ACC_ID must be a valid positive decimal account ID")
+        account_id = validate_account_id(parent["FUTU_ACC_ID"])
         environment["FUTU_ACC_ID"] = account_id
     environment.setdefault("FUTU_OPEND_HOST", "127.0.0.1")
     environment.setdefault("FUTU_OPEND_PORT", "11111")

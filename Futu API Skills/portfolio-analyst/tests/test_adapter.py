@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from portfolio_analyst import futu_adapter
 from portfolio_analyst.futu_adapter import FutuAdapter, UnsafeFutuCommand
 from portfolio_analyst.skill_trust import audited_files
 
@@ -36,6 +37,73 @@ def test_adapter_exposes_only_hard_coded_read_only_scripts(tmp_path):
 
     with pytest.raises(UnsafeFutuCommand):
         adapter.validate_request("../../tmp/custom", [])
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments"),
+    [
+        ("get_accounts", ["--json", "--show-disabled"]),
+        (
+            "get_portfolio",
+            [
+                "--acc-id=12345",
+                "--market",
+                "HK",
+                "--trd-env=REAL",
+                "--currency",
+                "USD",
+                "--security-firm=FUTUINC",
+                "--ctx-type",
+                "FUTURE",
+                "--show-option-strategy-view",
+                "--json",
+            ],
+        ),
+        (
+            "get_all_portfolios",
+            [
+                "--acc-id",
+                "281756475296104250",
+                "--trd-env",
+                "SIMULATE",
+                "--show-option-strategy-view",
+                "--json",
+            ],
+        ),
+    ],
+)
+def test_each_command_accepts_its_exact_official_option_set(tmp_path, command, arguments):
+    request = FutuAdapter(_skill(tmp_path)).validate_request(command, arguments)
+
+    assert all("=" not in argument for argument in request.arguments)
+    assert request.command == command
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--acc", "12345"],
+        ["--unknown"],
+        ["positional"],
+        ["--market"],
+        ["--market", "HK", "--market=US"],
+        ["--json=true"],
+        ["--trd-env", "LIVE"],
+        ["--acc-id", "not-an-id"],
+    ],
+)
+def test_argument_policy_rejects_abbreviated_unknown_missing_duplicate_and_malformed_options(
+    tmp_path, arguments
+):
+    adapter = FutuAdapter(_skill(tmp_path))
+
+    with pytest.raises(UnsafeFutuCommand):
+        adapter.validate_request("get_portfolio", arguments)
+
+
+def test_private_option_schema_is_immutable():
+    with pytest.raises(TypeError):
+        futu_adapter._COMMAND_OPTION_SCHEMA["alias"] = ()
 
 
 def test_read_only_real_query_never_accepts_a_password(tmp_path):
@@ -144,6 +212,28 @@ def test_known_environment_account_id_is_redacted_when_unlabeled(monkeypatch, tm
     assert account_id not in result.stderr
     assert account_id not in " ".join(result.args)
     assert "[REDACTED]" in f"{result.stdout} {result.stderr} {result.args}"
+
+
+def test_explicit_equals_account_id_and_environment_id_are_both_redacted(monkeypatch, tmp_path):
+    environment_id = "281756475296104250"
+    explicit_id = "9492210"
+    adapter = FutuAdapter(_skill(tmp_path))
+    monkeypatch.setenv("FUTU_ACC_ID", environment_id)
+
+    def fake_run(args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout=f"selected {explicit_id}; fallback {environment_id}",
+            stderr=json.dumps({"message": f"{explicit_id} {environment_id}"}),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = adapter.run("get_portfolio", [f"--acc-id={explicit_id}", "--json"])
+
+    assert explicit_id not in f"{result.stdout} {result.stderr} {result.args}"
+    assert environment_id not in f"{result.stdout} {result.stderr} {result.args}"
 
 
 @pytest.mark.parametrize(
@@ -352,6 +442,27 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
         assert secret not in exposed
     assert "FUTU_LOGIN_PWD" not in observed["env"]
     assert "parent-trade-password" not in exposed
+
+
+def test_explicit_account_id_is_redacted_from_unlabeled_timeout_buffers(monkeypatch, tmp_path):
+    explicit_id = "9492210"
+    adapter = FutuAdapter(_skill(tmp_path))
+
+    def time_out(args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=[*args, f"trace-{explicit_id}"],
+            timeout=1,
+            output=f"waiting for {explicit_id}",
+            stderr=json.dumps({"message": explicit_id}),
+        )
+
+    monkeypatch.setattr(subprocess, "run", time_out)
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        adapter.run("get_all_portfolios", ["--acc-id", explicit_id], timeout=1)
+
+    exposed = f"{caught.value.cmd} {caught.value.output} {caught.value.stderr}"
+    assert explicit_id not in exposed
 
 
 def test_adapter_revalidates_skill_before_each_command(tmp_path):

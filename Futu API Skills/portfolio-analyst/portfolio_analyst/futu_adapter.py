@@ -9,9 +9,10 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Sequence
 
-from .child_environment import controlled_child_environment
+from .child_environment import controlled_child_environment, validate_account_id
 from .skill_trust import audited_command, audited_command_names, load_audited_skill
 
 
@@ -23,6 +24,60 @@ class UnsafeFutuCommand(ValueError):
 class FutuRequest:
     command: str
     arguments: tuple[str, ...]
+    sensitive_values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _OptionSpec:
+    name: str
+    takes_value: bool = False
+    choices: frozenset[str] | None = None
+    account_id: bool = False
+
+
+@dataclass(frozen=True)
+class _CommandOptions:
+    command: str
+    options: tuple[_OptionSpec, ...]
+
+
+_MARKETS = frozenset({"US", "HK", "HKCC", "CN", "SG", "MY", "JP"})
+_TRADING_ENVIRONMENTS = frozenset({"REAL", "SIMULATE"})
+_CURRENCIES = frozenset({"HKD", "USD", "CNH", "JPY", "AUD", "CAD", "MYR", "SGD"})
+_SECURITY_FIRMS = frozenset(
+    {"FUTUSECURITIES", "FUTUINC", "FUTUSG", "FUTUAU", "FUTUCA", "FUTUJP", "FUTUMY"}
+)
+_COMMAND_OPTIONS = (
+    _CommandOptions(
+        "get_accounts",
+        (_OptionSpec("--json"), _OptionSpec("--show-disabled")),
+    ),
+    _CommandOptions(
+        "get_portfolio",
+        (
+            _OptionSpec("--acc-id", takes_value=True, account_id=True),
+            _OptionSpec("--market", takes_value=True, choices=_MARKETS),
+            _OptionSpec("--trd-env", takes_value=True, choices=_TRADING_ENVIRONMENTS),
+            _OptionSpec("--currency", takes_value=True, choices=_CURRENCIES),
+            _OptionSpec("--security-firm", takes_value=True, choices=_SECURITY_FIRMS),
+            _OptionSpec("--ctx-type", takes_value=True, choices=frozenset({"SEC", "FUTURE"})),
+            _OptionSpec("--show-option-strategy-view"),
+            _OptionSpec("--json"),
+        ),
+    ),
+    _CommandOptions(
+        "get_all_portfolios",
+        (
+            _OptionSpec("--acc-id", takes_value=True, account_id=True),
+            _OptionSpec("--trd-env", takes_value=True, choices=_TRADING_ENVIRONMENTS),
+            _OptionSpec("--show-option-strategy-view"),
+            _OptionSpec("--json"),
+        ),
+    ),
+)
+_COMMAND_OPTION_SCHEMA = MappingProxyType(
+    {record.command: record.options for record in _COMMAND_OPTIONS}
+)
 
 
 class FutuAdapter:
@@ -100,7 +155,49 @@ class FutuAdapter:
         )
         if any(term in option for option in option_names for term in self.CREDENTIAL_FLAG_TERMS):
             raise UnsafeFutuCommand("credential and unlock arguments are forbidden")
-        return FutuRequest(name, tuple(map(str, arguments)))
+        normalized: list[str] = []
+        sensitive_values: list[str] = []
+        seen: set[str] = set()
+        raw_arguments = tuple(map(str, arguments))
+        options = _COMMAND_OPTION_SCHEMA.get(name, ())
+        index = 0
+        while index < len(raw_arguments):
+            token = raw_arguments[index]
+            if not token.startswith("--"):
+                raise UnsafeFutuCommand("positional Futu arguments are forbidden")
+            option, separator, attached_value = token.partition("=")
+            spec = next((candidate for candidate in options if candidate.name == option), None)
+            if spec is None:
+                raise UnsafeFutuCommand("Futu option is not in the command policy")
+            if option in seen:
+                raise UnsafeFutuCommand("duplicate Futu options are forbidden")
+            seen.add(option)
+            normalized.append(option)
+            if not spec.takes_value:
+                if separator:
+                    raise UnsafeFutuCommand("boolean Futu options do not accept values")
+                index += 1
+                continue
+            if separator:
+                value = attached_value
+            else:
+                index += 1
+                if index >= len(raw_arguments) or raw_arguments[index].startswith("--"):
+                    raise UnsafeFutuCommand("Futu option requires a value")
+                value = raw_arguments[index]
+            if not value:
+                raise UnsafeFutuCommand("Futu option requires a value")
+            if spec.choices is not None and value not in spec.choices:
+                raise UnsafeFutuCommand("Futu option value is outside the command policy")
+            if spec.account_id:
+                try:
+                    validate_account_id(value)
+                except ValueError:
+                    raise UnsafeFutuCommand("account ID has an invalid format") from None
+                sensitive_values.append(value)
+            normalized.append(value)
+            index += 1
+        return FutuRequest(name, tuple(normalized), tuple(sensitive_values))
 
     def run(
         self, name: str, arguments: Sequence[str], *, timeout: float = 30
@@ -110,7 +207,12 @@ class FutuAdapter:
         request = self.validate_request(name, arguments)
         child_environment = controlled_child_environment(purpose="adapter")
         sensitive_values = tuple(
-            value for key, value in child_environment.items() if key == "FUTU_ACC_ID"
+            dict.fromkeys(
+                (
+                    *request.sensitive_values,
+                    *(value for key, value in child_environment.items() if key == "FUTU_ACC_ID"),
+                )
+            )
         )
         audited, detail = load_audited_skill(self.skill_dir)
         if audited is None:
