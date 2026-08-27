@@ -512,8 +512,66 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             (item["account_ref"], item["market"])
             for item in (*orders, *payload["normalized_fills"])
         }
+        if any(
+            item["identity"].split(".", 1)[0] != item["market"]
+            for item in (*orders, *payload["normalized_fills"])
+        ):
+            raise ValueError("normalized identity and canonical market do not agree")
         if not evidenced_contexts <= successful_contexts:
             raise ValueError("normalized rows must come from successful contexts")
+        source_unavailable = coverage["contexts_requested"] > 0 and not successful_contexts
+        if source_unavailable:
+            if (
+                any(value is not None for value in metrics.values())
+                or orders
+                or payload["normalized_fills"]
+                or groups
+                or trips
+                or payload["open_lots"]
+                or payload["policy_checks"]
+                or payload["behavior_findings"]
+                or payload["policy_status"] != "UNCONFIGURED"
+                or payload["data_quality_status"] != "UNAVAILABLE"
+                or not payload["data_quality_notes"]
+                or coverage["monetary_base_coverage"] != "PARTIAL"
+                or any(
+                    coverage[name] != 0
+                    for name in (
+                        "partial_fill_orders",
+                        "orders_missing_fills",
+                        "orphan_fill_orders",
+                        "order_fill_qty_mismatches",
+                        "order_status_conflicts",
+                        "excluded_nontrade_events",
+                    )
+                )
+            ):
+                raise ValueError("totally unavailable source must not claim observed activity")
+            if (
+                payload["motive_status"] != "UNVERIFIED"
+                or not payload["unverified_interpretations"]
+            ):
+                raise ValueError("psychological interpretation must remain explicitly unverified")
+            return
+        required_observed_metrics = {
+            "trade_count",
+            "order_count",
+            "fill_count",
+            "distinct_symbols",
+            "notional_by_currency",
+            "realized_pl_by_currency",
+            "per_symbol_turnover",
+            "closed_trips",
+            "same_day_reversals",
+            "repeated_symbol_days",
+            "add_to_winner_count",
+            "add_to_loser_count",
+            "cost_proximity_exit_count",
+        }
+        if payload["data_quality_status"] == "UNAVAILABLE" or any(
+            metrics[name] is None for name in required_observed_metrics
+        ):
+            raise ValueError("available source requires observed activity metrics")
         excluded = sum(item["event_type"] != "TRADE" for item in payload["normalized_fills"])
         if coverage["excluded_nontrade_events"] != excluded:
             raise ValueError("excluded-event coverage does not reconcile")

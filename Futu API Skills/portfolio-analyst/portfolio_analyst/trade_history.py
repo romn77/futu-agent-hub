@@ -15,6 +15,7 @@ from .trade_review import (
     TradeReview,
     TradeReviewInputError,
     build_trade_review,
+    canonical_context_market,
     normalize_order_status,
 )
 
@@ -92,7 +93,7 @@ class FutuTradeHistoryService:
             if not query_markets or not firm:
                 continue
             for market in query_markets:
-                key = (account_id, market)
+                key = (account_id, canonical_context_market(market))
                 if key not in seen:
                     selected.append((account_id, market, firm))
                     seen.add(key)
@@ -104,7 +105,8 @@ class FutuTradeHistoryService:
             for account_id, market, firm in selected
         ]
         requested_contexts = [
-            {"account_ref": alias, "market": market} for _, market, _, alias in selected_contexts
+            {"account_ref": alias, "market": canonical_context_market(market)}
+            for _, market, _, alias in selected_contexts
         ]
         successful_contexts: list[dict[str, str]] = []
         failed_contexts: list[dict[str, str]] = []
@@ -199,14 +201,16 @@ class FutuTradeHistoryService:
                 orders.extend(normalized_orders)
                 deals.extend(normalized_deals)
                 contexts_read += 1
-                successful_contexts.append({"account_ref": alias, "market": market})
+                successful_contexts.append(
+                    {"account_ref": alias, "market": canonical_context_market(market)}
+                )
                 consecutive_failures = 0
             except Exception as exc:
                 consecutive_failures += 1
                 failed_contexts.append(
                     {
                         "account_ref": alias,
-                        "market": market,
+                        "market": canonical_context_market(market),
                         "reason": type(exc).__name__,
                     }
                 )

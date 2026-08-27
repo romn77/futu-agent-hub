@@ -144,53 +144,62 @@ class OpenLot:
 
 @dataclass(frozen=True)
 class TradeMetrics:
-    trade_count: int
-    order_count: int
-    fill_count: int
-    distinct_symbols: int
-    notional_by_currency: Mapping[str, Mapping[str, Decimal]]
-    realized_pl_by_currency: Mapping[str, Decimal]
+    trade_count: int | None
+    order_count: int | None
+    fill_count: int | None
+    distinct_symbols: int | None
+    notional_by_currency: Mapping[str, Mapping[str, Decimal]] | None
+    realized_pl_by_currency: Mapping[str, Decimal] | None
     buy_notional_base: Decimal | None
     sell_notional_base: Decimal | None
     portfolio_turnover: Decimal | None
-    per_symbol_turnover: Mapping[str, Decimal]
+    per_symbol_turnover: Mapping[str, Decimal] | None
     average_holding_seconds: Decimal | None
     median_holding_seconds: Decimal | None
-    closed_trips: int
+    closed_trips: int | None
     win_rate: Decimal | None
     average_win_base: Decimal | None
     average_loss_base: Decimal | None
     payoff_ratio_base: Decimal | None
     profit_factor_base: Decimal | None
     expectancy_base: Decimal | None
-    same_day_reversals: int
+    same_day_reversals: int | None
     same_day_reversal_rate: Decimal | None
     reentries_within_cooldown: int | None
     open_window_trades: int | None
     open_window_trade_rate: Decimal | None
-    repeated_symbol_days: int
+    repeated_symbol_days: int | None
     add_to_winner_count: int | None
     add_to_loser_count: int | None
     add_to_loser_rate: Decimal | None
     cost_proximity_exit_count: int | None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "notional_by_currency",
-            MappingProxyType(
-                {
-                    key: MappingProxyType(dict(value))
-                    for key, value in self.notional_by_currency.items()
-                }
-            ),
-        )
-        object.__setattr__(
-            self, "realized_pl_by_currency", MappingProxyType(dict(self.realized_pl_by_currency))
-        )
-        object.__setattr__(
-            self, "per_symbol_turnover", MappingProxyType(dict(self.per_symbol_turnover))
-        )
+        if self.notional_by_currency is not None:
+            object.__setattr__(
+                self,
+                "notional_by_currency",
+                MappingProxyType(
+                    {
+                        key: MappingProxyType(dict(value))
+                        for key, value in self.notional_by_currency.items()
+                    }
+                ),
+            )
+        if self.realized_pl_by_currency is not None:
+            object.__setattr__(
+                self,
+                "realized_pl_by_currency",
+                MappingProxyType(dict(self.realized_pl_by_currency)),
+            )
+        if self.per_symbol_turnover is not None:
+            object.__setattr__(
+                self, "per_symbol_turnover", MappingProxyType(dict(self.per_symbol_turnover))
+            )
+
+    @classmethod
+    def unavailable(cls) -> TradeMetrics:
+        return cls(*([None] * len(cls.__dataclass_fields__)))
 
 
 @dataclass(frozen=True)
@@ -207,6 +216,10 @@ class BehaviorFinding:
     def __post_init__(self) -> None:
         object.__setattr__(self, "affected_events", tuple(self.affected_events))
         object.__setattr__(self, "affected_symbols", tuple(self.affected_symbols))
+
+
+def _shown(value: Any) -> str:
+    return "Unavailable" if value is None else str(value)
 
 
 @dataclass(frozen=True)
@@ -274,18 +287,18 @@ class TradeReview:
             f"- Data quality: {self.data_quality_status}",
             f"- Policy status: {self.policy_status}",
             "- Motive: unverified; only observed execution patterns are described.",
-            f"- Orders / fills / symbols: {metrics.order_count} / {metrics.fill_count} / {metrics.distinct_symbols}",
-            f"- Closed FIFO trips: {metrics.closed_trips}",
+            f"- Orders / fills / symbols: {_shown(metrics.order_count)} / {_shown(metrics.fill_count)} / {_shown(metrics.distinct_symbols)}",
+            f"- Closed FIFO trips: {_shown(metrics.closed_trips)}",
             f"- Win rate: {metrics.win_rate if metrics.win_rate is not None else 'Unavailable'}",
-            f"- Local-currency notional buckets: {safe(json.dumps(_json_value(metrics.notional_by_currency), sort_keys=True))}",
+            f"- Local-currency notional buckets: {safe(json.dumps(_json_value(metrics.notional_by_currency), sort_keys=True)) if metrics.notional_by_currency is not None else 'Unavailable'}",
             f"- Buy / sell notional ({safe(self.base_currency or 'base unavailable')}): {metrics.buy_notional_base if metrics.buy_notional_base is not None else 'Unavailable'} / {metrics.sell_notional_base if metrics.sell_notional_base is not None else 'Unavailable'}",
-            f"- Same-day reversals: {metrics.same_day_reversals}",
+            f"- Same-day reversals: {_shown(metrics.same_day_reversals)}",
             f"- Same-day reversal rate: {metrics.same_day_reversal_rate if metrics.same_day_reversal_rate is not None else 'Unavailable'}",
-            f"- Reentries within configured cooldown: {metrics.reentries_within_cooldown}",
-            f"- Trades in configured market-open window: {metrics.open_window_trades}",
+            f"- Reentries within configured cooldown: {_shown(metrics.reentries_within_cooldown)}",
+            f"- Trades in configured market-open window: {_shown(metrics.open_window_trades)}",
             f"- Market-open-window rate: {metrics.open_window_trade_rate if metrics.open_window_trade_rate is not None else 'Unavailable'}",
-            f"- Add-to-winner / add-to-loser: {metrics.add_to_winner_count} / {metrics.add_to_loser_count}",
-            f"- Cost-proximity exits (within 1% of evidenced FIFO entry): {metrics.cost_proximity_exit_count}",
+            f"- Add-to-winner / add-to-loser: {_shown(metrics.add_to_winner_count)} / {_shown(metrics.add_to_loser_count)}",
+            f"- Cost-proximity exits (within 1% of evidenced FIFO entry): {_shown(metrics.cost_proximity_exit_count)}",
             "\n## Verified behavior findings\n",
             *(
                 [
@@ -330,9 +343,9 @@ class TradeReview:
                 f"Quality: {self.data_quality_status}",
                 f"Policy: {self.policy_status}",
                 "Motive: UNVERIFIED; findings describe observed behavior only.",
-                f"Orders: {self.metrics.order_count}",
-                f"Fills: {self.metrics.fill_count}",
-                f"Closed FIFO trips: {self.metrics.closed_trips}",
+                f"Orders: {_shown(self.metrics.order_count)}",
+                f"Fills: {_shown(self.metrics.fill_count)}",
+                f"Closed FIFO trips: {_shown(self.metrics.closed_trips)}",
                 *[
                     f"Verified finding: {safe(item.type)} [{safe(item.severity)}] {safe(item.evidence)}"
                     for item in self.behavior_findings
@@ -384,6 +397,14 @@ def normalize_order_status(raw: Any) -> str:
     if status not in NORMALIZED_ORDER_STATUSES:
         raise TradeReviewInputError("order status is outside the normalized contract")
     return status
+
+
+def canonical_context_market(raw: Any) -> str:
+    market = str(raw).strip().upper()
+    canonical = _SOURCE_MARKET_ALIASES.get(market, market)
+    if canonical not in _MARKET_TIME:
+        raise TradeReviewInputError("history context market is outside the canonical contract")
+    return canonical
 
 
 def load_trade_policy(data_home: Path) -> TradePolicy | None:
@@ -554,7 +575,7 @@ def _fill(raw: Mapping[str, Any], start: date, end: date) -> NormalizedFill:
         raise TradeReviewInputError("deal contract fields changed or are incomplete")
     code = str(raw["code"]).strip().upper()
     parts = code.split(".", 1)
-    market = _SOURCE_MARKET_ALIASES.get(parts[0], parts[0]) if len(parts) == 2 else ""
+    market = canonical_context_market(parts[0]) if len(parts) == 2 else ""
     if len(parts) != 2 or market not in _MARKET_TIME or not parts[1]:
         raise TradeReviewInputError("deal requires a supported market-qualified identity")
     side = str(raw["side"]).strip().upper().replace("TRD_SIDE.", "").replace("TRDSIDE.", "")
@@ -617,7 +638,7 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
         raise TradeReviewInputError("order contract fields changed or are incomplete")
     code = str(raw["code"]).strip().upper()
     parts = code.split(".", 1)
-    market = _SOURCE_MARKET_ALIASES.get(parts[0], parts[0]) if len(parts) == 2 else ""
+    market = canonical_context_market(parts[0]) if len(parts) == 2 else ""
     if len(parts) != 2 or market not in _MARKET_TIME or not parts[1]:
         raise TradeReviewInputError("order requires a supported market-qualified identity")
     side = str(raw["side"]).strip().upper().replace("TRD_SIDE.", "").replace("TRDSIDE.", "")
@@ -803,6 +824,11 @@ def build_trade_review(
         raise TradeReviewInputError("portfolio NAV requires positive base-currency evidence")
     if corporate_action_evidence_status not in {"AVAILABLE", "UNSUPPORTED_EVIDENCE"}:
         raise TradeReviewInputError("corporate-action evidence status is invalid")
+    source_unavailable = bool(
+        coverage_context
+        and coverage_context.get("contexts_requested", 0) > 0
+        and coverage_context.get("contexts_read", 0) == 0
+    )
     normalized_all = tuple(_fill(raw, start, end) for raw in deals)
     normalized_orders = tuple(_order(raw, start, end) for raw in orders)
     deal_ids = [fill.deal_id for fill in normalized_all]
@@ -872,8 +898,10 @@ def build_trade_review(
             realized_by_currency[trip.currency] = (
                 realized_by_currency.get(trip.currency, Decimal(0)) + trip.realized_pl_local
             )
-    base_complete = bool(base_currency and source_snapshot_id and source_snapshot_as_of) and all(
-        fill.currency != "UNKNOWN" and fill.fx_to_base is not None for fill in normalized
+    base_complete = (
+        not source_unavailable
+        and bool(base_currency and source_snapshot_id and source_snapshot_as_of)
+        and all(fill.currency != "UNKNOWN" and fill.fx_to_base is not None for fill in normalized)
     )
     buy_base = (
         sum(
@@ -1065,8 +1093,10 @@ def build_trade_review(
         None if not additions else Decimal(add_loser) / additions,
         cost_proximity,
     )
+    if source_unavailable:
+        metrics = TradeMetrics.unavailable()
     checks: list[dict[str, Any]] = []
-    if policy:
+    if policy and not source_unavailable:
         per_day: dict[tuple[str, date], int] = {}
         for group in groups:
             day_key = (group.account_ref, group.effective_at.date())
@@ -1136,6 +1166,11 @@ def build_trade_review(
             *notes,
             f"{unmatched_sells} sell fills lack evidenced opening inventory in the requested history window; they were excluded from FIFO trip metrics",
         )
+    if source_unavailable:
+        notes = (
+            *notes,
+            "historical activity metrics are UNAVAILABLE because no requested context completed successfully",
+        )
     status = (
         "BREACH"
         if any(x["status"] == "BREACH" for x in checks)
@@ -1203,6 +1238,8 @@ def build_trade_review(
     )
     add_behavior("ADD_TO_WINNER", add_winner, add_winner_events)
     add_behavior("ADD_TO_LOSER", add_loser, add_loser_events, "flag_add_to_loser")
+    if source_unavailable:
+        behavior.clear()
     evidenced_accounts = sorted(
         {fill.account_ref for fill in normalized_all}
         | {order.account_ref for order in normalized_orders}
@@ -1250,7 +1287,7 @@ def build_trade_review(
     identity_body = json.dumps(
         _json_value(
             {
-                "schema_version": "1.2",
+                "schema_version": "1.3",
                 "as_of": acquisition,
                 "source": "futuapi",
                 "base_currency": base_currency,
@@ -1272,7 +1309,9 @@ def build_trade_review(
                     "Psychological motive cannot be verified from orders and fills alone.",
                 ),
                 "motive_status": "UNVERIFIED",
-                "data_quality_status": "PARTIAL" if notes else "COMPLETE",
+                "data_quality_status": (
+                    "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE"
+                ),
                 "data_quality_notes": notes,
                 "provenance": provenance,
             }
@@ -1282,7 +1321,7 @@ def build_trade_review(
     )
     review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
     return TradeReview(
-        "1.2",
+        "1.3",
         review_id,
         acquisition,
         "futuapi",
@@ -1303,7 +1342,7 @@ def build_trade_review(
         tuple(behavior),
         ("Psychological motive cannot be verified from orders and fills alone.",),
         "UNVERIFIED",
-        "PARTIAL" if notes else "COMPLETE",
+        "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE",
         notes,
         provenance,
     )

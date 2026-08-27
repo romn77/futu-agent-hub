@@ -145,7 +145,10 @@ notes, never fabricated round trips. Market-open checks use exchange-local IANA 
 DST). All behavior and frequency metrics use the merged OrderGroup (first fill is its effective
 time); exact fills remain the FIFO/P&L unit. The report captures acquisition `as_of` from an
 injectable UTC clock, keeps snapshot as-of separate, and preserves requested/successful/failed/
-budget-omitted masked contexts even when successful reads are empty. Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
+budget-omitted masked contexts even when successful reads are empty. Source `HKCC` contexts use the
+canonical `HK` evidence key. If no requested context succeeds, the report is `UNAVAILABLE` and every
+observed activity metric is `null`; only a successfully queried empty context establishes a true
+zero. Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
 complete base-currency, NAV, security-currency, and FX evidence; missing evidence makes base
 aggregates `null`, never mixed-currency totals. Orders and fills are reconciled, unsupported
 corporate-action/transfer/cost-adjustment fields are disclosed, and structured verified behavior

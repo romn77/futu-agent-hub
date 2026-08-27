@@ -1,12 +1,18 @@
 # Trade review contract
 
-The authoritative report contract is version `1.2`; earlier reports without OrderGroup behavior,
-acquisition time, and complete masked context coverage are rejected.
+The authoritative report contract is version `1.3`; earlier reports without total-source
+unavailability semantics or canonical context markets are rejected.
 
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
 must not end in the future, and is capped at 90 days. At most 20 securities account contexts and 40
 history requests are attempted, with 10-second call and 60-second wall budgets plus a three-failure
 circuit breaker.
+
+Coverage markets are canonical evidence keys. Source `HKCC` is recorded as canonical `HK`, matching
+normalized orders/fills; non-canonical coverage documents are rejected. If every requested context
+fails or is omitted by the budget, top-level quality is `UNAVAILABLE`, all observed activity metrics
+are JSON `null`, and Markdown/terminal output says `Unavailable`. A genuine zero is reported only
+when at least one context completed successfully, including a successful empty context.
 
 The two source scripts and their shared dependency are content pinned. Calls require exact account,
 market, REAL/SIMULATE environment, start/end, firm, SEC context, JSON, and (for orders) limit 200
