@@ -1500,6 +1500,46 @@ def test_trade_external_source_sanitizer_is_idempotent(raw):
 
 @pytest.mark.parametrize(
     "raw",
+    ["credentials abc123", "credentials\nabc123", "credential abc123"],
+)
+def test_trade_external_source_credentials_label_plural_and_singular_are_redacted(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+    detail = report.external_source_evidence[0]["detail"]
+
+    assert detail == "[REDACTED_EXTERNAL_CREDENTIAL]"
+    assert "abc123" not in json.dumps(report.to_dict())
+    validate_trade_review_document(report.to_dict())
+    repeated = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[detail],
+    )
+    assert repeated.external_source_evidence[0]["detail"] == detail
+
+
+def test_trade_external_source_credentialed_word_is_not_a_credential_label():
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=["credentialed analyst reported"],
+    )
+
+    assert report.external_source_evidence[0]["detail"] == "credentialed analyst reported"
+    validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
     [
         "password abcdefghijklmnop",
         "token abcdefghijklmnop",

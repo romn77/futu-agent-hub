@@ -13,7 +13,7 @@ MAX_EXTERNAL_SOURCE_NOTES = 20
 MAX_EXTERNAL_SOURCE_NOTE_CHARS = 512
 
 _LABELLED_CREDENTIAL = re.compile(
-    r"(?ix)(?<!\w)(?:password|passwd|pwd|secret|token|api[-_ ]?key|credential)"
+    r"(?ix)(?<!\w)(?:password|passwd|pwd|secret|token|api[-_ ]?key|credentials?)"
     r"(?!\w)(?:\s*[:=]\s*|\s+)(?P<value>\S+)"
 )
 _BEARER_CREDENTIAL = re.compile(r"(?i)(?<!\w)bearer(?!\w)\s+(?P<value>\S+)")

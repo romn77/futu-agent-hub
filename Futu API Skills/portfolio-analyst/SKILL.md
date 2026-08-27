@@ -184,7 +184,7 @@ are ambiguity evidence only, not independently verified facts or inferred motive
 authoritative JSON, its raw Python string is type/length checked at 512 characters before any
 normalization or scan. Two bounded NFKC detection views respectively delete C*/Zl/Zp separators or
 map them to one space, covering both internal splitting and separator substitution. Complete
-password/secret/token/API-key/credential labels followed by `:`, `=`, whitespace, or a mapped control
+password/secret/token/API-key/credential/credentials labels followed by `:`, `=`, whitespace, or a mapped control
 separator and any nonempty value are always sensitive. Bearer plus any token is sensitive except the
 explicit financial phrases bearer shares/securities/bonds/instruments/certificates when no later
 credential punctuation or header exists; `sk-` still requires a sufficiently long suffix. Matches replace the

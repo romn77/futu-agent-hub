@@ -42,7 +42,7 @@ evidence. Before NFKC, traversal, regex, or encoding, raw input must be a Python
 characters; oversize input immediately raises `EXTERNAL_SOURCE_EVIDENCE_TOO_LONG`. A separate bounded
 detection views respectively delete Unicode C*/Zl/Zp or map each to one space. Checking both views
 reconnects labels/values split internally and also preserves controls used as their delimiter.
-Complete password/secret/token/API-key/credential labels followed by `:`, `=`, whitespace, or a
+Complete password/secret/token/API-key/credential/credentials labels followed by `:`, `=`, whitespace, or a
 mapped control separator and any nonempty value always fail closed. Bearer plus any nonempty token
 also fails closed except the explicit financial phrases bearer shares, securities, bonds,
 instruments, or certificates when no later credential punctuation or secret header syntax exists.
