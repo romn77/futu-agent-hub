@@ -1343,3 +1343,34 @@ def test_trade_external_source_evidence_scrubs_common_credential_forms(raw, secr
         source_notes=[raw],
     )
     assert secret not in json.dumps(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    ("raw", "reconstructed_secret"),
+    [
+        ("Bear\u200ber bearer-material", "bearer-material"),
+        ("Bearer bear\u200ber-material", "bearer-material"),
+        ("Bearer bearer-material\u202e", "bearer-material"),
+        ("s\u200bk-private-material", "sk-private-material"),
+        ("sk-pri\u200bvate-material", "sk-private-material"),
+        ("sk-private-material\u2066", "sk-private-material"),
+    ],
+)
+def test_trade_external_source_evidence_deletes_credential_splitting_controls(
+    raw, reconstructed_secret
+):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+    rendered = json.dumps(report.to_dict(), ensure_ascii=False)
+
+    assert reconstructed_secret not in rendered
+    assert "private-material" not in rendered
+    assert "bearer-material" not in rendered
+    assert "\u200b" not in rendered
+    assert "\u202e" not in rendered
+    assert "\u2066" not in rendered

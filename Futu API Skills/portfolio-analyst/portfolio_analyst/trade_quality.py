@@ -59,12 +59,16 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
             raise ValueError("too many external source notes")
         if not isinstance(raw, str):
             raise ValueError("source note must be a string")
-        detail = FutuAdapter.sanitize_output(raw)
-        detail = unicodedata.normalize("NFKC", detail)
-        detail = "".join(
-            " " if unicodedata.category(character) in {"Cc", "Cf", "Cs"} else character
-            for character in detail
+        normalized = unicodedata.normalize("NFKC", raw)
+        normalized = "".join(
+            ""
+            if unicodedata.category(character) in {"Cf", "Cs"}
+            else " "
+            if unicodedata.category(character) == "Cc"
+            else character
+            for character in normalized
         )
+        detail = FutuAdapter.sanitize_output(normalized)
         detail = _LABELLED_CREDENTIAL.sub(
             lambda match: f"{match.group('label')}{match.group('separator')}{FutuAdapter.REDACTION}",
             detail,
