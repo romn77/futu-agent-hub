@@ -178,6 +178,9 @@ orders plus fills are at most 20,000; groups/trips/open lots cannot exceed fills
 exceed `floor(groups / 2) + 7`; and per-finding/cumulative affected evidence is bounded by groups and
 the eight finding types. This admits the documented 10,000-symbol SELL-to-BUY boundary without
 permitting Cartesian findings-by-evidence expansion.
+Externally supplied source notes are preserved in bounded `external_source_evidence` entries with
+`EXTERNAL_SOURCE_NOTE` and `UNVERIFIED_EXTERNAL`; they are escaped in Markdown/terminal output and
+are ambiguity evidence only, not independently verified facts or inferred motives.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
@@ -208,3 +211,6 @@ legs; equal-total leg redistribution plus a new simulation hash remains invalid.
 Rebalance validation invokes the complete Phase 1 snapshot semantics and binds `before` cash/NAV and
 positions to that source. Decimal weight/exposure reconciliation uses the documented `1e-24`
 relative tolerance while cash-plus-positions and NAV remain exact.
+Coverage binds `source_positions` exactly to the embedded snapshot position-row count, including a
+valid explicit zero for an all-cash portfolio. Source quality status and canonical prefixed notes are
+rebuilt exactly from embedded warnings, missing fields, errors, and simulation warnings.

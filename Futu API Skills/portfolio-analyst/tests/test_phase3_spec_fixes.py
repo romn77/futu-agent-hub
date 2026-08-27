@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst.rebalance import RebalanceChange, RebalanceRequest, simulate_rebalance
+from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.models import DataQuality
 from portfolio_analyst.schema import (
     validate_rebalance_result_document,
     validate_trade_review_document,
@@ -413,6 +415,11 @@ def test_global_trade_and_rebalance_contracts_are_self_contained_and_reject_old_
     version_1_trade["schema_version"] = "1.0"
     with pytest.raises(Exception):
         validate_trade_review_document(version_1_trade)
+    version_1_5_trade = deepcopy(trade)
+    version_1_5_trade["schema_version"] = "1.5"
+    version_1_5_trade.pop("external_source_evidence")
+    with pytest.raises(Exception):
+        validate_trade_review_document(version_1_5_trade)
 
     result = simulate_rebalance(
         snapshot(),
@@ -821,8 +828,9 @@ def test_trade_review_schema_publishes_business_collection_limits():
     assert properties["policy_checks"]["maxItems"] == 6
     assert properties["behavior_findings"]["maxItems"] == 10_007
     assert properties["unverified_interpretations"]["maxItems"] == 16
-    assert properties["quality_issues"]["maxItems"] == 19
-    assert properties["data_quality_notes"]["maxItems"] == 19
+    assert properties["external_source_evidence"]["maxItems"] == 20
+    assert properties["quality_issues"]["maxItems"] == 20
+    assert properties["data_quality_notes"]["maxItems"] == 20
     for name in (
         "requested_contexts",
         "successful_contexts",
@@ -967,12 +975,12 @@ def test_trade_semantic_preflight_rejects_cartesian_behavior_evidence_explosion(
             "VALIDATION_SHAPE_LIMIT_EXCEEDED",
         ),
         (
-            lambda report: report.__setitem__("quality_issues", [report["quality_issues"][0]] * 20),
+            lambda report: report.__setitem__("quality_issues", [report["quality_issues"][0]] * 21),
             "VALIDATION_SHAPE_LIMIT_EXCEEDED",
         ),
         (
             lambda report: report.__setitem__(
-                "data_quality_notes", [report["data_quality_notes"][0]] * 20
+                "data_quality_notes", [report["data_quality_notes"][0]] * 21
             ),
             "VALIDATION_SHAPE_LIMIT_EXCEEDED",
         ),
@@ -1193,3 +1201,100 @@ def test_order_status_reconciliation_uses_a_strict_quantity_matrix(
     )
     assert report.coverage["order_status_conflicts"] == expected_conflict
     validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize("new_cash", [Decimal("0"), Decimal("100")])
+def test_all_cash_snapshot_is_complete_zero_position_coverage(new_cash: Decimal):
+    source = reconciled_snapshot(snapshot(), ())
+    result = simulate_rebalance(
+        source,
+        RebalanceRequest(source.snapshot_id, source.base_currency, new_cash=new_cash),
+    ).to_dict()
+
+    assert result["coverage"]["source_positions"] == 0
+    assert result["coverage"]["hypothetical_positions"] == 0
+    assert result["after"]["cash_base"] == str(source.cash_base + new_cash)
+    validate_rebalance_result_document(result)
+
+
+def test_rebalance_quality_and_coverage_are_exactly_bound_to_embedded_snapshot():
+    source = snapshot()
+    source = replace(
+        source,
+        snapshot_id="",
+        data_quality=DataQuality(
+            "PARTIAL",
+            warnings=("fixture warning",),
+            missing_fields=("classification",),
+            source_errors=("upstream timeout",),
+        ),
+    )
+    source = replace(source, snapshot_id=snapshot_identity(source))
+    result = simulate_rebalance(
+        source, RebalanceRequest(source.snapshot_id, source.base_currency)
+    ).to_dict()
+
+    assert result["coverage"]["source_positions"] == len(result["source_snapshot"]["positions"])
+    assert result["coverage"]["source_data_quality_status"] == "PARTIAL"
+    assert any("fixture warning" in note for note in result["data_quality_notes"])
+    assert any("classification" in note for note in result["data_quality_notes"])
+    assert any("upstream timeout" in note for note in result["data_quality_notes"])
+
+    forged = deepcopy(result)
+    forged["coverage"]["source_positions"] = 999
+    forged["coverage"]["source_data_quality_status"] = "COMPLETE"
+    forged["data_quality_status"] = "COMPLETE"
+    forged["data_quality_notes"] = ["all complete"]
+    _rehash_simulation(forged)
+    with pytest.raises(Exception):
+        validate_rebalance_result_document(forged)
+
+
+def test_trade_external_source_notes_are_preserved_as_unverified_escaped_evidence():
+    report = build_trade_review(
+        orders=[_order("o1", "BUY", "1", "1")],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        acquired_at=datetime(2026, 8, 27, 16, tzinfo=timezone.utc),
+        source_notes=["<script>ambiguous transfer</script>"],
+    )
+    payload = report.to_dict()
+
+    assert payload["external_source_evidence"] == [
+        {
+            "code": "EXTERNAL_SOURCE_NOTE",
+            "detail": "<script>ambiguous transfer</script>",
+            "verification_status": "UNVERIFIED_EXTERNAL",
+        }
+    ]
+    assert "EXTERNAL_SOURCE_NOTE" in {item["code"] for item in payload["quality_issues"]}
+    assert "externally provided" in report.to_markdown().lower()
+    assert "&lt;script&gt;" in report.to_markdown()
+    assert "externally provided" in report.to_human().lower()
+    validate_trade_review_document(payload)
+
+    forged = deepcopy(payload)
+    forged["external_source_evidence"] = []
+    _rehash_trade(forged)
+    with pytest.raises(Exception):
+        validate_trade_review_document(forged)
+
+
+def test_trade_external_source_notes_are_bounded_and_sanitized():
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=["ambiguous\ntransfer\x1b[2J"],
+    )
+    assert report.external_source_evidence[0]["detail"] == "ambiguous transfer [2J"
+    with pytest.raises(Exception, match="source note"):
+        build_trade_review(
+            orders=[],
+            deals=[],
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+            source_notes=["x" * 513],
+        )

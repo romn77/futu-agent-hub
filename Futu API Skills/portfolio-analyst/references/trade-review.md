@@ -1,6 +1,6 @@
 # Trade review contract
 
-The authoritative report contract is version `1.5`; earlier reports without total-source
+The authoritative report contract is version `1.6`; earlier reports without total-source
 unavailability semantics or canonical context markets are rejected.
 
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
@@ -35,7 +35,10 @@ and quality evidence. Stock fills are grouped by masked account and masked order
 and canonical `MARKET.SYMBOL`. Open lots do not enter closed-trip win rate. A sell without evidenced
 opening inventory is omitted from FIFO metrics and marks the review partial. Corporate actions,
 transfers, cost adjustments, incomplete history, or externally supplied ambiguity notes remain
-quality evidence rather than inferred trades. The audited upstream history fields do not identify
+quality evidence rather than inferred trades. External notes are sanitized and bounded to 20 entries
+of at most 512 characters, stored as `external_source_evidence` with `EXTERNAL_SOURCE_NOTE` and
+`UNVERIFIED_EXTERNAL`, and rendered as externally provided, independently unverified ambiguity
+evidence. They are never converted into factual or psychological assertions. The audited upstream history fields do not identify
 corporate actions, transfers, or cost adjustments, so reports say `UNSUPPORTED_EVIDENCE`; they never
 claim those events are absent. Explicitly identified non-trade events remain normalized evidence but
 are excluded from FIFO and trade metrics.

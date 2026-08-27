@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import re
+
+
+MAX_EXTERNAL_SOURCE_NOTES = 20
+MAX_EXTERNAL_SOURCE_NOTE_CHARS = 512
 
 
 QUALITY_DETAILS = {
@@ -25,6 +30,7 @@ QUALITY_DETAILS = {
     "REENTRY_POLICY_UNCONFIGURED": "reentry metric is unavailable because no cooldown policy is configured",
     "OPEN_WINDOW_POLICY_UNCONFIGURED": "market-open metric is unavailable because no open-window policy is configured",
     "TURNOVER_SNAPSHOT_NAV": "turnover uses one immutable snapshot NAV rather than average period NAV",
+    "EXTERNAL_SOURCE_NOTE": "externally provided ambiguity evidence is preserved but not independently verified",
 }
 
 
@@ -33,3 +39,27 @@ def canonical_quality_issues(codes: Iterable[str]) -> list[dict[str, str]]:
     if any(code not in QUALITY_DETAILS for code in unique):
         raise ValueError("unknown structured trade-quality code")
     return [{"code": code, "detail": QUALITY_DETAILS[code]} for code in unique]
+
+
+def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, str]]:
+    evidence = []
+    seen: set[str] = set()
+    for index, raw in enumerate(notes):
+        if index >= MAX_EXTERNAL_SOURCE_NOTES:
+            raise ValueError("too many external source notes")
+        if not isinstance(raw, str):
+            raise ValueError("source note must be a string")
+        detail = re.sub(r"[\x00-\x1f\x7f]", " ", raw).strip()
+        if not detail or len(detail) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
+            raise ValueError("source note must contain 1 to 512 safe characters")
+        if detail in seen:
+            continue
+        seen.add(detail)
+        evidence.append(
+            {
+                "code": "EXTERNAL_SOURCE_NOTE",
+                "detail": detail,
+                "verification_status": "UNVERIFIED_EXTERNAL",
+            }
+        )
+    return evidence

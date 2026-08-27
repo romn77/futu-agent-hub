@@ -27,6 +27,11 @@ quantities, and market values to match it. Decimal ratios, weights, and signed e
 documented relative reconciliation tolerance of `1e-24`; monetary NAV identities remain exact.
 Every result is self-contained: `as_of`, `base_currency`, currency-qualified monetary fields,
 source/change/price/FX coverage, warnings, and data-quality notes travel with the hypothetical state.
+`coverage.source_positions` is exactly the number of embedded source position rows; zero is valid and
+complete for an all-cash snapshot, so no-op and new-cash-only results remain self-verifying. The
+source quality status must exactly match the embedded snapshot. Canonical notes use fixed source
+warning, missing-field, source-error, and simulation-warning prefixes and are rebuilt exactly during
+validation; synchronized free-text rewrites plus a new simulation hash are rejected.
 Risk-change status is `STRUCTURAL_ONLY` because no historical price request occurs. With explicit
 `allow_short=true`, signed source or hypothetical states use `STRUCTURAL_ONLY_SIGNED` authority and
 report absolute short, long, gross, and net market values/weights plus long/short/gross/net exposure

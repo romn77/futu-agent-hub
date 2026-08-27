@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from .models import NormalizedPosition, PortfolioSnapshot, _deep_freeze, _json_value
 from .rendering import markdown_text, terminal_text
+from .rebalance_quality import canonical_rebalance_quality_notes
 from .schema import validate_rebalance_request_document
 from .snapshot_io import InvalidSnapshot, _read_confined_bytes, _unique_object
 
@@ -605,18 +606,7 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         "new_cash_only": request.new_cash_only,
         "new_cash_base": request.new_cash,
     }
-    source_quality_notes = tuple(
-        dict.fromkeys(
-            (
-                *snapshot.data_quality.warnings,
-                *(f"missing source field: {item}" for item in snapshot.data_quality.missing_fields),
-                *snapshot.data_quality.source_errors,
-            )
-        )
-    )
-    if snapshot.data_quality.status != "COMPLETE" and not source_quality_notes:
-        source_quality_notes = (f"source snapshot data quality is {snapshot.data_quality.status}",)
-    quality_notes = tuple(dict.fromkeys((*source_quality_notes, *warnings)))
+    quality_notes = canonical_rebalance_quality_notes(snapshot.data_quality, warnings)
     coverage = {
         "source_positions": len(snapshot.positions),
         "hypothetical_positions": len(after.positions),
@@ -626,7 +616,9 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         "fx_evidence": len(metadata),
         "source_data_quality_status": snapshot.data_quality.status,
     }
-    quality_status = "PARTIAL" if quality_notes else "COMPLETE"
+    quality_status = (
+        "PARTIAL" if snapshot.data_quality.status != "COMPLETE" or quality_notes else "COMPLETE"
+    )
     identity_body = _json_value(
         {
             "schema_version": "1.3",

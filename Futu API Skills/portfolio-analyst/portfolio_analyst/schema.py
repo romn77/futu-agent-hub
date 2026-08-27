@@ -20,7 +20,7 @@ from referencing import Registry, Resource
 from .models import _json_value
 from .normalization import canonical_unknown
 from .risk import _latest_complete_market_close_date
-from .trade_quality import canonical_quality_issues
+from .trade_quality import canonical_external_source_evidence, canonical_quality_issues
 
 
 class ReportSemanticError(ValueError):
@@ -36,8 +36,9 @@ _TRADE_ARRAY_LIMITS = {
     "policy_checks": 6,
     "behavior_findings": 10_007,
     "unverified_interpretations": 16,
-    "quality_issues": 19,
-    "data_quality_notes": 19,
+    "external_source_evidence": 20,
+    "quality_issues": 20,
+    "data_quality_notes": 20,
     "coverage.requested_contexts": 20,
     "coverage.successful_contexts": 20,
     "coverage.failed_contexts": 20,
@@ -51,7 +52,7 @@ _TRADE_PRIMARY_ROW_ARRAYS = {
     "open_lots",
 }
 _TRADE_MAP_LIMITS = {
-    "": 26,
+    "": 27,
     "coverage": 22,
     "metrics": 30,
     "metrics.notional_by_currency": 64,
@@ -76,6 +77,7 @@ _TRADE_ITEM_MAP_LIMITS = {
     "policy_checks[]": 4,
     "behavior_findings[]": 8,
     "quality_issues[]": 2,
+    "external_source_evidence[]": 3,
 }
 _TRADE_MAX_TOTAL_NODES = 1_500_000
 _TRADE_MAX_TOTAL_ARRAY_ITEMS = 450_000
@@ -815,6 +817,11 @@ def validate_trade_review_document(
         observed_quality_codes = [item["code"] for item in payload["quality_issues"]]
         if len(observed_quality_codes) != len(set(observed_quality_codes)):
             raise ValueError("quality issue codes must be unique")
+        external_source_evidence = payload["external_source_evidence"]
+        if external_source_evidence != canonical_external_source_evidence(
+            item["detail"] for item in external_source_evidence
+        ):
+            raise ValueError("external source evidence is not canonical")
         if source_unavailable:
             required_codes = {"SOURCE_UNAVAILABLE", "SOURCE_HISTORY_ROW_CAP"}
             policy = payload["policy"]
@@ -833,6 +840,8 @@ def validate_trade_review_document(
                 required_codes.add("CONTEXT_OMITTED_BUDGET")
             if current_session:
                 required_codes.add("CURRENT_SESSION_INCOMPLETE")
+            if external_source_evidence:
+                required_codes.add("EXTERNAL_SOURCE_NOTE")
             if coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE":
                 required_codes.add("CORPORATE_ACTION_EVIDENCE_UNSUPPORTED")
             if coverage["excluded_nontrade_events"]:
@@ -1621,6 +1630,8 @@ def validate_trade_review_document(
             required_codes.add("BASE_REALIZED_PNL_FX_INCOMPLETE")
         if trips:
             required_codes.add("FEES_UNAVAILABLE")
+        if external_source_evidence:
+            required_codes.add("EXTERNAL_SOURCE_NOTE")
         if set(observed_quality_codes) != required_codes:
             raise ValueError("structured quality issue codes do not match evidenced limitations")
         if payload["quality_issues"] != canonical_quality_issues(required_codes):
@@ -1648,6 +1659,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
         # Local import avoids the snapshot_io -> schema module cycle while still
         # applying the complete Phase 1 schema, identity, and financial semantics.
         from .snapshot_io import snapshot_from_document
+        from .rebalance_quality import canonical_rebalance_quality_notes
 
         embedded_snapshot = snapshot_from_document(payload["source_snapshot"])
         snapshot_identity_body = dict(payload["source_snapshot"])
@@ -2171,11 +2183,23 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
         )
         if payload["feasible"] == violations:
             raise ValueError("feasibility does not match declared constraints")
-        expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
+        expected_notes = list(
+            canonical_rebalance_quality_notes(embedded_snapshot.data_quality, payload["warnings"])
+        )
+        if payload["data_quality_notes"] != expected_notes:
+            raise ValueError("quality notes do not canonically map embedded source evidence")
+        if (
+            payload["coverage"]["source_data_quality_status"]
+            != embedded_snapshot.data_quality.status
+        ):
+            raise ValueError("source quality coverage does not match embedded snapshot")
+        expected_quality = (
+            "PARTIAL"
+            if embedded_snapshot.data_quality.status != "COMPLETE" or expected_notes
+            else "COMPLETE"
+        )
         if payload["data_quality_status"] != expected_quality:
             raise ValueError("quality status does not match warnings")
-        if not set(payload["warnings"]) <= set(payload["data_quality_notes"]):
-            raise ValueError("quality notes must preserve all simulation limitations")
         if (
             payload["coverage"]["source_data_quality_status"] != "COMPLETE"
             and not payload["data_quality_notes"]
@@ -2185,11 +2209,9 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             raise ValueError("change coverage does not reconcile")
         if payload["coverage"]["changes_requested"] != len(payload["changes"]):
             raise ValueError("all requested changes must be represented")
-        if payload["coverage"]["source_positions"] <= 0:
-            raise ValueError("source position coverage must be explicit")
-        if payload["coverage"]["source_positions"] < len(before_values) or payload["coverage"][
-            "hypothetical_positions"
-        ] != len(after_values):
+        if payload["coverage"]["source_positions"] != len(embedded_snapshot.positions) or payload[
+            "coverage"
+        ]["hypothetical_positions"] != len(after_values):
             raise ValueError("position population coverage does not reconcile")
         if payload["coverage"]["price_evidence"] != len(payload["evidence"]) or payload["coverage"][
             "fx_evidence"

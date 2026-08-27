@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from .models import _json_value
 from .rendering import markdown_text, terminal_text
-from .trade_quality import canonical_quality_issues
+from .trade_quality import canonical_external_source_evidence, canonical_quality_issues
 
 
 class TradeReviewInputError(ValueError):
@@ -284,6 +284,7 @@ class TradeReview:
     unverified_interpretations: tuple[str, ...]
     motive_status: str
     data_quality_status: str
+    external_source_evidence: tuple[Mapping[str, str], ...]
     quality_issues: tuple[Mapping[str, str], ...]
     data_quality_notes: tuple[str, ...]
     provenance: Mapping[str, Any]
@@ -307,6 +308,11 @@ class TradeReview:
         object.__setattr__(self, "behavior_findings", tuple(self.behavior_findings))
         object.__setattr__(
             self, "unverified_interpretations", tuple(self.unverified_interpretations)
+        )
+        object.__setattr__(
+            self,
+            "external_source_evidence",
+            tuple(MappingProxyType(dict(x)) for x in self.external_source_evidence),
         )
         object.__setattr__(
             self, "quality_issues", tuple(MappingProxyType(dict(x)) for x in self.quality_issues)
@@ -376,6 +382,11 @@ class TradeReview:
             ),
             "\n## Unverified interpretations\n",
             *([f"- {safe(item)}" for item in self.unverified_interpretations] or ["- None"]),
+            "\n## External source evidence (externally provided; not independently verified)\n",
+            *(
+                [f"- {safe(item['detail'])}" for item in self.external_source_evidence]
+                or ["- None"]
+            ),
             "\n## Data quality notes\n",
             *([f"- {safe(item)}" for item in self.data_quality_notes] or ["- None"]),
             "\n## Provenance\n",
@@ -412,6 +423,14 @@ class TradeReview:
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
                 f"Structured quality issues: {safe(json.dumps(_json_value(self.quality_issues), sort_keys=True))}",
+                "External source evidence (externally provided; not independently verified):",
+                *(
+                    [
+                        f"External source note: {safe(item['detail'])}"
+                        for item in self.external_source_evidence
+                    ]
+                    or ["External source note: None"]
+                ),
                 f"Policy: {self.policy_status}",
                 f"Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
                 "Motive: UNVERIFIED; findings describe observed behavior only.",
@@ -1326,7 +1345,11 @@ def build_trade_review(
                         "status": "BREACH" if observed > limit else "PASS",
                     }
                 )
-    notes = tuple(str(note) for note in source_notes)
+    try:
+        external_source_evidence = tuple(canonical_external_source_evidence(source_notes))
+    except ValueError as exc:
+        raise TradeReviewInputError(str(exc)) from exc
+    notes: tuple[str, ...] = ()
     if in_progress_markets:
         notes = (
             *notes,
@@ -1570,12 +1593,14 @@ def build_trade_review(
         quality_issue_details["OPEN_WINDOW_POLICY_UNCONFIGURED"] = ""
     if source_snapshot_id is not None:
         quality_issue_details["TURNOVER_SNAPSHOT_NAV"] = ""
+    if external_source_evidence:
+        quality_issue_details["EXTERNAL_SOURCE_NOTE"] = ""
     quality_issues = tuple(canonical_quality_issues(quality_issue_details))
     notes = tuple(item["detail"] for item in quality_issues)
     identity_body = json.dumps(
         _json_value(
             {
-                "schema_version": "1.5",
+                "schema_version": "1.6",
                 "as_of": acquisition,
                 "source": "futuapi",
                 "base_currency": base_currency,
@@ -1601,6 +1626,7 @@ def build_trade_review(
                 "data_quality_status": (
                     "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE"
                 ),
+                "external_source_evidence": external_source_evidence,
                 "quality_issues": quality_issues,
                 "data_quality_notes": notes,
                 "provenance": provenance,
@@ -1611,7 +1637,7 @@ def build_trade_review(
     )
     review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
     return TradeReview(
-        "1.5",
+        "1.6",
         review_id,
         acquisition,
         "futuapi",
@@ -1634,6 +1660,7 @@ def build_trade_review(
         ("Psychological motive cannot be verified from orders and fills alone.",),
         "UNVERIFIED",
         "UNAVAILABLE" if source_unavailable else "PARTIAL" if notes else "COMPLETE",
+        external_source_evidence,
         quality_issues,
         notes,
         provenance,
