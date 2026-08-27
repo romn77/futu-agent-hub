@@ -11,7 +11,7 @@ metadata:
 This Skill is strictly read-only. It never unlocks trading, accepts a trading password, or exposes an
 order-entry command.
 
-## Phase 0 command
+## Commands
 
 Run diagnostics from this directory:
 
@@ -26,3 +26,27 @@ global skill directories.
 The Futu SDK must be installed in the selected Python interpreter or its active virtual environment.
 Adapter and diagnostic child processes disable Python user-site packages and ignore inherited Python
 import-path hooks so portfolio reads cannot execute untrusted per-user modules.
+
+Build a Phase 1 snapshot without saving it:
+
+```bash
+python scripts/portfolio.py snapshot --trd-env REAL --base-currency USD --json --no-save
+```
+
+`snapshot` is read-only and defaults to no persistence. `--save` writes once to
+`snapshots/<snapshot_id>.json`; `--output` implies saving to that relative path; and `--no-save`
+always wins over `--output`. Every path remains below `PORTFOLIO_AGENT_HOME`, and an existing file is
+never replaced.
+
+Currency rates are manual facts loaded from `config/fx_rates.json` under the data home:
+
+```json
+{"rates": {"HKD/USD": "0.125"}}
+```
+
+Missing cross-currency rates stop the snapshot. Optional exact-code classifications are loaded from
+`config/classifications.json`; absent facts remain the literal `UNKNOWN` and are reported as partial
+data quality. The snapshot uses signed position market values: long exposure is positive, short
+exposure is the absolute value of negative positions, NAV is `cash + long - short`, gross exposure
+is `long + short`, and net exposure is `long - short`. In ordinary long-only portfolios, position
+weights plus cash weight must reconcile to 1 within `0.00000001`.

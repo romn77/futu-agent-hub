@@ -1,0 +1,44 @@
+{
+  "accounts": [
+    {
+      "acc_id": 90000001,
+      "acc_type": "MARGIN",
+      "acc_role": "NORMAL",
+      "trd_env": "REAL",
+      "security_firm": "FUTUINC",
+      "trdmarket_auth": ["US", "HK"],
+      "acc_status": "ACTIVE",
+      "ctx_type": "SEC"
+    },
+    {
+      "acc_id": 90000002,
+      "acc_type": "CASH",
+      "acc_role": "NORMAL",
+      "trd_env": "REAL",
+      "security_firm": "FUTUINC",
+      "trdmarket_auth": ["US"],
+      "acc_status": "ACTIVE",
+      "ctx_type": "SEC"
+    },
+    {
+      "acc_id": 90000003,
+      "acc_type": "FUTURES",
+      "acc_role": "NORMAL",
+      "trd_env": "REAL",
+      "security_firm": "FUTUINC",
+      "trdmarket_auth": ["FUTURES"],
+      "acc_status": "ACTIVE",
+      "ctx_type": "FUTURE"
+    },
+    {
+      "acc_id": 90000004,
+      "acc_type": "MARGIN",
+      "acc_role": "NORMAL",
+      "trd_env": "SIMULATE",
+      "security_firm": "FUTUINC",
+      "trdmarket_auth": ["US"],
+      "acc_status": "ACTIVE",
+      "ctx_type": "SEC"
+    }
+  ]
+}

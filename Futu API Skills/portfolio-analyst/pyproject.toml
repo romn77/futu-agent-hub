@@ -7,6 +7,7 @@ name = "moomoo-portfolio-analyst"
 version = "0.1.0"
 description = "Read-only portfolio analysis commands backed by the official Futu API Skill"
 requires-python = ">=3.10"
+dependencies = ["jsonschema>=4.20"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -18,3 +19,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.setuptools.data-files]
+schemas = ["schemas/portfolio_snapshot.schema.json"]

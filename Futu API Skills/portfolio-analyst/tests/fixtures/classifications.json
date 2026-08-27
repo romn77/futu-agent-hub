@@ -1,0 +1,5 @@
+{
+  "US.AAPL": {"sector": "TECHNOLOGY", "industry": "HARDWARE", "region": "US", "themes": ["LARGE_CAP"], "asset_class": "EQUITY"},
+  "HK.00700": {"sector": "TECHNOLOGY", "industry": "INTERNET", "region": "CN", "themes": ["LARGE_CAP"], "asset_class": "EQUITY"},
+  "US.MSFT": {"sector": "TECHNOLOGY", "industry": "SOFTWARE", "region": "US", "themes": ["LARGE_CAP"], "asset_class": "EQUITY"}
+}

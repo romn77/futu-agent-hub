@@ -1,0 +1,30 @@
+{
+  "accounts": [
+    {
+      "acc_id": 90000001,
+      "trd_env": "REAL",
+      "ctx_type": "SEC",
+      "funds": {"cash": 900, "us_cash": 100, "hk_cash": 800, "cn_cash": 0},
+      "positions": [
+        {"code": "US.AAPL", "name": "Example US Equity", "security_type": "STOCK", "qty": 10, "can_sell_qty": 10, "average_cost": 40, "nominal_price": 50, "market_val": 500, "unrealized_pl": 100, "position_type": "LONG"},
+        {"code": "HK.00700", "name": "Example HK Equity", "security_type": "STOCK", "qty": 8, "can_sell_qty": 8, "average_cost": 300, "nominal_price": 400, "market_val": 3200, "unrealized_pl": 800, "position_type": "LONG"}
+      ]
+    },
+    {
+      "acc_id": 90000002,
+      "trd_env": "REAL",
+      "ctx_type": "SEC",
+      "funds": {"cash": 50, "us_cash": 50, "hk_cash": 0, "cn_cash": 0},
+      "positions": [
+        {"code": "US.MSFT", "name": "Example Second Equity", "security_type": "STOCK", "qty": 2, "can_sell_qty": 2, "average_cost": 90, "nominal_price": 100, "market_val": 200, "unrealized_pl": 20, "position_type": "LONG"}
+      ]
+    },
+    {
+      "acc_id": 90000003,
+      "trd_env": "REAL",
+      "ctx_type": "FUTURE",
+      "funds": {"cash": 999},
+      "positions": []
+    }
+  ]
+}

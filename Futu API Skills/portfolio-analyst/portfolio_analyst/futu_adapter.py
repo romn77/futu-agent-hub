@@ -20,6 +20,10 @@ class UnsafeFutuCommand(ValueError):
     """Raised when a command falls outside the fixed read-only boundary."""
 
 
+class FutuReadError(RuntimeError):
+    """Sanitized failure from an audited read-only command."""
+
+
 @dataclass(frozen=True)
 class FutuRequest:
     command: str
@@ -206,7 +210,56 @@ class FutuAdapter:
 
         request = self.validate_request(name, arguments)
         child_environment = controlled_child_environment(purpose="adapter")
-        sensitive_values = tuple(
+        sensitive_values = self._sensitive_values(request, child_environment)
+        completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        return subprocess.CompletedProcess(
+            args=self._sanitize_args(completed.args, sensitive_values=sensitive_values),
+            returncode=completed.returncode,
+            stdout=self.sanitize_output(completed.stdout, sensitive_values=sensitive_values),
+            stderr=self.sanitize_output(completed.stderr, sensitive_values=sensitive_values),
+        )
+
+    def read_private_json(
+        self, name: str, arguments: Sequence[str], *, timeout: float = 30
+    ) -> dict[str, object]:
+        """Parse structured facts internally while keeping public command output redacted.
+
+        Callers must not log or serialize the returned source object directly. Account IDs are
+        required only to join audited account and portfolio reads and must be masked in models.
+        """
+
+        request = self.validate_request(name, arguments)
+        child_environment = controlled_child_environment(purpose="adapter")
+        sensitive_values = self._sensitive_values(request, child_environment)
+        completed = self._run_unsanitized(name, arguments, timeout=timeout)
+        if completed.returncode != 0:
+            details = tuple(
+                detail
+                for detail in (
+                    self.sanitize_output(completed.stdout, sensitive_values=sensitive_values),
+                    self.sanitize_output(completed.stderr, sensitive_values=sensitive_values),
+                )
+                if detail
+            )
+            raise FutuReadError(
+                f"audited Futu read failed with exit code {completed.returncode}: "
+                f"{' | '.join(details) if details else 'no detail'}"
+            )
+        candidates = [completed.stdout, *reversed(completed.stdout.splitlines())]
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                return payload
+        raise FutuReadError("audited Futu read returned no valid JSON object")
+
+    @staticmethod
+    def _sensitive_values(
+        request: FutuRequest, child_environment: dict[str, str]
+    ) -> tuple[str, ...]:
+        return tuple(
             dict.fromkeys(
                 (
                     *request.sensitive_values,
@@ -214,6 +267,15 @@ class FutuAdapter:
                 )
             )
         )
+
+    def _run_unsanitized(
+        self, name: str, arguments: Sequence[str], *, timeout: float = 30
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute inside the pinned snapshot; raw output never crosses a public API."""
+
+        request = self.validate_request(name, arguments)
+        child_environment = controlled_child_environment(purpose="adapter")
+        sensitive_values = self._sensitive_values(request, child_environment)
         audited, detail = load_audited_skill(self.skill_dir)
         if audited is None:
             raise ValueError(f"audited futuapi Skill required: {detail}")
@@ -248,12 +310,7 @@ class FutuAdapter:
                     output=self.sanitize_output(exc.output, sensitive_values=sensitive_values),
                     stderr=self.sanitize_output(exc.stderr, sensitive_values=sensitive_values),
                 ) from None
-        return subprocess.CompletedProcess(
-            args=self._sanitize_args(completed.args, sensitive_values=sensitive_values),
-            returncode=completed.returncode,
-            stdout=self.sanitize_output(completed.stdout, sensitive_values=sensitive_values),
-            stderr=self.sanitize_output(completed.stderr, sensitive_values=sensitive_values),
-        )
+        return completed
 
     @classmethod
     def sanitize_output(

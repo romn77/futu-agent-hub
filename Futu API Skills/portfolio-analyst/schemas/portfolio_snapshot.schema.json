@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portfolio_snapshot.schema.json",
+  "title": "Portfolio Snapshot 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "snapshot_id", "as_of", "source", "source_version", "trd_env",
+    "base_currency", "accounts", "cash_balances", "positions", "nav_base", "cash_base",
+    "cash_weight", "long_exposure_base", "short_exposure_base", "gross_exposure_base",
+    "net_exposure_base", "exposures", "data_quality"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "snapshot_id": {"type": "string", "pattern": "^ps-"},
+    "as_of": {"type": "string", "format": "date-time"},
+    "source": {"const": "futuapi"},
+    "source_version": {"type": "string", "minLength": 1},
+    "trd_env": {"enum": ["REAL", "SIMULATE"]},
+    "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "accounts": {"type": "array", "items": {"$ref": "#/$defs/account"}},
+    "cash_balances": {"type": "array", "items": {"$ref": "#/$defs/cash"}},
+    "positions": {"type": "array", "items": {"$ref": "#/$defs/position"}},
+    "nav_base": {"$ref": "#/$defs/decimal"},
+    "cash_base": {"$ref": "#/$defs/decimal"},
+    "cash_weight": {"$ref": "#/$defs/decimal"},
+    "long_exposure_base": {"$ref": "#/$defs/decimal"},
+    "short_exposure_base": {"$ref": "#/$defs/decimal"},
+    "gross_exposure_base": {"$ref": "#/$defs/decimal"},
+    "net_exposure_base": {"$ref": "#/$defs/decimal"},
+    "exposures": {
+      "type": "object",
+      "required": ["sector", "region", "theme", "asset_class"],
+      "additionalProperties": false,
+      "properties": {
+        "sector": {"$ref": "#/$defs/exposureMap"},
+        "region": {"$ref": "#/$defs/exposureMap"},
+        "theme": {"$ref": "#/$defs/exposureMap"},
+        "asset_class": {"$ref": "#/$defs/exposureMap"}
+      }
+    },
+    "data_quality": {"$ref": "#/$defs/dataQuality"}
+  },
+  "$defs": {
+    "decimal": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+    "account": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_ref", "trd_env", "account_type", "account_role", "markets", "status", "context_type", "security_firm"],
+      "properties": {
+        "account_ref": {"type": "string", "not": {"pattern": "^[0-9]+$"}},
+        "trd_env": {"type": "string"}, "account_type": {"type": "string"},
+        "account_role": {"type": "string"}, "markets": {"type": "array", "items": {"type": "string"}},
+        "status": {"type": "string"}, "context_type": {"type": "string"}, "security_firm": {"type": "string"}
+      }
+    },
+    "cash": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_ref", "currency", "amount_local", "fx_to_base", "amount_base", "weight", "data_quality_notes"],
+      "properties": {
+        "account_ref": {"type": "string"}, "currency": {"type": "string"},
+        "amount_local": {"$ref": "#/$defs/decimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
+        "amount_base": {"$ref": "#/$defs/decimal"}, "weight": {"$ref": "#/$defs/decimal"},
+        "data_quality_notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "position": {
+      "type": "object", "additionalProperties": false,
+      "required": ["account_ref", "symbol", "name", "market", "security_type", "currency", "quantity", "can_sell_quantity", "average_cost_local", "last_price_local", "market_value_local", "unrealized_pl_local", "realized_pl_local", "fx_to_base", "market_value_base", "unrealized_pl_base", "weight", "sector", "industry", "region", "themes", "asset_class", "position_role", "data_quality_notes"],
+      "properties": {
+        "account_ref": {"type": "string"}, "symbol": {"type": "string"}, "name": {"type": "string"},
+        "market": {"type": "string"}, "security_type": {"type": "string"}, "currency": {"type": "string"},
+        "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/decimal"},
+        "average_cost_local": {"$ref": "#/$defs/decimal"}, "last_price_local": {"$ref": "#/$defs/decimal"},
+        "market_value_local": {"$ref": "#/$defs/decimal"}, "unrealized_pl_local": {"$ref": "#/$defs/nullableDecimal"},
+        "realized_pl_local": {"$ref": "#/$defs/nullableDecimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
+        "market_value_base": {"$ref": "#/$defs/decimal"}, "unrealized_pl_base": {"$ref": "#/$defs/nullableDecimal"},
+        "weight": {"$ref": "#/$defs/decimal"}, "sector": {"type": "string"}, "industry": {"type": "string"},
+        "region": {"type": "string"}, "themes": {"type": "array", "items": {"type": "string"}},
+        "asset_class": {"type": "string"}, "position_role": {"type": ["string", "null"]},
+        "data_quality_notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "exposureMap": {"type": "object", "additionalProperties": {"$ref": "#/$defs/decimal"}},
+    "dataQuality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "warnings", "missing_fields", "source_errors", "coverage"],
+      "properties": {
+        "status": {"enum": ["COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"]},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "missing_fields": {"type": "array", "items": {"type": "string"}},
+        "source_errors": {"type": "array", "items": {"type": "string"}},
+        "coverage": {"type": "object", "additionalProperties": {"type": ["integer", "string"]}}
+      }
+    }
+  }
+}
