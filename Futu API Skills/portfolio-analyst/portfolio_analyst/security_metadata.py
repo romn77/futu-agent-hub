@@ -6,12 +6,19 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from .normalization import canonical_unknown
+
 
 @dataclass(frozen=True)
 class SecurityMetadata:
     currency: str | None = None
     security_type: str | None = None
     provenance: str = "USER_CONFIG"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "security_type", canonical_unknown(self.security_type, uppercase=True)
+        )
 
 
 class SecurityMetadataMapper:

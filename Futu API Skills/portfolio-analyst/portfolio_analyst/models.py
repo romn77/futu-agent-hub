@@ -8,6 +8,8 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
 
+from .normalization import canonical_unknown
+
 
 QUALITY_STATES = frozenset(
     {"COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"}
@@ -15,6 +17,8 @@ QUALITY_STATES = frozenset(
 
 
 def _decimal_text(value: Decimal) -> str:
+    if value.is_zero():
+        return "0"
     text = format(value, "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
@@ -95,6 +99,9 @@ class Position:
     data_quality_notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "security_type", canonical_unknown(self.security_type, uppercase=True)
+        )
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
 
@@ -128,6 +135,9 @@ class NormalizedPosition:
     data_quality_notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "security_type", canonical_unknown(self.security_type, uppercase=True)
+        )
         object.__setattr__(self, "themes", tuple(self.themes))
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 

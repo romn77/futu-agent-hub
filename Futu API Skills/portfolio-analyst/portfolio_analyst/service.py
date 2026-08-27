@@ -13,6 +13,7 @@ from .classification import Classification, ClassificationMapper
 from .futu_adapter import FutuAdapter
 from .fx import FxEvidenceError, StaticCurrencyConverter
 from .models import PortfolioSnapshot
+from .normalization import canonical_unknown, is_unknown_sentinel
 from .repository import FutuPortfolioRepository, PrivateJsonReader, SourceDataError
 from .schema import validate_snapshot_document
 from .security_metadata import SecurityMetadata, SecurityMetadataMapper
@@ -45,7 +46,7 @@ def load_currency_converter(data_home: Path) -> StaticCurrencyConverter:
     source_label = payload.get("source")
     effective_at_raw = payload.get("effective_at")
     max_age_hours = payload.get("max_age_hours")
-    if not isinstance(source_label, str) or not source_label.strip():
+    if not isinstance(source_label, str) or is_unknown_sentinel(source_label):
         raise ConfigError("fx_rates.json requires explicit source provenance")
     if not isinstance(effective_at_raw, str):
         raise ConfigError("fx_rates.json requires effective_at")
@@ -55,6 +56,8 @@ def load_currency_converter(data_home: Path) -> StaticCurrencyConverter:
         raise ConfigError("fx_rates.json effective_at must be an ISO date-time") from exc
     if not isinstance(max_age_hours, int) or isinstance(max_age_hours, bool):
         raise ConfigError("fx_rates.json max_age_hours must be an integer")
+    if not 1 <= max_age_hours <= 96:
+        raise ConfigError("fx_rates.json max_age_hours must be between 1 and 96")
     rates: dict[tuple[str, str], Decimal] = {}
     for pair, raw_rate in raw_rates.items():
         source_currency, separator, target_currency = str(pair).upper().partition("/")
@@ -117,7 +120,7 @@ def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
         currency = str(raw.get("currency", "")).upper()
         if len(currency) != 3 or not currency.isalpha():
             raise ConfigError(f"security currency must be an ISO-style code: {code}")
-        security_type = str(raw.get("security_type", "UNKNOWN")).upper() or "UNKNOWN"
+        security_type = canonical_unknown(raw.get("security_type"), uppercase=True)
         mappings[str(code).upper()] = SecurityMetadata(
             currency=currency,
             security_type=security_type,

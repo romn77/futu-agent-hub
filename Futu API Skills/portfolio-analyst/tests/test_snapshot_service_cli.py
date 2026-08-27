@@ -128,6 +128,61 @@ def test_fx_config_requires_source_timestamp_and_freshness_policy(tmp_path, payl
         load_currency_converter(tmp_path)
 
 
+@pytest.mark.parametrize("max_age_hours", [True, False, -1, 0, 97, 10**999])
+def test_fx_max_age_range_and_overflow_are_config_errors(tmp_path, max_age_hours):
+    config = tmp_path / "config"
+    config.mkdir()
+    payload = {
+        "source": "TEST",
+        "effective_at": "2026-08-27T00:00:00+00:00",
+        "max_age_hours": max_age_hours,
+        "rates": {"HKD/USD": "0.125"},
+    }
+    (config / "fx_rates.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="max_age_hours"):
+        load_currency_converter(tmp_path)
+
+
+@pytest.mark.parametrize("source", [" ", "unknown", "N/A", "none", "NULL"])
+def test_fx_config_rejects_unknown_source_sentinels(tmp_path, source):
+    config = tmp_path / "config"
+    config.mkdir()
+    payload = {
+        "source": source,
+        "effective_at": "2026-08-27T00:00:00+00:00",
+        "max_age_hours": 96,
+        "rates": {},
+    }
+    (config / "fx_rates.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="source provenance"):
+        load_currency_converter(tmp_path)
+
+
+def test_huge_fx_max_age_is_structured_cli_config_error(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "private"
+    config = home / "config"
+    config.mkdir(parents=True)
+    payload = {
+        "source": "TEST",
+        "effective_at": "2026-08-27T00:00:00+00:00",
+        "max_age_hours": 10**999,
+        "rates": {},
+    }
+    (config / "fx_rates.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        cli,
+        "generate_snapshot",
+        lambda *_args, **_kwargs: load_currency_converter(home),
+    )
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["error"]["code"] == "CONFIG_ERROR"
+
+
 def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
     home = _configured_home(tmp_path)
     monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))

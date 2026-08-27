@@ -120,7 +120,9 @@ def test_explicit_96_hour_policy_intentionally_accepts_weekend_gap():
     assert converter.quote("HKD", "USD", monday).rate == Decimal("0.125")
 
 
-@pytest.mark.parametrize("source", ["", "UNKNOWN", "N/A"])
+@pytest.mark.parametrize(
+    "source", [None, "", "   ", "UNKNOWN", " unknown ", "N/A", " n/a ", "NONE", "null"]
+)
 def test_fx_source_provenance_is_mandatory(source):
     with pytest.raises(FxEvidenceError, match="source provenance"):
         _builder(source=source)
@@ -160,6 +162,19 @@ def test_snapshot_identity_canonicalizes_decimal_time_and_mapping_order():
     )
 
     assert snapshot_identity(equivalent) == snapshot.snapshot_id
+
+
+@pytest.mark.parametrize("negative_zero", ["-0", "-0.0", "-0.00", "-0E+9"])
+def test_decimal_serialization_and_identity_canonicalize_all_signed_zero_variants(
+    negative_zero,
+):
+    snapshot = _snapshot()
+    positive = replace(snapshot, cash_base=Decimal("0.000"))
+    negative = replace(snapshot, cash_base=Decimal(negative_zero))
+
+    assert positive.to_dict()["cash_base"] == "0"
+    assert negative.to_dict()["cash_base"] == "0"
+    assert snapshot_identity(positive) == snapshot_identity(negative)
 
 
 def test_snapshot_nested_mappings_are_deeply_immutable_and_to_dict_is_copy_boundary():

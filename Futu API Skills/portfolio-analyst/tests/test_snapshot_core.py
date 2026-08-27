@@ -423,6 +423,84 @@ def test_unknown_security_type_degrades_quality_explicitly():
     assert "security_type" in snapshot.data_quality.missing_fields
 
 
+@pytest.mark.parametrize(
+    "security_type", ["", " ", "unknown", " UNKNOWN ", "n/a", " N/A ", "none", "NULL"]
+)
+def test_all_security_type_sentinels_canonicalize_and_degrade_quality(security_type):
+    builder = PortfolioBuilder(
+        base_currency="USD",
+        converter=_converter({}),
+        classifications=ClassificationMapper(
+            {
+                "US.AAPL": Classification(
+                    sector="TECHNOLOGY",
+                    industry="HARDWARE",
+                    region="US",
+                    themes=("LARGE_CAP",),
+                    asset_class="EQUITY",
+                )
+            }
+        ),
+        security_metadata=SecurityMetadataMapper(
+            {
+                "US.AAPL": SecurityMetadata(
+                    currency="USD", security_type=security_type, provenance="USER_CONFIG"
+                )
+            }
+        ),
+    )
+    snapshot = builder.build(
+        accounts=(_account(),),
+        cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
+        positions=(
+            Position(
+                account_ref="acct-0001",
+                code="US.AAPL",
+                name="Example",
+                security_type="STOCK",
+                currency="USD",
+                currency_provenance="AUDITED_SOURCE",
+                quantity=Decimal("1"),
+                can_sell_quantity=Decimal("1"),
+                average_cost_local=Decimal("10"),
+                last_price_local=Decimal("10"),
+                market_value_local=Decimal("10"),
+                unrealized_pl_local=None,
+                realized_pl_local=None,
+            ),
+        ),
+        as_of=FX_EFFECTIVE_AT,
+        trd_env="REAL",
+        source_version="fixture-v1",
+        data_quality=_quality(),
+    )
+
+    assert snapshot.positions[0].security_type == "UNKNOWN"
+    assert snapshot.data_quality.status == "PARTIAL"
+    assert "security_type" in snapshot.data_quality.missing_fields
+
+
+@pytest.mark.parametrize("security_type", [" ", "unknown", "n/a", "none", "null"])
+def test_source_position_security_type_sentinels_normalize_at_model_boundary(security_type):
+    position = Position(
+        account_ref="acct-0001",
+        code="US.AAPL",
+        name="Example",
+        security_type=security_type,
+        currency="USD",
+        currency_provenance="AUDITED_SOURCE",
+        quantity=Decimal("1"),
+        can_sell_quantity=Decimal("1"),
+        average_cost_local=Decimal("10"),
+        last_price_local=Decimal("10"),
+        market_value_local=Decimal("10"),
+        unrealized_pl_local=None,
+        realized_pl_local=None,
+    )
+
+    assert position.security_type == "UNKNOWN"
+
+
 def test_snapshot_store_is_atomic_confined_and_never_overwrites(tmp_path):
     store = SnapshotStore(tmp_path)
     content = '{"schema_version":"1.0"}\n'

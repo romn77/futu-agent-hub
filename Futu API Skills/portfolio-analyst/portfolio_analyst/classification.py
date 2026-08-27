@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from .normalization import canonical_unknown
+
 
 @dataclass(frozen=True)
 class Classification:
@@ -17,19 +19,12 @@ class Classification:
 
     def __post_init__(self) -> None:
         for field_name in ("sector", "industry", "region", "asset_class"):
-            object.__setattr__(self, field_name, _canonical_label(getattr(self, field_name)))
+            object.__setattr__(self, field_name, canonical_unknown(getattr(self, field_name)))
         object.__setattr__(
             self,
             "themes",
-            tuple(_canonical_label(theme) for theme in self.themes) or ("UNKNOWN",),
+            tuple(canonical_unknown(theme) for theme in self.themes) or ("UNKNOWN",),
         )
-
-
-def _canonical_label(value: str) -> str:
-    label = " ".join(str(value).split())
-    if not label or label.upper() in {"UNKNOWN", "N/A", "NONE", "NULL"}:
-        return "UNKNOWN"
-    return label
 
 
 class ClassificationMapper:

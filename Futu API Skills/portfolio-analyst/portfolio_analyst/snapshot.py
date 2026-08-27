@@ -19,6 +19,7 @@ from .models import (
     PortfolioSnapshot,
     Position,
 )
+from .normalization import is_unknown_sentinel
 from .quality import compose_quality
 from .security_metadata import SecurityMetadataMapper
 
@@ -257,11 +258,7 @@ class PortfolioBuilder:
                     *classification.themes,
                 )
             )
-            unknown_security_types |= item.security_type.strip().upper() in {
-                "",
-                "UNKNOWN",
-                "N/A",
-            }
+            unknown_security_types |= is_unknown_sentinel(item.security_type)
             for dimension, labels in (
                 ("sector", (classification.sector,)),
                 ("region", (classification.region,)),

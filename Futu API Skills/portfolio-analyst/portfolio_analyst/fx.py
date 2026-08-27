@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from .models import FxRateEvidence
+from .normalization import is_unknown_sentinel, normalized_text
 
 
 class FxEvidenceError(ValueError):
@@ -27,11 +28,11 @@ class StaticCurrencyConverter:
         self,
         rates: Mapping[tuple[str, str], Decimal],
         *,
-        source: str,
+        source: str | None,
         effective_at: datetime,
         max_age: timedelta = timedelta(hours=96),
     ) -> None:
-        if not source.strip() or source.strip().upper() in {"UNKNOWN", "N/A"}:
+        if is_unknown_sentinel(source):
             raise FxEvidenceError("FX source provenance is required")
         if effective_at.tzinfo is None or effective_at.utcoffset() is None:
             raise FxEvidenceError("FX effective_at must be timezone-aware")
@@ -44,7 +45,7 @@ class StaticCurrencyConverter:
                 raise FxEvidenceError("FX rates must be finite and positive")
             normalized[(source_currency.upper(), target_currency.upper())] = rate
         self._rates = MappingProxyType(normalized)
-        self.source = source.strip()
+        self.source = normalized_text(source)
         self.effective_at = effective_at
         self.max_age = max_age
 
