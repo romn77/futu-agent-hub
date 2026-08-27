@@ -222,10 +222,58 @@ def test_run_uses_utf8_decoding_with_safe_error_replacement(monkeypatch, tmp_pat
     assert "text" not in observed
 
 
+def test_run_uses_controlled_environment_without_credentials_or_python_injection(
+    monkeypatch, tmp_path
+):
+    adapter = FutuAdapter(_skill(tmp_path))
+    safe_parent = {
+        "PATH": "/runtime/bin",
+        "HOME": "/runtime/home",
+        "LANG": "C.UTF-8",
+        "TMPDIR": "/runtime/tmp",
+        "SYSTEMROOT": "C:\\Windows",
+        "FUTU_OPEND_HOST": "192.0.2.10",
+        "FUTU_OPEND_PORT": "22222",
+    }
+    unsafe_parent = {
+        "FUTU_LOGIN_ACCOUNT": "private-login",
+        "FUTU_LOGIN_PWD": "trade-password",
+        "FUTU_ACC_ID": "123456789",
+        "PASSWORD": "generic-password",
+        "API_KEY": "generic-api-key",
+        "ACCESS_TOKEN": "generic-token",
+        "CLIENT_SECRET": "generic-secret",
+        "PYTHONPATH": "/tmp/injected-code",
+        "PYTHONHOME": "/tmp/injected-runtime",
+        "LD_PRELOAD": "/tmp/injected.so",
+    }
+    for key, value in {**safe_parent, **unsafe_parent}.items():
+        monkeypatch.setenv(key, value)
+    observed = {}
+
+    def fake_run(args, **kwargs):
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    adapter.run("get_accounts", ["--json"])
+
+    child_env = observed["env"]
+    for key, value in safe_parent.items():
+        assert child_env[key] == value
+    assert child_env["PYTHONIOENCODING"] == "utf-8"
+    assert child_env["PYTHONUTF8"] == "1"
+    assert unsafe_parent.keys().isdisjoint(child_env)
+
+
 def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
+    monkeypatch.setenv("FUTU_LOGIN_PWD", "parent-trade-password")
+    observed = {}
 
-    def time_out(args, **_kwargs):
+    def time_out(args, **kwargs):
+        observed.update(kwargs)
         raise subprocess.TimeoutExpired(
             cmd=args,
             timeout=1,
@@ -243,6 +291,8 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
     )
     for secret in ("123456789", "secret-token", "ORDER-7788", "private-file"):
         assert secret not in exposed
+    assert "FUTU_LOGIN_PWD" not in observed["env"]
+    assert "parent-trade-password" not in exposed
 
 
 def test_adapter_revalidates_skill_before_each_command(tmp_path):
