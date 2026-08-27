@@ -546,6 +546,9 @@ def test_lifecycle_human_markdown_and_integrated_report_are_audit_complete(tmp_p
         role="CORE",
         target_weight={"min": 0.1, "max": 0.3},
         original_thesis="private <thesis> [link](evil)",
+        invalidation_conditions=["User invalidation <condition>"],
+        review_triggers=["User trigger [review](evil)"],
+        notes=["User note <audit>"],
     )
     snap = make_snapshot()
     lifecycle = analyze_lifecycle(snap, LifecycleRepository(home))
@@ -561,10 +564,104 @@ def test_lifecycle_human_markdown_and_integrated_report_are_audit_complete(tmp_p
         assert "P1" in rendered
         assert "history" in rendered.lower()
         assert "source_snapshot_id" in rendered
-    assert "private <thesis>" not in human
-    assert "private <thesis>" not in markdown
-    assert "private <thesis>" not in integrated
-    assert "private <thesis>" not in json.dumps(lifecycle_payload)
-    assert "original_thesis" not in lifecycle_payload["positions"][0]
-    assert lifecycle_payload["positions"][0]["original_thesis_evidence"]["configured"] is True
-    assert "Original thesis: configured" in markdown
+    assert "As of:" in human
+    assert "private <thesis> [link](evil)" in human
+    assert "private &lt;thesis&gt; \\[link\\]\\(evil\\)" in markdown
+    assert "private &lt;thesis&gt; \\[link\\]\\(evil\\)" in integrated
+    assert "User invalidation <condition>" in human
+    assert "User invalidation &lt;condition&gt;" in markdown
+    assert "User invalidation &lt;condition&gt;" in integrated
+    assert "User trigger" in human and "User note" in human
+    assert "User trigger" in markdown and "User note" in markdown
+    assert "User trigger" in integrated and "User note" in integrated
+    assessment = lifecycle_payload["positions"][0]
+    assert assessment["original_thesis"] == "private <thesis> [link](evil)"
+    assert assessment["original_thesis_evidence"]["configured"] is True
+    assert assessment["original_thesis_evidence"]["provenance"] == "USER_CONFIG"
+    assert assessment["original_thesis_evidence"]["system_inferred"] is False
+    for rendered in (human, markdown, integrated):
+        assert "USER_CONFIG" in rendered
+        assert "system inferred" in rendered.lower()
+
+
+def test_lifecycle_report_scrubs_sensitive_user_config_in_every_output(tmp_path):
+    home = _home(tmp_path)
+    _write_record(
+        home,
+        original_thesis="api_key=thesis-secret account 12345678\x1b[31m",
+        invalidation_conditions=["password=condition-secret"],
+        review_triggers=["client_secret=trigger-secret"],
+        notes=["token=note-secret"],
+    )
+    snap = make_snapshot()
+    lifecycle = analyze_lifecycle(snap, LifecycleRepository(home))
+    outputs = (
+        json.dumps(lifecycle.to_dict()),
+        lifecycle.to_human(),
+        lifecycle.to_markdown(),
+        build_portfolio_report(snap, analyze_risk(snap), lifecycle).to_markdown(),
+    )
+    for rendered in outputs:
+        for secret in (
+            "thesis-secret",
+            "condition-secret",
+            "trigger-secret",
+            "note-secret",
+            "12345678",
+            "\x1b",
+        ):
+            assert secret not in rendered
+
+
+def test_lifecycle_quality_is_canonical_from_history_and_position_notes(tmp_path):
+    report = analyze_lifecycle(make_snapshot(), LifecycleRepository(_home(tmp_path)))
+    payload = report.to_dict()
+    assert payload["coverage"]["history"]["status"] == "UNAVAILABLE"
+    assert payload["data_quality_status"] == payload["status"] == "PARTIAL"
+    assert any(
+        reason["code"] == "HISTORY_UNAVAILABLE" for reason in payload["data_quality_reasons"]
+    )
+    assert any(reason["code"] == "POSITION_DATA_NOTE" for reason in payload["data_quality_reasons"])
+
+    payload["status"] = "COMPLETE"
+    payload["data_quality_status"] = "COMPLETE"
+    payload["data_quality_notes"] = []
+    payload["data_quality_reasons"] = []
+    body = dict(payload)
+    body.pop("lifecycle_report_id")
+    import hashlib
+
+    payload["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="quality"):
+        validate_lifecycle_document(payload)
+
+
+@pytest.mark.parametrize("tamper", ["text", "digest", "length"])
+def test_lifecycle_thesis_text_digest_and_length_are_semantically_bound(tmp_path, tamper):
+    home = _home(tmp_path)
+    _write_record(home, original_thesis="Authoritative user thesis")
+    payload = analyze_lifecycle(make_snapshot(), LifecycleRepository(home)).to_dict()
+    assessment = next(item for item in payload["positions"] if item["symbol"] == "US.AAA")
+    if tamper == "text":
+        assessment["original_thesis"] = "Forged thesis"
+    elif tamper == "digest":
+        assessment["original_thesis_evidence"]["sha256"] = "0" * 64
+    else:
+        assessment["original_thesis_evidence"]["characters"] += 1
+    body = dict(payload)
+    body.pop("lifecycle_report_id")
+    import hashlib
+
+    payload["lifecycle_report_id"] = (
+        "lr-"
+        + hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="thesis"):
+        validate_lifecycle_document(payload)

@@ -3,13 +3,14 @@
   "$id": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "lifecycle_report_id", "as_of", "source_snapshot_id", "status", "coverage", "positions", "findings", "data_quality_notes"],
+  "required": ["schema_version", "lifecycle_report_id", "as_of", "source_snapshot_id", "status", "data_quality_status", "coverage", "positions", "findings", "data_quality_reasons", "data_quality_notes"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "lifecycle_report_id": {"type": "string", "pattern": "^lr-[0-9a-f]{20}$"},
     "as_of": {"type": "string", "format": "date-time"},
     "source_snapshot_id": {"type": "string", "pattern": "^ps-"},
     "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+    "data_quality_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
     "coverage": {
       "type": "object", "additionalProperties": false,
       "required": ["current_positions", "configured_records", "assessed_positions", "unconfigured_positions", "history_snapshots", "history"],
@@ -38,10 +39,20 @@
     },
     "positions": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/assessment"}},
     "findings": {"type": "array", "maxItems": 80000, "items": {"$ref": "#/$defs/finding"}},
-    "data_quality_notes": {"type": "array", "maxItems": 20000, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+    "data_quality_reasons": {"type": "array", "maxItems": 400000, "items": {"$ref": "#/$defs/quality_reason"}},
+    "data_quality_notes": {"type": "array", "maxItems": 400000, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
   },
   "$defs": {
     "decimal": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+    "quality_reason": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "scope", "detail"],
+      "properties": {
+        "code": {"enum": ["HISTORY_PARTIAL", "HISTORY_UNAVAILABLE", "FUTURE_HISTORY_EXCLUDED", "DUPLICATE_HISTORY_EXCLUDED", "PRE_OPEN_HISTORY_EXCLUDED", "POSITION_DATA_NOTE", "MODULE_UNAVAILABLE"]},
+        "scope": {"type": "string", "minLength": 1, "maxLength": 128},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
     "finding": {
       "type": "object", "additionalProperties": false,
       "required": ["type", "symbol", "summary", "evidence", "review_priority", "severity"],
@@ -56,7 +67,7 @@
     },
     "assessment": {
       "type": "object", "additionalProperties": false,
-      "required": ["symbol", "role", "record_status", "lifecycle_status", "current_weight", "target_weight", "thesis_status", "original_thesis_evidence", "invalidation_conditions", "review_triggers", "notes", "opened_at", "holding_horizon", "last_reviewed_at", "history_evidence_status", "history_evidence", "history_excluded_pre_open", "role_drift_policy", "findings", "review_priority", "data_quality_notes"],
+      "required": ["symbol", "role", "record_status", "lifecycle_status", "current_weight", "target_weight", "thesis_status", "original_thesis", "original_thesis_evidence", "invalidation_conditions", "review_triggers", "notes", "opened_at", "holding_horizon", "last_reviewed_at", "history_evidence_status", "history_evidence", "history_excluded_pre_open", "role_drift_policy", "findings", "review_priority", "data_quality_notes"],
       "properties": {
         "symbol": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\."},
         "role": {"enum": ["CORE", "SATELLITE", "TRADING", "DEFENSIVE", "HEDGE", "CASH_ALTERNATIVE", "UNCLASSIFIED"]},
@@ -65,13 +76,16 @@
         "current_weight": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
         "target_weight": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["min", "max"], "properties": {"min": {"$ref": "#/$defs/decimal"}, "max": {"$ref": "#/$defs/decimal"}}}, {"type": "null"}]},
         "thesis_status": {"enum": ["UNREVIEWED", "INTACT", "STRENGTHENING", "WEAKENING", "BROKEN"]},
+        "original_thesis": {"type": ["string", "null"], "minLength": 1, "maxLength": 8192},
         "original_thesis_evidence": {
           "oneOf": [
             {
               "type": "object", "additionalProperties": false,
-              "required": ["configured", "sha256", "characters"],
+              "required": ["configured", "provenance", "system_inferred", "sha256", "characters"],
               "properties": {
                 "configured": {"const": true},
+                "provenance": {"const": "USER_CONFIG"},
+                "system_inferred": {"const": false},
                 "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                 "characters": {"type": "integer", "minimum": 1, "maximum": 8192}
               }

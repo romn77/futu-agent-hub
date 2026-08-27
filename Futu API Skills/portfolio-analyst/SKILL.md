@@ -245,7 +245,13 @@ upper bound. Thesis status changes only from an explicit user review; price and 
 create a thesis fact. History evidence is semantically validated, deduplicated and limited to each
 record's opened/current window; reports serialize snapshot IDs, timestamps, canonical identities,
 weights and the exact role-drift policy so runtime validation can rebuild persistence. Human and
-Markdown output never prints the original thesis, only its configured digest/length proof. See
+Markdown output prints the sanitized user-authored thesis, invalidation conditions, review triggers,
+and notes with explicit `USER_CONFIG` / `system inferred: false` provenance. The JSON report embeds
+the authoritative sanitized thesis plus a bound digest and character count. Saved reports remain
+inside the private `PORTFOLIO_AGENT_HOME`; `--no-save` sends this private material directly to the
+requesting user's terminal/stdout, so redirect it only to a private destination. Top-level lifecycle
+quality status and canonical structured reasons are rebuilt from history coverage, exclusions,
+insufficient evidence, and every position quality note. See
 [references/position-lifecycle.md](references/position-lifecycle.md).
 
 Journal writes are explicit, append-only operations:

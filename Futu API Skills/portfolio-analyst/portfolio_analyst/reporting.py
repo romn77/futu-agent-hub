@@ -196,8 +196,17 @@ class PortfolioReport:
                     "",
                     f"- source_snapshot_id: `{md(lifecycle['source_snapshot_id'])}`",
                     f"- Status: {lifecycle['status']}",
+                    f"- Data quality status: {lifecycle['data_quality_status']}",
                     "- Coverage: "
                     + md(json.dumps(lifecycle["coverage"], ensure_ascii=False, sort_keys=True)),
+                    "- Quality reasons: "
+                    + (
+                        "; ".join(
+                            f"{reason['code']} [{md(reason['scope'])}]: {md(reason['detail'])}"
+                            for reason in lifecycle["data_quality_reasons"]
+                        )
+                        or "None"
+                    ),
                     "- Quality notes: "
                     + ("; ".join(md(note) for note in lifecycle["data_quality_notes"]) or "None"),
                 ]
@@ -207,7 +216,7 @@ class PortfolioReport:
                 thesis_display = (
                     "not configured"
                     if thesis is None
-                    else f"configured (sha256={thesis['sha256']}, characters={thesis['characters']})"
+                    else f"USER_CONFIG; system inferred: false; sha256={thesis['sha256']}; characters={thesis['characters']}"
                 )
                 lines.extend(
                     [
@@ -224,7 +233,23 @@ class PortfolioReport:
                             else "N/A"
                         ),
                         f"- Opened / horizon / last review: {item['opened_at'] or 'N/A'} / {md(item['holding_horizon'] or 'N/A')} / {item['last_reviewed_at'] or 'N/A'}",
-                        f"- Thesis status: {item['thesis_status']}; Original thesis: {thesis_display}",
+                        f"- Thesis status: {item['thesis_status']}",
+                        "- Original thesis (USER_CONFIG; system inferred: false): "
+                        + (
+                            md(item["original_thesis"])
+                            if item["original_thesis"] is not None
+                            else "Not configured"
+                        ),
+                        f"- Original thesis evidence: {thesis_display}",
+                        "- Invalidation conditions (USER_CONFIG; system inferred: false): "
+                        + (
+                            "; ".join(md(value) for value in item["invalidation_conditions"])
+                            or "None"
+                        ),
+                        "- Review triggers (USER_CONFIG; system inferred: false): "
+                        + ("; ".join(md(value) for value in item["review_triggers"]) or "None"),
+                        "- User notes (USER_CONFIG; system inferred: false): "
+                        + ("; ".join(md(value) for value in item["notes"]) or "None"),
                         f"- Review priority: {item['review_priority']}",
                         f"- History status: {item['history_evidence_status']}; excluded pre-open={item['history_excluded_pre_open']}; role policy: {md(json.dumps(item['role_drift_policy'], sort_keys=True))}",
                         "- Position quality: "

@@ -697,10 +697,21 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     if claimed != expected:
         raise ReportSemanticError("lifecycle report complete-body identity is invalid")
     positions = payload["positions"]
-    if payload["status"] == "UNAVAILABLE" and (
-        positions or payload["findings"] or not payload["data_quality_notes"]
-    ):
-        raise ReportSemanticError("unavailable lifecycle report must contain only quality evidence")
+    if payload["status"] == "UNAVAILABLE":
+        reasons = payload["data_quality_reasons"]
+        if (
+            positions
+            or payload["findings"]
+            or payload["data_quality_status"] != "UNAVAILABLE"
+            or len(reasons) != 1
+            or reasons[0]["code"] != "MODULE_UNAVAILABLE"
+            or reasons[0]["scope"] != "LIFECYCLE"
+            or payload["data_quality_notes"]
+            != [f"{reasons[0]['code']} [{reasons[0]['scope']}]: {reasons[0]['detail']}"]
+        ):
+            raise ReportSemanticError(
+                "unavailable lifecycle report must contain canonical quality evidence"
+            )
     if [item["symbol"] for item in positions] != sorted(item["symbol"] for item in positions):
         raise ReportSemanticError("lifecycle positions must use stable symbol ordering")
     coverage = payload["coverage"]
@@ -760,6 +771,61 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
     )
     if history_coverage["status"] != expected_history_coverage_status:
         raise ReportSemanticError("lifecycle history quality status is inconsistent")
+    if payload["status"] != "UNAVAILABLE":
+        expected_reasons: list[dict[str, str]] = []
+        if history_coverage["status"] != "AVAILABLE":
+            expected_reasons.append(
+                {
+                    "code": f"HISTORY_{history_coverage['status']}",
+                    "scope": "HISTORY",
+                    "detail": "eligible lifecycle history is not fully available",
+                }
+            )
+        for field, code, detail in (
+            ("future_snapshots", "FUTURE_HISTORY_EXCLUDED", "future snapshots were excluded"),
+            (
+                "duplicate_snapshots",
+                "DUPLICATE_HISTORY_EXCLUDED",
+                "duplicate snapshots were excluded",
+            ),
+            (
+                "pre_open_observations",
+                "PRE_OPEN_HISTORY_EXCLUDED",
+                "pre-open observations were excluded",
+            ),
+        ):
+            if history_coverage[field]:
+                expected_reasons.append(
+                    {
+                        "code": code,
+                        "scope": "HISTORY",
+                        "detail": f"{history_coverage[field]} {detail}",
+                    }
+                )
+        for item in positions:
+            expected_reasons.extend(
+                {
+                    "code": "POSITION_DATA_NOTE",
+                    "scope": item["symbol"],
+                    "detail": note,
+                }
+                for note in item["data_quality_notes"]
+            )
+        expected_reasons.sort(
+            key=lambda reason: (reason["code"], reason["scope"], reason["detail"])
+        )
+        expected_notes = [
+            f"{reason['code']} [{reason['scope']}]: {reason['detail']}"
+            for reason in expected_reasons
+        ]
+        expected_quality_status = "PARTIAL" if expected_reasons else "COMPLETE"
+        if (
+            payload["data_quality_reasons"] != expected_reasons
+            or payload["data_quality_notes"] != expected_notes
+            or payload["data_quality_status"] != expected_quality_status
+            or payload["status"] != expected_quality_status
+        ):
+            raise ReportSemanticError("lifecycle report quality evidence is inconsistent")
     flattened = [finding for item in positions for finding in item["findings"]]
     ordered = sorted(
         flattened, key=lambda item: (item["review_priority"], item["type"], item["symbol"])
@@ -823,6 +889,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
             expected_status = "UNCONFIGURED"
             if (
                 item["target_weight"] is not None
+                or item["original_thesis"] is not None
                 or item["original_thesis_evidence"] is not None
                 or item["opened_at"] is not None
                 or item["holding_horizon"] is not None
@@ -849,6 +916,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 item[field] is None
                 for field in (
                     "target_weight",
+                    "original_thesis",
                     "original_thesis_evidence",
                     "opened_at",
                     "holding_horizon",
@@ -884,6 +952,7 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 item[field] is None
                 for field in (
                     "target_weight",
+                    "original_thesis",
                     "original_thesis_evidence",
                     "opened_at",
                     "holding_horizon",
@@ -891,6 +960,20 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 )
             ):
                 raise ReportSemanticError("configured lifecycle assessment omitted user facts")
+        thesis_text = item["original_thesis"]
+        thesis_evidence = item["original_thesis_evidence"]
+        if thesis_text is not None:
+            expected_thesis_evidence = {
+                "configured": True,
+                "provenance": "USER_CONFIG",
+                "system_inferred": False,
+                "sha256": hashlib.sha256(thesis_text.encode("utf-8")).hexdigest(),
+                "characters": len(thesis_text),
+            }
+            if thesis_evidence != expected_thesis_evidence:
+                raise ReportSemanticError("lifecycle original thesis evidence is inconsistent")
+        elif thesis_evidence is not None:
+            raise ReportSemanticError("lifecycle original thesis evidence lacks authoritative text")
         if item["lifecycle_status"] != expected_status:
             raise ReportSemanticError("lifecycle status does not match deterministic precedence")
         expected_priority = min(
@@ -1072,13 +1155,6 @@ def validate_lifecycle_document(payload: dict[str, Any]) -> None:
                 raise ReportSemanticError(
                     "lifecycle current/exited conflict evidence is inconsistent"
                 )
-    expected_report_status = (
-        "PARTIAL"
-        if coverage["unconfigured_positions"] or payload["data_quality_notes"]
-        else "COMPLETE"
-    )
-    if payload["status"] != "UNAVAILABLE" and payload["status"] != expected_report_status:
-        raise ReportSemanticError("lifecycle report quality status is inconsistent")
 
 
 def validate_lifecycle_record_document(payload: dict[str, Any]) -> None:

@@ -84,6 +84,7 @@ class LifecycleAssessment:
     current_weight: Decimal | None
     target_weight: Mapping[str, Decimal] | None
     thesis_status: str
+    original_thesis: str | None
     original_thesis_evidence: Mapping[str, Any] | None
     invalidation_conditions: tuple[str, ...]
     review_triggers: tuple[str, ...]
@@ -128,15 +129,22 @@ class LifecycleReport:
     as_of: Any
     source_snapshot_id: str
     status: str
+    data_quality_status: str
     coverage: Mapping[str, Any]
     positions: tuple[LifecycleAssessment, ...]
     findings: tuple[LifecycleFinding, ...]
+    data_quality_reasons: tuple[Mapping[str, str], ...]
     data_quality_notes: tuple[str, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "coverage", _deep_freeze(dict(self.coverage)))
         object.__setattr__(self, "positions", tuple(self.positions))
         object.__setattr__(self, "findings", tuple(self.findings))
+        object.__setattr__(
+            self,
+            "data_quality_reasons",
+            tuple(_deep_freeze(dict(reason)) for reason in self.data_quality_reasons),
+        )
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
     def to_dict(self) -> dict[str, Any]:
@@ -147,13 +155,23 @@ class LifecycleReport:
         lines = [
             f"Lifecycle report {terminal_text(self.lifecycle_report_id)}",
             f"source_snapshot_id: {terminal_text(self.source_snapshot_id)}",
+            f"As of: {self.to_dict()['as_of']}",
             f"Status: {self.status}",
+            f"Data quality status: {self.data_quality_status}",
             f"Coverage: {terminal_text(json.dumps(coverage, ensure_ascii=False, sort_keys=True))}",
+            "Quality reasons:",
+            *(
+                [
+                    f"- {reason['code']} [{terminal_text(reason['scope'])}]: {terminal_text(reason['detail'])}"
+                    for reason in self.data_quality_reasons
+                ]
+                or ["- None"]
+            ),
             "Quality notes:",
             *([f"- {terminal_text(note)}" for note in self.data_quality_notes] or ["- None"]),
         ]
         for item in self.positions:
-            thesis = _thesis_display(item.original_thesis_evidence)
+            thesis = _thesis_display(item.original_thesis, item.original_thesis_evidence)
             lines.extend(
                 [
                     f"Position {terminal_text(item.symbol)}",
@@ -167,6 +185,21 @@ class LifecycleReport:
                     ),
                     f"Opened / horizon / last review: {item.opened_at or 'N/A'} / {item.holding_horizon or 'N/A'} / {item.last_reviewed_at or 'N/A'}",
                     f"Thesis status: {item.thesis_status}; Original thesis: {thesis}",
+                    "Thesis provenance: "
+                    + (
+                        "USER_CONFIG; system inferred: false"
+                        if item.original_thesis is not None
+                        else "not configured; system inferred: false"
+                    ),
+                    "Invalidation conditions (USER_CONFIG; system inferred: false): "
+                    + (
+                        "; ".join(terminal_text(value) for value in item.invalidation_conditions)
+                        or "None"
+                    ),
+                    "Review triggers (USER_CONFIG; system inferred: false): "
+                    + ("; ".join(terminal_text(value) for value in item.review_triggers) or "None"),
+                    "User notes (USER_CONFIG; system inferred: false): "
+                    + ("; ".join(terminal_text(value) for value in item.notes) or "None"),
                     f"History status: {item.history_evidence_status}; observations={len(item.history_evidence)}; excluded_pre_open={item.history_excluded_pre_open}; policy={terminal_text(json.dumps(_json_value(item.role_drift_policy), sort_keys=True))}",
                 ]
             )
@@ -193,11 +226,22 @@ class LifecycleReport:
             f"- source_snapshot_id: `{md(self.source_snapshot_id)}`",
             f"- As of: {self.to_dict()['as_of']}",
             f"- Status: {self.status}",
+            f"- Data quality status: {self.data_quality_status}",
             "- Coverage: "
             + md(json.dumps(self.to_dict()["coverage"], ensure_ascii=False, sort_keys=True)),
             f"- Authoritative JSON: `{md(json_artifact)}`"
             if json_artifact
             else "- Authoritative JSON: current output",
+            "",
+            "## Quality reasons",
+            "",
+            *(
+                [
+                    f"- {reason['code']} [{md(reason['scope'])}]: {md(reason['detail'])}"
+                    for reason in self.data_quality_reasons
+                ]
+                or ["- None"]
+            ),
             "",
             "## Quality notes",
             "",
@@ -221,12 +265,19 @@ class LifecycleReport:
                         else "N/A"
                     ),
                     f"- Thesis status: {item.thesis_status}",
-                    f"- Original thesis: {_thesis_display(item.original_thesis_evidence)}",
-                    "- Invalidation conditions: "
+                    "- Original thesis (USER_CONFIG; system inferred: false): "
+                    + (
+                        md(item.original_thesis)
+                        if item.original_thesis is not None
+                        else "Not configured"
+                    ),
+                    f"- Original thesis evidence: {_thesis_display(None, item.original_thesis_evidence)}",
+                    "- Invalidation conditions (USER_CONFIG; system inferred: false): "
                     + ("; ".join(md(value) for value in item.invalidation_conditions) or "None"),
-                    "- Review triggers: "
+                    "- Review triggers (USER_CONFIG; system inferred: false): "
                     + ("; ".join(md(value) for value in item.review_triggers) or "None"),
-                    "- User notes: " + ("; ".join(md(value) for value in item.notes) or "None"),
+                    "- User notes (USER_CONFIG; system inferred: false): "
+                    + ("; ".join(md(value) for value in item.notes) or "None"),
                     f"- Last reviewed: {item.last_reviewed_at or 'Not configured'}",
                     f"- Opened at: {item.opened_at or 'Not configured'}",
                     f"- Holding horizon: {md(item.holding_horizon or 'Not configured')}",
@@ -269,15 +320,66 @@ class LifecycleReport:
 def _thesis_evidence(value: str) -> Mapping[str, Any]:
     return {
         "configured": True,
+        "provenance": "USER_CONFIG",
+        "system_inferred": False,
         "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
         "characters": len(value),
     }
 
 
-def _thesis_display(value: Mapping[str, Any] | None) -> str:
-    if value is None:
+def _thesis_display(text: str | None, evidence: Mapping[str, Any] | None) -> str:
+    if evidence is None:
         return "not configured"
-    return f"configured (sha256={value['sha256']}, characters={value['characters']})"
+    prefix = terminal_text(text) if text is not None else "configured"
+    return f"{prefix} (sha256={evidence['sha256']}, characters={evidence['characters']})"
+
+
+def _quality_note(reason: Mapping[str, str]) -> str:
+    return f"{reason['code']} [{reason['scope']}]: {reason['detail']}"
+
+
+def _quality_reasons(
+    coverage: Mapping[str, Any], positions: Sequence[LifecycleAssessment]
+) -> tuple[Mapping[str, str], ...]:
+    history = coverage["history"]
+    reasons: list[dict[str, str]] = []
+    if history["status"] != "AVAILABLE":
+        reasons.append(
+            {
+                "code": f"HISTORY_{history['status']}",
+                "scope": "HISTORY",
+                "detail": "eligible lifecycle history is not fully available",
+            }
+        )
+    for count_field, code, detail in (
+        ("future_snapshots", "FUTURE_HISTORY_EXCLUDED", "future snapshots were excluded"),
+        ("duplicate_snapshots", "DUPLICATE_HISTORY_EXCLUDED", "duplicate snapshots were excluded"),
+        (
+            "pre_open_observations",
+            "PRE_OPEN_HISTORY_EXCLUDED",
+            "pre-open observations were excluded",
+        ),
+    ):
+        if history[count_field]:
+            reasons.append(
+                {
+                    "code": code,
+                    "scope": "HISTORY",
+                    "detail": f"{history[count_field]} {detail}",
+                }
+            )
+    for item in positions:
+        reasons.extend(
+            {
+                "code": "POSITION_DATA_NOTE",
+                "scope": item.symbol,
+                "detail": note,
+            }
+            for note in item.data_quality_notes
+        )
+    return tuple(
+        sorted(reasons, key=lambda reason: (reason["code"], reason["scope"], reason["detail"]))
+    )
 
 
 def _horizon_days(text: str) -> int:
@@ -387,6 +489,7 @@ def _assessment(
             None,
             "UNREVIEWED",
             None,
+            None,
             (),
             (),
             (),
@@ -425,6 +528,7 @@ def _assessment(
             None,
             {"min": record.target_weight.minimum, "max": record.target_weight.maximum},
             "UNREVIEWED",
+            record.original_thesis,
             _thesis_evidence(record.original_thesis),
             record.invalidation_conditions,
             record.review_triggers,
@@ -540,6 +644,7 @@ def _assessment(
         current.weight,
         {"min": record.target_weight.minimum, "max": record.target_weight.maximum},
         reviewed,
+        record.original_thesis,
         _thesis_evidence(record.original_thesis),
         record.invalidation_conditions,
         record.review_triggers,
@@ -618,61 +723,49 @@ def analyze_lifecycle(
             key=lambda item: (item.review_priority, item.type, item.symbol),
         )
     )
-    global_history_notes: list[str] = []
-    if future_history:
-        global_history_notes.append(
-            f"history evidence excluded {future_history} future snapshot(s) after current as_of"
-        )
-    if duplicate_history:
-        global_history_notes.append(
-            f"history evidence deduplicated {duplicate_history} repeated snapshot(s) by full identity"
-        )
-    notes = sorted(
-        {
-            *global_history_notes,
-            *(note for item in assessments for note in item.data_quality_notes),
-        }
-    )
     unconfigured = sum(item.lifecycle_status == "UNCONFIGURED" for item in assessments)
-    status = "PARTIAL" if unconfigured or notes else "COMPLETE"
+    coverage = {
+        "current_positions": len(current),
+        "configured_records": len(records),
+        "assessed_positions": len(assessments),
+        "unconfigured_positions": unconfigured,
+        "history_snapshots": len({item.snapshot_id for item in history}),
+        "history": {
+            "status": (
+                "PARTIAL"
+                if future_history
+                or duplicate_history
+                or any(item.history_excluded_pre_open for item in assessments)
+                or any(item.history_evidence_status == "PARTIAL" for item in assessments)
+                else "AVAILABLE"
+                if history
+                else "UNAVAILABLE"
+            ),
+            "candidate_snapshots": candidate_history_count,
+            "accepted_snapshots": len(history),
+            "duplicate_snapshots": duplicate_history,
+            "future_snapshots": future_history,
+            "pre_open_observations": sum(item.history_excluded_pre_open for item in assessments),
+            "position_observations": sum(len(item.history_evidence) for item in assessments),
+            "window_start": history[0].as_of if history else None,
+            "window_end": history[-1].as_of if history else None,
+        },
+    }
+    reasons = _quality_reasons(coverage, assessments)
+    notes = tuple(_quality_note(reason) for reason in reasons)
+    status = "PARTIAL" if reasons else "COMPLETE"
     provisional = LifecycleReport(
         "1.0",
         "",
         snapshot.as_of,
         snapshot.snapshot_id,
         status,
-        {
-            "current_positions": len(current),
-            "configured_records": len(records),
-            "assessed_positions": len(assessments),
-            "unconfigured_positions": unconfigured,
-            "history_snapshots": len({item.snapshot_id for item in history}),
-            "history": {
-                "status": (
-                    "PARTIAL"
-                    if future_history
-                    or duplicate_history
-                    or any(item.history_excluded_pre_open for item in assessments)
-                    or any(item.history_evidence_status == "PARTIAL" for item in assessments)
-                    else "AVAILABLE"
-                    if history
-                    else "UNAVAILABLE"
-                ),
-                "candidate_snapshots": candidate_history_count,
-                "accepted_snapshots": len(history),
-                "duplicate_snapshots": duplicate_history,
-                "future_snapshots": future_history,
-                "pre_open_observations": sum(
-                    item.history_excluded_pre_open for item in assessments
-                ),
-                "position_observations": sum(len(item.history_evidence) for item in assessments),
-                "window_start": history[0].as_of if history else None,
-                "window_end": history[-1].as_of if history else None,
-            },
-        },
+        status,
+        coverage,
         assessments,
         findings,
-        tuple(notes),
+        reasons,
+        notes,
     )
     return LifecycleReport(
         **{**provisional.__dict__, "lifecycle_report_id": _identity(provisional)}
@@ -687,6 +780,7 @@ def unavailable_lifecycle_report(snapshot: PortfolioSnapshot, note: str) -> Life
         "",
         snapshot.as_of,
         snapshot.snapshot_id,
+        "UNAVAILABLE",
         "UNAVAILABLE",
         {
             "current_positions": len(aggregate_economic_positions(snapshot)),
@@ -708,7 +802,18 @@ def unavailable_lifecycle_report(snapshot: PortfolioSnapshot, note: str) -> Life
         },
         (),
         (),
-        (terminal_text(note),),
+        (
+            {
+                "code": "MODULE_UNAVAILABLE",
+                "scope": "LIFECYCLE",
+                "detail": terminal_text(note),
+            },
+        ),
+        (
+            _quality_note(
+                {"code": "MODULE_UNAVAILABLE", "scope": "LIFECYCLE", "detail": terminal_text(note)}
+            ),
+        ),
     )
     return LifecycleReport(
         **{**provisional.__dict__, "lifecycle_report_id": _identity(provisional)}
