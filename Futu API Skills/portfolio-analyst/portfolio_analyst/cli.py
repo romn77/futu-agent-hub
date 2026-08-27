@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -12,11 +13,13 @@ from .doctor import run_doctor
 from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
 from .reporting import build_portfolio_report
+from .rendering import terminal_text
 from .repository import SourceDataError
 from .risk import (
     PolicyConfigError,
     RiskConfigError,
     RiskInputError,
+    UnsupportedRiskError,
     analyze_risk,
     load_portfolio_policy,
 )
@@ -107,8 +110,17 @@ def _human_report(report: dict[str, object], verbose: bool) -> str:
 
 
 def _human_risk_report(payload: dict[str, Any]) -> str:
+    safe = terminal_text
     coverage = payload["coverage"]
     price_coverage = coverage["price_histories"]
+    matrix_digest = hashlib.sha256(
+        json.dumps(
+            payload["correlation"]["matrix"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     lines = [
         "Portfolio risk",
         f"source_snapshot_id: {payload['source_snapshot_id']}",
@@ -116,25 +128,59 @@ def _human_risk_report(payload: dict[str, Any]) -> str:
         f"Overall risk: {payload['overall_risk']}",
         f"Source holdings: {coverage['source_holdings']}",
         f"Economic positions: {coverage['positions']}",
+        f"Total current positions: {coverage['total_positions']}",
+        f"Omitted positions: {coverage['omitted_positions']}",
+        f"Budget status: {coverage['budget_status']}",
+        "Budget reason: "
+        + (safe(coverage["budget_reason"]) if coverage["budget_reason"] else "None"),
         f"Classified sector: {coverage['classified_sector']}",
         f"Classified region: {coverage['classified_region']}",
         f"Price histories: {price_coverage['available']}/{price_coverage['requested']}",
         f"Data quality: {payload['data_quality_status']}",
         "Data quality notes:",
-        *([f"- {note}" for note in payload["data_quality_notes"]] or ["- None"]),
+        *([f"- {safe(note)}" for note in payload["data_quality_notes"]] or ["- None"]),
+        f"Top 1: {payload['concentration']['top_1']}",
+        f"Top 3: {payload['concentration']['top_3']}",
+        f"Top 5: {payload['concentration']['top_5']}",
+        f"HHI: {payload['concentration']['hhi']}",
+        "Sector exposure: "
+        + safe(json.dumps(payload["exposures"]["sector"]["weights"], sort_keys=True)),
+        "Region exposure: "
+        + safe(json.dumps(payload["exposures"]["region"]["weights"], sort_keys=True)),
+        "Theme full exposure: "
+        + safe(json.dumps(payload["exposures"]["theme_full"]["weights"], sort_keys=True)),
+        "Theme split exposure: "
+        + safe(json.dumps(payload["exposures"]["theme_split"]["weights"], sort_keys=True)),
+        f"Correlation status: {payload['correlation']['status']}",
+        f"Correlation thresholds: medium={payload['correlation']['medium_threshold']}, high={payload['correlation']['high_threshold']}",
+        "Positive risk pairs: " + safe(json.dumps(payload["correlation"]["pairs"], sort_keys=True)),
+        "Inverse diversification pairs: "
+        + safe(json.dumps(payload["correlation"]["inverse_pairs"], sort_keys=True)),
+        "Correlation clusters: "
+        + safe(json.dumps(payload["correlation"]["clusters"], sort_keys=True)),
+        f"Matrix JSON digest: {matrix_digest} (SHA-256; authoritative matrix is in JSON output)",
+        f"Policy status: {payload['policy_status']}",
+        "Policy checks: " + safe(json.dumps(payload["policy_checks"], sort_keys=True)),
         "Largest three risks:",
     ]
     for index, finding in enumerate(payload["top_risks"], 1):
         lines.extend(
             [
                 f"Risk {index}",
-                f"Type: {finding['type']}",
-                f"Severity: {finding['severity']}",
-                f"Summary: {finding['summary']}",
-                "Evidence: " + json.dumps(finding["evidence"], ensure_ascii=False, sort_keys=True),
-                "Affected positions: " + (", ".join(finding["affected_positions"]) or "None"),
+                f"Type: {safe(finding['type'])}",
+                f"Severity: {safe(finding['severity'])}",
+                f"Summary: {safe(finding['summary'])}",
+                "Evidence: "
+                + safe(json.dumps(finding["evidence"], ensure_ascii=False, sort_keys=True)),
+                "Affected positions: "
+                + (", ".join(safe(item) for item in finding["affected_positions"]) or "None"),
                 f"Review priority: {finding['review_priority']}",
-                "Simulation direction: " + (finding["simulation_direction"] or "Not available"),
+                "Simulation direction: "
+                + (
+                    safe(finding["simulation_direction"])
+                    if finding["simulation_direction"]
+                    else "Not available"
+                ),
             ]
         )
     return "\n".join(lines)
@@ -212,11 +258,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output = Path(args.output)
                 # Validate before writing either sibling so unsafe paths are side-effect free.
                 resolve_output_path(settings.data_home, output / "portfolio_report.json")
-                SnapshotStore(settings.data_home).save(
-                    output / "portfolio_report.json", rendered + "\n"
-                )
-                SnapshotStore(settings.data_home).save(
-                    output / "portfolio_report.md", report.to_markdown()
+                SnapshotStore(settings.data_home).save_bundle(
+                    output,
+                    {
+                        "portfolio_report.json": rendered + "\n",
+                        "portfolio_report.md": report.to_markdown(),
+                    },
                 )
             print(
                 rendered if args.as_json else report.to_markdown(), end="\n" if args.as_json else ""
@@ -252,6 +299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except InvalidSnapshot as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
+    except UnsupportedRiskError as exc:
+        return _emit_error(args, "UNSUPPORTED_PORTFOLIO", str(exc))
     except RiskInputError as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except SnapshotAlreadyExists as exc:

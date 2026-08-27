@@ -3,7 +3,7 @@
   "$id": "https://portfolio-analyst.local/schemas/portfolio_report.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "as_of", "source_snapshot_id", "base_currency", "coverage", "data_quality_status", "data_quality_notes", "summary", "largest_risks", "concentration", "exposures", "correlation", "lifecycle", "performance", "options", "hypothetical_simulation_candidates", "data_gaps"],
+  "required": ["schema_version", "as_of", "source_snapshot_id", "base_currency", "coverage", "data_quality_status", "data_quality_notes", "overall_risk", "policy_status", "policy_checks", "summary", "largest_risks", "concentration", "exposures", "correlation", "lifecycle", "performance", "options", "hypothetical_simulation_candidates", "data_gaps", "risk_report"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "as_of": {"type": "string", "format": "date-time"},
@@ -12,6 +12,9 @@
     "coverage": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/coverage"},
     "data_quality_status": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/qualityStatus"},
     "data_quality_notes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "overall_risk": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/severity"},
+    "policy_status": {"enum": ["NOT_CONFIGURED", "CONFIGURED"]},
+    "policy_checks": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/policyChecks"},
     "summary": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/summary"},
     "largest_risks": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/finding"}},
     "concentration": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration"},
@@ -21,6 +24,7 @@
     "performance": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_5"}}},
     "options": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "NOT_RUN_PHASE_6"}}},
     "hypothetical_simulation_candidates": {"type": "array", "items": {"type": "string", "pattern": "^Hypothetical only:", "minLength": 20}},
-    "data_gaps": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "data_gaps": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "risk_report": {"$ref": "https://portfolio-analyst.local/schemas/risk_report.schema.json"}
   }
 }

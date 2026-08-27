@@ -3,8 +3,10 @@
 Phase 2 answers one question: what does one immutable portfolio snapshot say about current
 structure and its largest review risks? It does not produce independent buy/sell conclusions or
 orders. Every JSON and Markdown report repeats the snapshot's `snapshot_id`, `as_of`, coverage,
-quality state, and quality notes. A saved snapshot is schema-validated and its full-body content ID
-is recomputed before analysis.
+quality state, and quality notes. Snapshot bytes use descriptor-relative `O_NOFOLLOW` traversal with
+file and parent inode revalidation (Windows uses lstat/reparse checks). After schema and full-body
+identity checks, a dedicated Phase 1 validator recomputes FX, valuation, weight, NAV, exposure,
+alias, and quality invariants before analysis trusts the document.
 
 ## Metrics and bases
 
@@ -15,10 +17,10 @@ Before these metrics, holdings from different accounts are grouped by normalized
 market-qualified identity. A bare ticker in two markets remains two economic positions. Duplicate
 rows with conflicting currency/provenance, security type, sector, industry, region, theme set,
 asset class, or configured role fail closed; empty, already-qualified, or unsupported identities
-are not guessed. Market values, weights, and supported P&L fields are summed only after these gates.
-When a snapshot has any signed short/hedge weight or positive short exposure, all long-only
-concentration metrics are `UNAVAILABLE`: signed weights are never silently squared into an HHI.
-The report retains gross/net evidence for review.
+are not guessed. Market values and weights are summed only after these gates. Exact-zero quantity
+or base-value rows are excluded from every current Phase 2 population. P&L evidence is deferred to
+Phase 5. Any nonzero short/hedge position fails with `UNSUPPORTED_PORTFOLIO`; signed net weights are
+never presented as ordinary NAV exposure or fed to HHI.
 
 Sector and region views add each position's NAV weight. Aggregation defensively applies the shared
 Phase 1 sentinel normalization: blank values and case-insensitive `UNKNOWN`, `N/A`, `NONE`, and
@@ -31,10 +33,9 @@ has two separately named views:
 - `ADDITIVE_SPLIT_ALLOCATION`: weight is divided equally over unique tags. A position without tags
   contributes to `UNKNOWN`; the view is additive.
 
-These views must never be added together or substituted for each other. P&L concentration is
-emitted only when reported realized or unrealized base-currency P&L exists. Role imbalance is
-emitted only when every analyzed holding has an explicit role. Option delta is intentionally not
-calculated in Phase 2.
+These views must never be added together or substituted for each other. Role imbalance is emitted
+only when every analyzed holding has an explicit role. Option delta is intentionally not calculated
+in Phase 2.
 
 ## Correlation evidence
 
@@ -44,8 +45,10 @@ with explicit start/end dates, `NONE` session, page size 1000, and JSON output. 
 unadjusted prices, arbitrary pagination, malformed codes/dates, and unknown flags fail before a
 subprocess starts. The official file is not modified.
 
-Correlation uses aligned adjusted-close daily returns. Defaults are 120 trading prices, at least 60
-overlapping return observations, high absolute correlation 0.75, and medium 0.55. Lookback is an
+For each pair, correlation first intersects adjusted-close dates and only then computes both return
+series over identical consecutive common-date intervals. It never compares a multi-session return
+with a one-session return under one end date. Defaults are 120 trading prices, at least 60
+overlapping return intervals, positive high correlation 0.75, and positive medium 0.55. Lookback is an
 integer from 2 through 5000; minimum overlap is a positive integer no greater than `lookback - 1`.
 Thresholds are finite Decimals satisfying `0 <= medium <= high <= 1` and are serialized in the
 correlation evidence. Pearson means, covariance, variance, square root, and division all remain
@@ -53,13 +56,22 @@ Decimal at a deterministic precision; there is no float conversion. Dates must b
 strictly increasing and unique; closes must be finite and positive. Constant series, malformed
 rows, duplicate/non-monotonic dates, missing histories, or too little overlap produce
 `PARTIAL`/`UNAVAILABLE` coverage and notes. No value is imputed and no pseudo-correlation is made.
-High-correlation clusters are deterministic connected components of high-correlation pairs.
+Positive `pairs` and concentration clusters use only `coefficient >= threshold`. Strong negative
+coefficients are serialized separately as `inverse_pairs` diversification evidence and never form
+a shared-shock cluster. High-correlation clusters are deterministic connected components of
+positive high-correlation pairs.
 The matrix is square over every available canonical identity. A symmetric `null` cell explicitly
 marks a pair without sufficient evidence; it is not an imputed coefficient. Runtime validation in
 both report entry points checks coverage/status consistency, threshold ordering, square symmetric
 matrix identity and diagonal rules, pair uniqueness/count/band agreement, and exact connected
 components for high-correlation clusters. Structurally valid but semantically inconsistent reports
 are rejected with a domain validation error.
+The requested calendar interval is `as_of - max(2 * lookback, 180) days` through `as_of`, inclusive;
+rows outside it are rejected as lookahead/out-of-request evidence. Defaults cap current positions at 200, history symbols and
+requests at 100, pair operations at 4,950, wall time at 30 seconds, each provider call at 5 seconds,
+and lookback at 5,000. Top NAV-weight positions are selected deterministically; omissions set
+`BUDGET_LIMIT`, a reason, and partial quality. Requests are sequential, optionally rate-spaced, and
+a timeout or source-wide exception opens an early circuit breaker.
 
 The live adapter requires the Futu SDK and OpenD. When either is unavailable, the portfolio report
 still succeeds and states correlation is unavailable. Tests inject deterministic adjusted-price
@@ -87,10 +99,9 @@ There are no personal-investment defaults. Optional thresholds come only from
 Values are Decimal NAV fractions in `(0, 1]`. The report says `NOT_CONFIGURED` when the file is
 absent and reports evidence without threshold-based claims. When configured, every check serializes
 the measured value, threshold, and breach boolean. Policy never checks the overlap-full theme view.
-Without a policy, LOW/MEDIUM severity is a neutral deterministic review-order label based on the
-relative structure present in the same snapshot; it is not a threshold breach or personal advice.
-Only a serialized `policy_threshold_applied: true` can elevate a supported finding for a configured
-threshold breach.
+Without a policy, every finding and overall risk are `UNRATED`; evidence is not silently converted
+to LOW/MEDIUM advice. Policy-backed findings are rated strictly from serialized thresholds and
+breach booleans, then sorted by severity, review priority, stable type, and identity.
 
 ## Commands and persistence
 
@@ -104,7 +115,8 @@ python scripts/portfolio.py analyze --latest --output reports/RUN
 Exactly one of `--latest` and `--snapshot` is required. Inputs and outputs are relative and confined
 below `PORTFOLIO_AGENT_HOME`; symlinked snapshot paths are rejected. Default and `--no-save` runs
 create no state. `risk --output FILE` saves one immutable JSON file. `analyze --output DIRECTORY`
-saves immutable `portfolio_report.json` and `portfolio_report.md`. Non-persisting Phase 1 snapshots
+saves immutable `portfolio_report.json` and `portfolio_report.md` as one staged, preflighted,
+rollback-capable transaction; collision or commit failure leaves neither new sibling. Non-persisting Phase 1 snapshots
 use ephemeral account aliases; reports from separate ephemeral invocations cannot safely join those
 aliases and explicitly inherit that quality warning.
 
@@ -120,3 +132,7 @@ summary, structured evidence, affected market-qualified positions, review priori
 explicitly hypothetical simulation direction or an unavailable marker. JSON Schemas recursively
 close structured objects with `additionalProperties: false`; dynamic exposure/matrix keys retain
 typed value schemas.
+Markdown escapes every untrusted label, note, finding, link/HTML metacharacter, and control;
+terminal output strips ANSI/control/newline injection. Matrix details remain authoritative in
+`portfolio_report.json`, and Markdown records the matrix SHA-256 digest. Portfolio JSON embeds the
+complete risk report, and runtime validation requires every duplicated risk field to match exactly.

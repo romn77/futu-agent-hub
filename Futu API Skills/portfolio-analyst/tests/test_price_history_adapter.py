@@ -85,3 +85,22 @@ def test_provider_parses_only_forward_adjusted_monotonic_daily_closes(monkeypatc
         ("2026-08-25", "100.0"),
         ("2026-08-26", "101.0"),
     ]
+
+
+def test_provider_forwards_bounded_per_call_timeout_to_audited_adapter():
+    observed = {}
+
+    class Adapter:
+        def read_private_json(self, name, arguments, *, timeout):
+            observed.update(name=name, arguments=arguments, timeout=timeout)
+            return {"code": "US.AAPL", "ktype": "1d", "source": "history", "data": []}
+
+    FutuAdjustedPriceProvider(Adapter()).history(
+        "AAPL",
+        market="US",
+        lookback=120,
+        as_of=date(2026, 8, 27),
+        timeout_seconds=1.25,
+    )
+
+    assert observed["timeout"] == 1.25

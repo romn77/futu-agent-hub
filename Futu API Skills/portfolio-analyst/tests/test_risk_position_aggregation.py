@@ -108,7 +108,7 @@ def test_unqualified_or_ambiguous_security_identity_fails_closed(position):
         analyze_risk(replace(source, positions=(position, *source.positions[1:])))
 
 
-def test_duplicate_holding_pnl_is_aggregated_before_contributor_share():
+def test_duplicate_holding_pnl_does_not_enter_current_structure_findings_before_phase_5():
     source = snapshot()
     first = replace(source.positions[0], unrealized_pl_base=Decimal("40"))
     duplicate = replace(
@@ -121,9 +121,7 @@ def test_duplicate_holding_pnl_is_aggregated_before_contributor_share():
     other = replace(source.positions[1], unrealized_pl_base=Decimal("10"))
     report = analyze_risk(replace(source, positions=(first, duplicate, other)))
 
-    finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
-    assert finding.evidence["largest_absolute_share"] == Decimal("0.9")
-    assert finding.affected_positions == ("US.AAA",)
+    assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
 
 
 @pytest.mark.parametrize(

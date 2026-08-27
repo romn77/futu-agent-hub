@@ -19,7 +19,13 @@ from portfolio_analyst.models import (
 )
 from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.reporting import build_portfolio_report
-from portfolio_analyst.risk import PortfolioPolicy, PricePoint, analyze_risk, load_portfolio_policy
+from portfolio_analyst.risk import (
+    PortfolioPolicy,
+    PricePoint,
+    UnsupportedRiskError,
+    analyze_risk,
+    load_portfolio_policy,
+)
 from portfolio_analyst.schema import validate_portfolio_report_document, validate_risk_document
 
 
@@ -95,8 +101,17 @@ def snapshot() -> PortfolioSnapshot:
         short_exposure_base=Decimal("0"),
         gross_exposure_base=Decimal("900"),
         net_exposure_base=Decimal("900"),
-        exposures={"sector": {}, "region": {}, "theme": {}, "asset_class": {}},
-        data_quality=DataQuality("PARTIAL", warnings=("fixture warning",)),
+        exposures={
+            "sector": {"TECH": Decimal("0.7"), "HEALTH": Decimal("0.2")},
+            "region": {"US": Decimal("0.7"), "EU": Decimal("0.2")},
+            "theme": {"AI": Decimal("0.7"), "CLOUD": Decimal("0.4")},
+            "asset_class": {"EQUITY": Decimal("0.9")},
+        },
+        data_quality=DataQuality(
+            "PARTIAL",
+            warnings=("fixture warning", "one or more classifications are UNKNOWN"),
+            missing_fields=("classification",),
+        ),
     )
     return replace(value, snapshot_id=snapshot_identity(value))
 
@@ -160,18 +175,17 @@ def test_sanitized_risk_golden_snippet_is_deterministic():
     )
 
 
-def test_signed_short_positions_make_long_only_concentration_unavailable():
+def test_signed_short_positions_fail_closed_until_signed_risk_semantics_exist():
     source = snapshot()
     short = replace(source.positions[2], weight=Decimal("-0.2"), market_value_base=Decimal("-200"))
-    report = analyze_risk(
-        replace(
-            source, positions=(*source.positions[:2], short), short_exposure_base=Decimal("200")
+    with pytest.raises(UnsupportedRiskError, match="signed"):
+        analyze_risk(
+            replace(
+                source,
+                positions=(*source.positions[:2], short),
+                short_exposure_base=Decimal("200"),
+            )
         )
-    )
-
-    assert report.concentration.status == "UNAVAILABLE"
-    assert report.concentration.hhi is None
-    assert "signed" in report.concentration.note.lower()
 
 
 def test_correlation_uses_adjusted_return_overlap_and_reports_partial_coverage():
@@ -251,7 +265,7 @@ def test_comprehensive_report_reuses_snapshot_identity_and_has_required_placehol
         assert f"Type: {finding['type']}" in markdown
         assert f"Severity: {finding['severity']}" in markdown
         assert f"Summary: {finding['summary']}" in markdown
-        assert f"Evidence: {json.dumps(finding['evidence'], sort_keys=True)}" in markdown
+        assert "- Evidence:" in markdown
         assert (
             f"Affected positions: {', '.join(finding['affected_positions']) or 'None'}" in markdown
         )
@@ -323,7 +337,7 @@ def test_optional_policy_loader_requires_user_provenance_and_has_no_defaults(tmp
         load_portfolio_policy(tmp_path)
 
 
-def test_pnl_concentration_is_reported_only_when_source_fields_support_it():
+def test_pnl_concentration_is_deferred_until_phase_5_even_when_source_fields_exist():
     source = snapshot()
     positions = (
         replace(source.positions[0], unrealized_pl_base=Decimal("90")),
@@ -332,9 +346,7 @@ def test_pnl_concentration_is_reported_only_when_source_fields_support_it():
     )
     report = analyze_risk(replace(source, positions=positions))
 
-    finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
-    assert finding.evidence["largest_absolute_share"] == Decimal("0.9")
-    assert finding.affected_positions == ("US.AAA",)
+    assert "PNL_CONCENTRATION" not in {item.type for item in report.top_risks}
 
 
 def test_role_imbalance_is_absent_until_roles_are_configured_then_uses_nav_exposure():

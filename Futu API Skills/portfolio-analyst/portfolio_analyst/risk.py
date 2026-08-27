@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
+import inspect
+import queue
 import re
+import threading
+import time
 from types import MappingProxyType
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .models import NormalizedPosition, PortfolioSnapshot, _json_value
 from .normalization import canonical_unknown
-from .secure_config import load_optional_json_object
+from .secure_config import PrivateConfigError, load_optional_json_object
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,53 @@ class RiskConfigError(ValueError):
 
 class RiskInputError(ValueError):
     """Snapshot positions cannot be safely represented as economic holdings."""
+
+
+class UnsupportedRiskError(RiskInputError):
+    """The current portfolio requires risk semantics not implemented in Phase 2."""
+
+
+@dataclass(frozen=True)
+class RiskBudget:
+    max_positions: int = 200
+    max_history_symbols: int = 100
+    max_pair_operations: int = 4950
+    max_wall_seconds: Decimal = Decimal("30")
+    provider_timeout_seconds: Decimal = Decimal("5")
+    request_interval_seconds: Decimal = Decimal("0")
+
+    def __post_init__(self) -> None:
+        integer_bounds = (
+            ("max_positions", self.max_positions, 1, 1000),
+            ("max_history_symbols", self.max_history_symbols, 1, 200),
+            ("max_pair_operations", self.max_pair_operations, 0, 19900),
+        )
+        for name, value, lower, upper in integer_bounds:
+            if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
+                raise RiskConfigError(f"{name} must be an integer between {lower} and {upper}")
+        for name, value, lower, upper in (
+            ("max_wall_seconds", self.max_wall_seconds, Decimal("0.01"), Decimal("300")),
+            (
+                "provider_timeout_seconds",
+                self.provider_timeout_seconds,
+                Decimal("0.001"),
+                Decimal("30"),
+            ),
+            (
+                "request_interval_seconds",
+                self.request_interval_seconds,
+                Decimal("0"),
+                Decimal("5"),
+            ),
+        ):
+            if (
+                not isinstance(value, Decimal)
+                or not value.is_finite()
+                or not lower <= value <= upper
+            ):
+                raise RiskConfigError(f"{name} is outside the bounded analysis contract")
+        if self.provider_timeout_seconds > self.max_wall_seconds:
+            raise RiskConfigError("provider timeout cannot exceed the analysis wall-time budget")
 
 
 @dataclass(frozen=True)
@@ -107,6 +158,8 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
     grouped: dict[str, list[NormalizedPosition]] = {}
     identities: dict[str, tuple[str, str]] = {}
     for position in snapshot.positions:
+        if position.quantity == 0 or position.market_value_base == 0:
+            continue
         identity, market, symbol = _canonical_identity(position)
         grouped.setdefault(identity, []).append(position)
         identities[identity] = (market, symbol)
@@ -175,7 +228,10 @@ def aggregate_economic_positions(snapshot: PortfolioSnapshot) -> tuple[EconomicP
 
 
 def load_portfolio_policy(data_home: Any) -> PortfolioPolicy | None:
-    payload = load_optional_json_object(data_home, "risk_policy.json")
+    try:
+        payload = load_optional_json_object(data_home, "risk_policy.json")
+    except PrivateConfigError as exc:
+        raise PolicyConfigError("risk policy configuration is unavailable or unsafe") from exc
     if payload is None:
         return None
     if payload.get("provenance") != "USER_CONFIG":
@@ -240,6 +296,7 @@ class CorrelationEvidence:
     coverage: Mapping[str, int]
     matrix: Mapping[str, Mapping[str, Decimal | None]]
     pairs: tuple[CorrelationPair, ...]
+    inverse_pairs: tuple[CorrelationPair, ...]
     clusters: tuple[tuple[str, ...], ...]
     notes: tuple[str, ...]
 
@@ -343,12 +400,13 @@ def _exposures(positions: Sequence[EconomicPosition]) -> ExposureViews:
     )
 
 
-def _valid_returns(points: Sequence[PricePoint] | None) -> dict[date, Decimal] | None:
+def _valid_prices(
+    points: Sequence[PricePoint] | None, *, start: date, as_of: date, max_points: int
+) -> dict[date, Decimal] | None:
     if points is None or len(points) < 2:
         return None
     previous_date: date | None = None
-    previous_close: Decimal | None = None
-    returns: dict[date, Decimal] = {}
+    prices: dict[date, Decimal] = {}
     for point in points:
         try:
             close = Decimal(point.adjusted_close)
@@ -356,17 +414,31 @@ def _valid_returns(points: Sequence[PricePoint] | None) -> dict[date, Decimal] |
             return None
         if not close.is_finite() or close <= 0:
             return None
+        if point.date < start or point.date > as_of:
+            return None
         if previous_date is not None and point.date <= previous_date:
             return None
-        if previous_close is not None:
-            with localcontext() as context:
-                context.prec = 50
-                daily_return = close / previous_close - Decimal("1")
-            if not daily_return.is_finite():
-                return None
-            returns[point.date] = daily_return
-        previous_date, previous_close = point.date, close
-    return returns
+        prices[point.date] = close
+        previous_date = point.date
+    return dict(tuple(prices.items())[-max_points:])
+
+
+def _aligned_pair_returns(
+    left: Mapping[date, Decimal], right: Mapping[date, Decimal]
+) -> tuple[tuple[Decimal, ...], tuple[Decimal, ...]]:
+    common_dates = sorted(set(left) & set(right))
+    left_returns: list[Decimal] = []
+    right_returns: list[Decimal] = []
+    for start_date, end_date in zip(common_dates, common_dates[1:]):
+        with localcontext() as context:
+            context.prec = 50
+            left_return = left[end_date] / left[start_date] - Decimal("1")
+            right_return = right[end_date] / right[start_date] - Decimal("1")
+        if not left_return.is_finite() or not right_return.is_finite():
+            return (), ()
+        left_returns.append(left_return)
+        right_returns.append(right_return)
+    return tuple(left_returns), tuple(right_returns)
 
 
 def _pearson(left: Sequence[Decimal], right: Sequence[Decimal]) -> Decimal | None:
@@ -392,6 +464,8 @@ def _pearson(left: Sequence[Decimal], right: Sequence[Decimal]) -> Decimal | Non
         coefficient = covariance / denominator
         if not coefficient.is_finite() or abs(coefficient) > 1:
             return None
+        if Decimal("1") - abs(coefficient) <= Decimal("1e-40"):
+            return Decimal("1") if coefficient > 0 else Decimal("-1")
         return +coefficient
 
 
@@ -444,6 +518,38 @@ def _clusters(
     return tuple(sorted(found))
 
 
+def _bounded_history_call(
+    provider: PriceHistoryProvider,
+    position: EconomicPosition,
+    *,
+    lookback: int,
+    as_of: date,
+    timeout_seconds: Decimal,
+) -> Sequence[PricePoint] | None:
+    results: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            kwargs = {"market": position.market, "lookback": lookback, "as_of": as_of}
+            if "timeout_seconds" in inspect.signature(provider.history).parameters:
+                kwargs["timeout_seconds"] = float(timeout_seconds)
+            value = provider.history(position.symbol, **kwargs)
+        except BaseException as exc:
+            results.put((False, exc))
+        else:
+            results.put((True, value))
+
+    worker = threading.Thread(target=invoke, daemon=True, name="portfolio-price-history")
+    worker.start()
+    worker.join(float(timeout_seconds))
+    if worker.is_alive():
+        raise TimeoutError("adjusted price provider exceeded its per-call timeout")
+    ok, value = results.get_nowait()
+    if not ok:
+        raise value
+    return value
+
+
 def _correlation(
     snapshot: PortfolioSnapshot,
     positions: Sequence[EconomicPosition],
@@ -453,6 +559,10 @@ def _correlation(
     minimum: int,
     high: Decimal,
     medium: Decimal,
+    budget: RiskBudget,
+    deadline: Decimal,
+    clock: Callable[[], Decimal | float],
+    sleeper: Callable[[float], None],
 ) -> CorrelationEvidence:
     identities = {position.identity: position for position in positions}
     symbols = tuple(sorted(identities))
@@ -468,54 +578,76 @@ def _correlation(
             MappingProxyType({}),
             (),
             (),
+            (),
             ("Adjusted daily price provider was not supplied; correlation was not inferred.",),
         )
     histories: dict[str, dict[date, Decimal]] = {}
     invalid: list[str] = []
+    source_failure: str | None = None
+    requested_start = snapshot.as_of.date() - timedelta(days=max(lookback * 2, 180))
     for identity in symbols:
         position = identities[identity]
+        remaining = deadline - Decimal(str(clock()))
+        if remaining <= 0:
+            source_failure = (
+                "Correlation wall-time budget exhausted; source circuit breaker opened."
+            )
+            break
         try:
-            returns = _valid_returns(
-                provider.history(
-                    position.symbol,
-                    market=position.market,
+            prices = _valid_prices(
+                _bounded_history_call(
+                    provider,
+                    position,
                     lookback=lookback,
                     as_of=snapshot.as_of.date(),
-                )
+                    timeout_seconds=min(budget.provider_timeout_seconds, remaining),
+                ),
+                start=requested_start,
+                as_of=snapshot.as_of.date(),
+                max_points=lookback,
             )
         except Exception:
-            returns = None
-        if returns is None:
+            source_failure = "Adjusted price source failed or timed out; circuit breaker opened."
+            break
+        if prices is None:
             invalid.append(identity)
         else:
-            histories[identity] = returns
+            histories[identity] = prices
+        if budget.request_interval_seconds:
+            sleeper(float(budget.request_interval_seconds))
+    if source_failure:
+        invalid.extend(identity for identity in symbols if identity not in histories)
     available_symbols = tuple(sorted(histories))
     matrix: dict[str, dict[str, Decimal | None]] = {
         left: {right: Decimal("1") if left == right else None for right in available_symbols}
         for left in available_symbols
     }
     pairs: list[CorrelationPair] = []
+    inverse_pairs: list[CorrelationPair] = []
     high_edges: list[tuple[str, str]] = []
     computed_pairs = 0
     for index, left in enumerate(available_symbols):
         for right in available_symbols[index + 1 :]:
-            dates = sorted(set(histories[left]) & set(histories[right]))
-            if len(dates) < minimum:
+            left_returns, right_returns = _aligned_pair_returns(histories[left], histories[right])
+            sample_count = len(left_returns)
+            if sample_count < minimum:
                 continue
-            coefficient = _pearson(
-                [histories[left][day] for day in dates], [histories[right][day] for day in dates]
-            )
+            coefficient = _pearson(left_returns, right_returns)
             if coefficient is None:
                 continue
             computed_pairs += 1
             matrix[left][right] = coefficient
             matrix[right][left] = coefficient
-            magnitude = abs(coefficient)
-            if magnitude >= medium:
-                band = "HIGH" if magnitude >= high else "MEDIUM"
-                pairs.append(CorrelationPair((left, right), coefficient, len(dates), band))
-                if magnitude >= high:
+            if coefficient >= medium:
+                band = "HIGH" if coefficient >= high else "MEDIUM"
+                pairs.append(CorrelationPair((left, right), coefficient, sample_count, band))
+                if coefficient >= high:
                     high_edges.append((left, right))
+            elif coefficient <= -medium:
+                band = "HIGH" if coefficient <= -high else "MEDIUM"
+                inverse_pairs.append(
+                    CorrelationPair((left, right), coefficient, sample_count, band)
+                )
     status = "UNAVAILABLE"
     expected_pairs = len(symbols) * (len(symbols) - 1) // 2
     if computed_pairs:
@@ -527,6 +659,8 @@ def _correlation(
     notes = []
     if invalid:
         notes.append("Missing or invalid adjusted histories: " + ", ".join(sorted(invalid)))
+    if source_failure:
+        notes.append(source_failure)
     if status == "UNAVAILABLE":
         notes.append("No pair met the minimum overlapping adjusted-return observations.")
     elif computed_pairs < expected_pairs:
@@ -546,7 +680,8 @@ def _correlation(
         True,
         MappingProxyType({"requested": len(symbols), "available": len(histories)}),
         frozen_matrix,
-        tuple(sorted(pairs, key=lambda pair: (-abs(pair.coefficient), pair.symbols))),
+        tuple(sorted(pairs, key=lambda pair: (-pair.coefficient, pair.symbols))),
+        tuple(sorted(inverse_pairs, key=lambda pair: (pair.coefficient, pair.symbols))),
         _clusters(available_symbols, high_edges),
         tuple(notes),
     )
@@ -568,7 +703,7 @@ def _findings(
         return tuple(
             RiskFinding(
                 finding_type,
-                "LOW",
+                "UNRATED",
                 summary,
                 MappingProxyType({"available_positions": 0}),
                 (),
@@ -591,10 +726,21 @@ def _findings(
         )
     findings: list[RiskFinding] = []
     if concentration.status == "AVAILABLE":
+        position_checks = tuple(
+            policy_checks[name]
+            for name in ("single_position", "top_3", "top_5")
+            if name in policy_checks
+        )
         findings.append(
             RiskFinding(
                 "POSITION_CONCENTRATION",
-                "MEDIUM",
+                (
+                    "HIGH"
+                    if any(check["breached"] for check in position_checks)
+                    else "LOW"
+                    if position_checks
+                    else "UNRATED"
+                ),
                 "Largest holding is the primary single-name concentration review signal.",
                 MappingProxyType(
                     {
@@ -611,22 +757,17 @@ def _findings(
                 "Hypothetical only: simulate reducing the largest weight and recompute concentration.",
             )
         )
-    else:
-        findings.append(
-            RiskFinding(
-                "SIGNED_EXPOSURE",
-                "MEDIUM",
-                "Signed positions require gross/net and hedge-aware review; long-only HHI is unavailable.",
-                MappingProxyType({"short_exposure_base": snapshot.short_exposure_base}),
-                tuple(position.identity for position in positions if position.weight < 0),
-                "P1",
-            )
-        )
     sector, sector_weight = max(exposures.sector.items(), key=lambda item: (item[1], item[0]))
     findings.append(
         RiskFinding(
             "SECTOR_CONCENTRATION",
-            "HIGH" if policy_checks.get("sector", {}).get("breached") else "MEDIUM",
+            (
+                "HIGH"
+                if policy_checks.get("sector", {}).get("breached")
+                else "LOW"
+                if "sector" in policy_checks
+                else "UNRATED"
+            ),
             f"{sector} is the largest deterministic sector exposure.",
             MappingProxyType(
                 {
@@ -641,40 +782,28 @@ def _findings(
             "Hypothetical only: simulate lower exposure to the largest sector and recompute views.",
         )
     )
-    pnl_values = {
-        position.identity: sum(
-            (
-                value
-                for value in (position.unrealized_pl_base, position.realized_pl_base)
-                if value is not None
-            ),
-            Decimal("0"),
-        )
-        for position in positions
-        if position.unrealized_pl_base is not None or position.realized_pl_base is not None
-    }
-    pnl_total = sum((abs(value) for value in pnl_values.values()), Decimal("0"))
-    roles_configured = bool(positions) and all(position.position_role for position in positions)
-    if pnl_total:
-        symbol, amount = max(pnl_values.items(), key=lambda item: (abs(item[1]), item[0]))
+    if policy_checks.get("region", {}).get("breached"):
+        region, region_weight = max(exposures.region.items(), key=lambda item: (item[1], item[0]))
         findings.append(
             RiskFinding(
-                "PNL_CONCENTRATION",
-                "MEDIUM",
-                "One holding dominates the available absolute realized and unrealized P&L evidence.",
+                "REGION_CONCENTRATION",
+                "HIGH",
+                f"{region} is the largest deterministic region exposure.",
                 MappingProxyType(
                     {
-                        "basis": "ABSOLUTE_REPORTED_PNL",
-                        "largest_absolute_share": abs(amount) / pnl_total,
-                        "source_fields": ("unrealized_pl_base", "realized_pl_base"),
+                        "basis": "NAV",
+                        "region": region,
+                        "weight": region_weight,
+                        "policy_threshold_applied": True,
                     }
                 ),
-                (symbol,),
-                "P1",
-                "Hypothetical only: simulate the dominant P&L contributor returning to cost.",
+                tuple(position.identity for position in positions if position.region == region),
+                "P2",
+                "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
             )
         )
-    elif roles_configured:
+    roles_configured = bool(positions) and all(position.position_role for position in positions)
+    if roles_configured:
         roles: dict[str, Decimal] = {}
         for position in positions:
             role = str(position.position_role).upper()
@@ -683,7 +812,7 @@ def _findings(
         findings.append(
             RiskFinding(
                 "ROLE_IMBALANCE",
-                "LOW",
+                "UNRATED",
                 f"{dominant_role} is the largest configured portfolio-role exposure.",
                 MappingProxyType(
                     {
@@ -706,7 +835,7 @@ def _findings(
         findings.append(
             RiskFinding(
                 "CORRELATION_CLUSTER",
-                "MEDIUM",
+                "UNRATED",
                 "A high-correlation cluster may reduce effective diversification.",
                 MappingProxyType({"symbols": cluster, "threshold": high_correlation}),
                 cluster,
@@ -721,7 +850,13 @@ def _findings(
         findings.append(
             RiskFinding(
                 "THEME_CONCENTRATION",
-                "HIGH" if policy_checks.get("theme_split", {}).get("breached") else "LOW",
+                (
+                    "HIGH"
+                    if policy_checks.get("theme_split", {}).get("breached")
+                    else "LOW"
+                    if "theme_split" in policy_checks
+                    else "UNRATED"
+                ),
                 f"{theme} is the largest additive split-allocation theme exposure.",
                 MappingProxyType(
                     {
@@ -739,7 +874,19 @@ def _findings(
                 "P3",
             )
         )
-    return tuple(findings[:3])
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNRATED": 4}
+    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    return tuple(
+        sorted(
+            findings,
+            key=lambda finding: (
+                severity_order[finding.severity],
+                priority_order[finding.review_priority],
+                finding.type,
+                finding.affected_positions,
+            ),
+        )[:3]
+    )
 
 
 def analyze_risk(
@@ -751,19 +898,47 @@ def analyze_risk(
     high_correlation: Decimal = Decimal("0.75"),
     medium_correlation: Decimal = Decimal("0.55"),
     policy: PortfolioPolicy | None = None,
+    budget: RiskBudget | None = None,
+    clock: Callable[[], Decimal | float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> RiskReport:
+    started = Decimal(str(clock()))
+    active_budget = budget or RiskBudget()
     _validate_risk_config(lookback, minimum_observations, medium_correlation, high_correlation)
-    economic_positions = aggregate_economic_positions(snapshot)
+    all_economic_positions = aggregate_economic_positions(snapshot)
+    if snapshot.short_exposure_base > 0 or any(
+        position.weight < 0 for position in all_economic_positions
+    ):
+        raise UnsupportedRiskError(
+            "signed short or hedge portfolios are unsupported by Phase 2 long-only risk semantics"
+        )
+    ranked_positions = sorted(
+        all_economic_positions, key=lambda position: (-position.weight, position.identity)
+    )
+    economic_positions = tuple(ranked_positions[: active_budget.max_positions])
+    history_count = min(len(economic_positions), active_budget.max_history_symbols)
+    while history_count * (history_count - 1) // 2 > active_budget.max_pair_operations:
+        history_count -= 1
+    history_positions = economic_positions[:history_count]
+    budget_reasons = []
+    if len(economic_positions) < len(all_economic_positions):
+        budget_reasons.append("current position population capped by max_positions")
+    if history_count < len(economic_positions):
+        budget_reasons.append("history symbols capped by request or pair-operation budget")
     concentration = _concentration(snapshot, economic_positions)
     exposures = _exposures(economic_positions)
     correlation = _correlation(
         snapshot,
-        economic_positions,
+        history_positions,
         price_provider,
         lookback=lookback,
         minimum=minimum_observations,
         high=high_correlation,
         medium=medium_correlation,
+        budget=active_budget,
+        deadline=started + active_budget.max_wall_seconds,
+        clock=clock,
+        sleeper=sleeper,
     )
     checks: dict[str, Any] = {}
     if policy is not None:
@@ -791,8 +966,6 @@ def analyze_risk(
         frozen_checks,
         high_correlation,
     )
-    if any(checks.get(name, {}).get("breached") for name in ("single_position", "top_3", "top_5")):
-        findings = (replace(findings[0], severity="HIGH"), *findings[1:])
     notes = tuple(
         dict.fromkeys(
             (
@@ -800,11 +973,12 @@ def analyze_risk(
                 *(f"missing field: {field}" for field in snapshot.data_quality.missing_fields),
                 *snapshot.data_quality.source_errors,
                 *correlation.notes,
+                *(f"BUDGET_LIMIT: {reason}" for reason in budget_reasons),
             )
         )
     )
     quality_status = snapshot.data_quality.status
-    if quality_status == "COMPLETE" and correlation.status != "COMPLETE":
+    if quality_status == "COMPLETE" and (correlation.status != "COMPLETE" or budget_reasons):
         quality_status = "PARTIAL"
     return RiskReport(
         "1.0",
@@ -814,6 +988,10 @@ def analyze_risk(
             {
                 "source_holdings": len(snapshot.positions),
                 "positions": len(economic_positions),
+                "total_positions": len(all_economic_positions),
+                "omitted_positions": len(all_economic_positions) - len(economic_positions),
+                "budget_status": "BUDGET_LIMIT" if budget_reasons else "COMPLETE",
+                "budget_reason": "; ".join(budget_reasons) if budget_reasons else None,
                 "classified_sector": sum(p.sector != "UNKNOWN" for p in economic_positions),
                 "classified_region": sum(p.region != "UNKNOWN" for p in economic_positions),
                 "price_histories": correlation.coverage,
@@ -821,9 +999,13 @@ def analyze_risk(
         ),
         quality_status,
         notes,
-        max(
-            (finding.severity for finding in findings),
-            key=("LOW", "MEDIUM", "HIGH", "CRITICAL").index,
+        next(
+            (
+                severity
+                for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+                if any(finding.severity == severity for finding in findings)
+            ),
+            "UNRATED",
         ),
         concentration,
         exposures,

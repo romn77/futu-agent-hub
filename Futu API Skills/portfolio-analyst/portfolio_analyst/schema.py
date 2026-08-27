@@ -11,6 +11,8 @@ from typing import Any, NoReturn
 import jsonschema
 from referencing import Registry, Resource
 
+from .normalization import canonical_unknown
+
 
 class ReportSemanticError(ValueError):
     """A structurally valid report violates the risk evidence contract."""
@@ -36,7 +38,13 @@ def validate_snapshot_document(payload: dict[str, Any]) -> None:
 def _validate(payload: dict[str, Any], name: str) -> None:
     schema = json.loads(_schema_path(name).read_text(encoding="utf-8"))
     definitions = json.loads(_schema_path("report_defs.schema.json").read_text(encoding="utf-8"))
-    registry = Registry().with_resource(definitions["$id"], Resource.from_contents(definitions))
+    risk_schema = json.loads(_schema_path("risk_report.schema.json").read_text(encoding="utf-8"))
+    registry = Registry().with_resources(
+        [
+            (definitions["$id"], Resource.from_contents(definitions)),
+            (risk_schema["$id"], Resource.from_contents(risk_schema)),
+        ]
+    )
     validator = jsonschema.Draft202012Validator(
         schema, registry=registry, format_checker=jsonschema.FormatChecker()
     )
@@ -62,7 +70,7 @@ def _high_components(
 ) -> set[frozenset[str]]:
     adjacency = {identity: set() for identity in identities}
     for (left, right), coefficient in coefficients.items():
-        if abs(coefficient) >= high:
+        if coefficient >= high:
             adjacency[left].add(right)
             adjacency[right].add(left)
     components: set[frozenset[str]] = set()
@@ -155,17 +163,40 @@ def _validate_correlation_semantics(correlation: dict[str, Any]) -> None:
         sample_count = pair["sample_count"]
         if not minimum <= sample_count <= lookback - 1:
             _semantic_error("pair sample count must fit minimum and lookback return capacity")
-        magnitude = abs(coefficient)
-        expected_band = "HIGH" if magnitude >= high else "MEDIUM" if magnitude >= medium else None
+        expected_band = (
+            "HIGH" if coefficient >= high else "MEDIUM" if coefficient >= medium else None
+        )
         if pair["band"] != expected_band:
             _semantic_error("pair band must match configured thresholds")
         observed_pairs[key] = pair
 
-    expected_pair_keys = {
-        key for key, coefficient in coefficients.items() if abs(coefficient) >= medium
-    }
+    expected_pair_keys = {key for key, coefficient in coefficients.items() if coefficient >= medium}
     if set(observed_pairs) != expected_pair_keys:
-        _semantic_error("pairs must cover every matrix coefficient at or above medium threshold")
+        _semantic_error("pairs must cover every positive coefficient at or above medium threshold")
+
+    observed_inverse: set[tuple[str, str]] = set()
+    for pair in correlation["inverse_pairs"]:
+        left, right = pair["symbols"]
+        if left == right or left not in identities or right not in identities:
+            _semantic_error("inverse pair identities must be distinct available matrix members")
+        key = tuple(sorted((left, right)))
+        if key in observed_inverse or key not in coefficients:
+            _semantic_error("inverse pair identities must be unique available coefficients")
+        coefficient = _finite_decimal(pair["coefficient"], "inverse pair coefficient")
+        if coefficient != coefficients[key]:
+            _semantic_error("inverse pair coefficient must match the matrix")
+        sample_count = pair["sample_count"]
+        if not minimum <= sample_count <= lookback - 1:
+            _semantic_error("inverse pair sample count must fit the return capacity")
+        expected_band = (
+            "HIGH" if coefficient <= -high else "MEDIUM" if coefficient <= -medium else None
+        )
+        if pair["band"] != expected_band:
+            _semantic_error("inverse pair band must match negative thresholds")
+        observed_inverse.add(key)
+    expected_inverse = {key for key, coefficient in coefficients.items() if coefficient <= -medium}
+    if observed_inverse != expected_inverse:
+        _semantic_error("inverse pairs must cover every strong negative coefficient")
 
     observed_clusters: set[frozenset[str]] = set()
     for cluster in correlation["clusters"]:
@@ -182,10 +213,92 @@ def _validate_correlation_semantics(correlation: dict[str, Any]) -> None:
 def _validate_report_semantics(payload: dict[str, Any]) -> None:
     correlation = payload["correlation"]
     _validate_correlation_semantics(correlation)
+    coverage = payload["coverage"]
+    if coverage["positions"] + coverage["omitted_positions"] != coverage["total_positions"]:
+        _semantic_error("position budget coverage does not reconcile")
+    expected_budget = "BUDGET_LIMIT" if coverage["budget_reason"] else "COMPLETE"
+    if coverage["budget_status"] != expected_budget:
+        _semantic_error("budget status and reason are inconsistent")
     if payload["coverage"]["price_histories"] != correlation["coverage"]:
         _semantic_error("report price-history coverage must match correlation coverage")
-    if payload["coverage"]["positions"] != correlation["coverage"]["requested"]:
-        _semantic_error("requested histories must match economic-position coverage")
+    if correlation["coverage"]["requested"] > payload["coverage"]["positions"]:
+        _semantic_error("requested histories cannot exceed economic-position coverage")
+    exposure_totals: dict[str, Decimal] = {}
+    for view_name in ("sector", "region", "theme_full", "theme_split"):
+        total = Decimal("0")
+        for label, raw_weight in payload["exposures"][view_name]["weights"].items():
+            if canonical_unknown(label) != label:
+                raise ReportSemanticError(
+                    "exposure semantic validation failed: labels must be canonical"
+                )
+            weight = _finite_decimal(raw_weight, f"{view_name} exposure {label}")
+            if weight < 0:
+                raise ReportSemanticError(
+                    "exposure semantic validation failed: long-only weights cannot be negative"
+                )
+            total += weight
+        exposure_totals[view_name] = total
+    additive_total = exposure_totals["theme_split"]
+    if any(
+        abs(exposure_totals[name] - additive_total) > Decimal("1e-24")
+        for name in ("sector", "region")
+    ):
+        raise ReportSemanticError(
+            "exposure semantic validation failed: additive NAV views do not reconcile"
+        )
+    checks = payload["policy_checks"]
+    if payload["policy_status"] == "NOT_CONFIGURED" and checks:
+        raise ReportSemanticError("unconfigured policy cannot contain threshold checks")
+    for name, check in checks.items():
+        measured = _finite_decimal(check["measured"], f"policy {name} measured")
+        threshold = _finite_decimal(check["threshold"], f"policy {name} threshold")
+        if check["breached"] != (measured > threshold):
+            raise ReportSemanticError(f"policy breach boolean is inconsistent for {name}")
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNRATED": 4}
+    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    findings = payload.get("top_risks", payload.get("largest_risks"))
+    sorted_findings = sorted(
+        findings,
+        key=lambda finding: (
+            severity_order[finding["severity"]],
+            priority_order[finding["review_priority"]],
+            finding["type"],
+            tuple(finding["affected_positions"]),
+        ),
+    )
+    if findings != sorted_findings:
+        raise ReportSemanticError("risk findings are not deterministically severity-sorted")
+    rated = [finding["severity"] for finding in findings if finding["severity"] != "UNRATED"]
+    expected_overall = min(rated, key=severity_order.get) if rated else "UNRATED"
+    if payload["overall_risk"] != expected_overall:
+        raise ReportSemanticError("overall risk is inconsistent with rated findings")
+    if payload["policy_status"] == "NOT_CONFIGURED" and rated:
+        raise ReportSemanticError("findings cannot be rated without USER_CONFIG policy evidence")
+    finding_checks = {
+        "POSITION_CONCENTRATION": tuple(
+            name for name in ("single_position", "top_3", "top_5") if name in checks
+        ),
+        "SECTOR_CONCENTRATION": ("sector",) if "sector" in checks else (),
+        "REGION_CONCENTRATION": ("region",) if "region" in checks else (),
+        "THEME_CONCENTRATION": ("theme_split",) if "theme_split" in checks else (),
+    }
+    for finding in findings:
+        relevant = finding_checks.get(finding["type"], ())
+        applied = bool(relevant)
+        evidence_applied = finding["evidence"].get("policy_threshold_applied")
+        if evidence_applied is not None and evidence_applied != applied:
+            raise ReportSemanticError(
+                "finding policy evidence flag does not match configured checks"
+            )
+        expected_severity = (
+            "HIGH"
+            if any(checks[name]["breached"] for name in relevant)
+            else "LOW"
+            if relevant
+            else "UNRATED"
+        )
+        if finding["severity"] != expected_severity:
+            raise ReportSemanticError("finding severity is not supported by policy evidence")
 
 
 def validate_risk_document(payload: dict[str, Any]) -> None:
@@ -196,3 +309,23 @@ def validate_risk_document(payload: dict[str, Any]) -> None:
 def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
     _validate(payload, "portfolio_report.schema.json")
     _validate_report_semantics(payload)
+    embedded = payload["risk_report"]
+    _validate_report_semantics(embedded)
+    for portfolio_field, risk_field in (
+        ("as_of", "as_of"),
+        ("source_snapshot_id", "source_snapshot_id"),
+        ("coverage", "coverage"),
+        ("data_quality_status", "data_quality_status"),
+        ("data_quality_notes", "data_quality_notes"),
+        ("overall_risk", "overall_risk"),
+        ("concentration", "concentration"),
+        ("exposures", "exposures"),
+        ("correlation", "correlation"),
+        ("largest_risks", "top_risks"),
+        ("policy_status", "policy_status"),
+        ("policy_checks", "policy_checks"),
+    ):
+        if payload[portfolio_field] != embedded[risk_field]:
+            raise ReportSemanticError(
+                f"embedded risk report does not match portfolio field {portfolio_field}"
+            )

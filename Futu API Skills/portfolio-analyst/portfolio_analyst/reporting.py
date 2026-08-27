@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from typing import Any, Mapping
 
 from .models import PortfolioSnapshot, _deep_freeze, _json_value
+from .rendering import markdown_text
 from .risk import RiskReport, aggregate_economic_positions
 
 
@@ -22,10 +24,23 @@ class PortfolioReport:
 
     def to_markdown(self) -> str:
         data = self.to_dict()
+        md = markdown_text
+        matrix_digest = hashlib.sha256(
+            json.dumps(
+                data["correlation"]["matrix"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        pair_text = lambda pair: (  # noqa: E731
+            f"{md(pair['symbols'][0])}/{md(pair['symbols'][1])}: "
+            f"{pair['coefficient']} ({pair['band']}, n={pair['sample_count']})"
+        )
         lines = [
             "# Portfolio analysis",
             "",
-            f"- source_snapshot_id: `{data['source_snapshot_id']}`",
+            f"- source_snapshot_id: `{md(data['source_snapshot_id'])}`",
             f"- As of: {data['as_of']}",
             f"- NAV: {data['summary']['nav_base']} {data['base_currency']}",
             f"- Cash: {data['summary']['cash_base']} {data['base_currency']}",
@@ -39,6 +54,15 @@ class PortfolioReport:
             "",
             f"- Source holdings: {data['coverage']['source_holdings']}",
             f"- Economic positions: {data['coverage']['positions']}",
+            f"- Total current positions: {data['coverage']['total_positions']}",
+            f"- Omitted positions: {data['coverage']['omitted_positions']}",
+            f"- Budget status: {data['coverage']['budget_status']}",
+            "- Budget reason: "
+            + (
+                md(data["coverage"]["budget_reason"])
+                if data["coverage"]["budget_reason"]
+                else "None"
+            ),
             f"- Classified sector: {data['coverage']['classified_sector']}",
             f"- Classified region: {data['coverage']['classified_region']}",
             f"- Price histories: {data['coverage']['price_histories']['available']}/"
@@ -46,12 +70,12 @@ class PortfolioReport:
             "",
             "## Data quality notes",
             "",
-            *([f"- {note}" for note in data["data_quality_notes"]] or ["- None"]),
+            *([f"- {md(note)}" for note in data["data_quality_notes"]] or ["- None"]),
             "",
             "## Top holdings",
             "",
             *[
-                f"- {holding['symbol']}: {holding['weight']} "
+                f"- {md(holding['symbol'])}: {holding['weight']} "
                 f"({holding['market_value_base']} {data['base_currency']})"
                 for holding in data["summary"]["top_holdings"]
             ],
@@ -64,13 +88,19 @@ class PortfolioReport:
                 [
                     f"### Risk {index}",
                     "",
-                    f"- Type: {risk['type']}",
-                    f"- Severity: {risk['severity']}",
-                    f"- Summary: {risk['summary']}",
-                    f"- Evidence: {json.dumps(risk['evidence'], ensure_ascii=False, sort_keys=True)}",
-                    "- Affected positions: " + (", ".join(risk["affected_positions"]) or "None"),
+                    f"- Type: {md(risk['type'])}",
+                    f"- Severity: {md(risk['severity'])}",
+                    f"- Summary: {md(risk['summary'])}",
+                    f"- Evidence: {md(json.dumps(risk['evidence'], ensure_ascii=False, sort_keys=True))}",
+                    "- Affected positions: "
+                    + (", ".join(md(item) for item in risk["affected_positions"]) or "None"),
                     f"- Review priority: {risk['review_priority']}",
-                    "- Simulation direction: " + (risk["simulation_direction"] or "Not available"),
+                    "- Simulation direction: "
+                    + (
+                        md(risk["simulation_direction"])
+                        if risk["simulation_direction"]
+                        else "Not available"
+                    ),
                     "",
                 ]
             )
@@ -86,23 +116,23 @@ class PortfolioReport:
                 f"- Effective positions: {data['concentration']['effective_positions']}",
                 "- Sector: "
                 + ", ".join(
-                    f"{label}: {weight}"
+                    f"{md(label)}: {weight}"
                     for label, weight in data["exposures"]["sector"]["weights"].items()
                 ),
                 "- Region: "
                 + ", ".join(
-                    f"{label}: {weight}"
+                    f"{md(label)}: {weight}"
                     for label, weight in data["exposures"]["region"]["weights"].items()
                 ),
                 "Theme overlap-full and additive-split views are reported separately and must not be summed together.",
                 "- Theme full overlap: "
                 + ", ".join(
-                    f"{label}: {weight}"
+                    f"{md(label)}: {weight}"
                     for label, weight in data["exposures"]["theme_full"]["weights"].items()
                 ),
                 "- Theme additive split: "
                 + ", ".join(
-                    f"{label}: {weight}"
+                    f"{md(label)}: {weight}"
                     for label, weight in data["exposures"]["theme_split"]["weights"].items()
                 ),
                 "",
@@ -111,10 +141,32 @@ class PortfolioReport:
                 f"- Correlation: {data['correlation']['status']}",
                 f"- Coverage: {data['correlation']['coverage']['available']}/"
                 f"{data['correlation']['coverage']['requested']} histories",
+                f"- Medium threshold: {data['correlation']['medium_threshold']}",
+                f"- High threshold: {data['correlation']['high_threshold']}",
+                "- Positive risk pairs: "
+                + (", ".join(pair_text(pair) for pair in data["correlation"]["pairs"]) or "None"),
+                "- Inverse diversification pairs: "
+                + (
+                    ", ".join(pair_text(pair) for pair in data["correlation"]["inverse_pairs"])
+                    or "None"
+                ),
+                "- Clusters: "
+                + (
+                    ", ".join(
+                        "/".join(md(item) for item in cluster)
+                        for cluster in data["correlation"]["clusters"]
+                    )
+                    or "None"
+                ),
+                "- Matrix: authoritative JSON at `portfolio_report.json`",
+                f"- Matrix JSON digest: `{matrix_digest}` (SHA-256)",
+                f"- Policy status: {md(data['policy_status'])}",
+                "- Policy checks: "
+                + md(json.dumps(data["policy_checks"], ensure_ascii=False, sort_keys=True)),
                 "",
                 "## Hypothetical simulation candidates",
                 "",
-                *[f"- {candidate}" for candidate in data["hypothetical_simulation_candidates"]],
+                *[f"- {md(candidate)}" for candidate in data["hypothetical_simulation_candidates"]],
                 "",
                 "## Availability",
                 "",
@@ -124,7 +176,7 @@ class PortfolioReport:
                 "",
                 "## Data gaps",
                 "",
-                *[f"- {note}" for note in data["data_quality_notes"]],
+                *[f"- {md(note)}" for note in data["data_quality_notes"]],
             ]
         )
         return "\n".join(lines) + "\n"
@@ -145,6 +197,9 @@ def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> Por
         "coverage": risk.coverage,
         "data_quality_status": risk.data_quality_status,
         "data_quality_notes": risk.data_quality_notes,
+        "overall_risk": risk.overall_risk,
+        "policy_status": risk.policy_status,
+        "policy_checks": risk.policy_checks,
         "summary": {
             "nav_base": snapshot.nav_base,
             "cash_base": snapshot.cash_base,
@@ -172,5 +227,6 @@ def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> Por
             if finding.simulation_direction is not None
         ],
         "data_gaps": risk.data_quality_notes,
+        "risk_report": risk.to_dict(),
     }
     return PortfolioReport(payload)

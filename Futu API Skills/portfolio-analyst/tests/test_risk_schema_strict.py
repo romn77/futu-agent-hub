@@ -161,3 +161,27 @@ def test_portfolio_runtime_validation_rejects_semantically_fake_embedded_correla
 
     with pytest.raises(ValueError, match="correlation semantic"):
         validate_portfolio_report_document(payload)
+
+
+def test_runtime_validation_rejects_rated_finding_without_matching_policy_check():
+    payload = _risk()
+    payload["policy_status"] = "CONFIGURED"
+    payload["top_risks"][0]["severity"] = "HIGH"
+    payload["overall_risk"] = "HIGH"
+
+    with pytest.raises(ValueError, match="policy evidence"):
+        validate_risk_document(payload)
+
+
+def test_runtime_validation_rejects_noncanonical_or_negative_exposure_evidence():
+    sentinel = _risk()
+    sentinel["exposures"]["sector"]["weights"]["N/A"] = sentinel["exposures"]["sector"][
+        "weights"
+    ].pop("TECH")
+    with pytest.raises(ValueError, match="exposure semantic"):
+        validate_risk_document(sentinel)
+
+    negative = _risk()
+    negative["exposures"]["theme_split"]["weights"]["AI"] = "-0.1"
+    with pytest.raises(ValueError, match="exposure semantic"):
+        validate_risk_document(negative)

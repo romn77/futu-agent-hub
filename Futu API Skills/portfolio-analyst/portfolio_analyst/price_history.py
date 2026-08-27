@@ -16,7 +16,13 @@ class FutuAdjustedPriceProvider:
         self.adapter = adapter
 
     def history(
-        self, symbol: str, *, market: str, lookback: int, as_of: date
+        self,
+        symbol: str,
+        *,
+        market: str,
+        lookback: int,
+        as_of: date,
+        timeout_seconds: float = 5,
     ) -> tuple[PricePoint, ...] | None:
         code = f"{market.upper()}.{symbol.upper()}"
         start = as_of - timedelta(days=max(lookback * 2, 180))
@@ -38,6 +44,7 @@ class FutuAdjustedPriceProvider:
                 "1000",
                 "--json",
             ],
+            timeout=timeout_seconds,
         )
         if (
             payload.get("code") != code
@@ -58,4 +65,4 @@ class FutuAdjustedPriceProvider:
             except (KeyError, ValueError, InvalidOperation) as exc:
                 raise FutuReadError("audited K-line response contains an invalid row") from exc
             points.append(PricePoint(day, close))
-        return tuple(points[-(lookback + 1) :])
+        return tuple(points[-lookback:])

@@ -108,8 +108,9 @@ python scripts/portfolio.py analyze --latest --json --no-save
 ```
 
 Exactly one of `--latest` and `--snapshot` is required. The selected document is schema-validated
-and its full-body snapshot identity is recomputed before use. `risk --output FILE` saves immutable
-JSON; `analyze --output DIRECTORY` saves `portfolio_report.json` and `portfolio_report.md`.
+and its full-body identity plus Phase 1 financial semantics are recomputed after an anchored
+no-follow read. `risk --output FILE` saves immutable JSON; `analyze --output DIRECTORY`
+transactionally saves `portfolio_report.json` and `portfolio_report.md` together.
 `--no-save` always wins and the default remains side-effect free. Reports preserve one
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
 order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
@@ -118,3 +119,5 @@ Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` ident
 agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather
 than distorting Top-N, HHI, P&L, role, or correlation evidence. Risk aggregation reapplies the
 shared unknown-sentinel canonicalizer to sector, region, and theme tags before that agreement gate.
+Zero holdings are excluded, signed portfolios fail closed as unsupported, no-policy findings are
+UNRATED, negative correlations are separate inverse evidence, and work budgets are explicit.
