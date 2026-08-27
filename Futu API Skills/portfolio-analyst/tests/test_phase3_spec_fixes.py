@@ -1424,8 +1424,6 @@ def test_trade_external_source_credential_detection_collapses_all_separators_and
         "bearer securities transfer",
         "tokenized asset",
         "secretary reported",
-        "token count unavailable",
-        "password policy reviewed",
     ],
 )
 def test_trade_external_source_credential_detection_preserves_benign_words(raw):
@@ -1439,6 +1437,65 @@ def test_trade_external_source_credential_detection_preserves_benign_words(raw):
 
     assert report.external_source_evidence[0]["detail"] == raw
     validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "password abcdef",
+        "secret:hunter",
+        "api key=abcdefgh",
+        "Bearer secrethere",
+        "password\u200bhunter",
+        "token\u2028value",
+    ],
+)
+def test_trade_external_source_credential_detection_redacts_any_nonempty_delimited_value(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+
+    assert report.external_source_evidence[0]["detail"] == ("[REDACTED_EXTERNAL_CREDENTIAL]")
+    assert not any(
+        secret in json.dumps(report.to_dict())
+        for secret in ("abcdef", "hunter", "abcdefgh", "secrethere", "value")
+    )
+    validate_trade_review_document(report.to_dict())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "password abcdef",
+        "pass\nword: hunter2",
+        "token\u2028value",
+        "Bearer secrethere",
+        "bearer shares transfer",
+        "tokenized asset",
+        "account 1234 5678 trailing",
+    ],
+)
+def test_trade_external_source_sanitizer_is_idempotent(raw):
+    first = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    ).external_source_evidence[0]["detail"]
+    second = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[first],
+    ).external_source_evidence[0]["detail"]
+
+    assert second == first
 
 
 @pytest.mark.parametrize(

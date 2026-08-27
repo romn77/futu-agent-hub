@@ -20,23 +20,20 @@ _BEARER_CREDENTIAL = re.compile(r"(?i)(?<!\w)bearer(?!\w)\s+(?P<value>\S+)")
 _SK_CREDENTIAL = re.compile(r"(?i)(?<!\w)sk-(?P<suffix>[a-z0-9._-]{8,})(?![a-z0-9._-])")
 _DIGIT_WHITESPACE = re.compile(r"(?<=\d)\s+(?=\d)")
 _LONG_IDENTIFIER = re.compile(r"(?<!\d)\d{8,}(?!\d)")
+_BEARER_FINANCIAL_ALLOWLIST = frozenset(
+    {"shares", "securities", "bonds", "instruments", "certificates"}
+)
 
 
 def _has_credential_syntax(text: str) -> bool:
-    if _SK_CREDENTIAL.search(text):
+    if _LABELLED_CREDENTIAL.search(text) or _SK_CREDENTIAL.search(text):
         return True
-    for match in _LABELLED_CREDENTIAL.finditer(text):
-        value = match.group("value")
-        if (len(value) >= 6 and any(not character.isalpha() for character in value)) or (
-            len(value) >= 16 and value.isalpha()
-        ):
-            return True
     for match in _BEARER_CREDENTIAL.finditer(text):
-        value = match.group("value")
-        if (len(value) >= 8 and any(not character.isalpha() for character in value)) or (
-            len(value) >= 16 and value.isalpha()
-        ):
-            return True
+        value = match.group("value").casefold()
+        tail = text[match.end() :]
+        if value in _BEARER_FINANCIAL_ALLOWLIST and not re.search(r"[:=]", tail):
+            continue
+        return True
     return False
 
 
@@ -84,17 +81,29 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
         normalized = unicodedata.normalize("NFKC", raw)
         if len(normalized) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
             raise ValueError("EXTERNAL_SOURCE_EVIDENCE_TOO_LONG")
-        detection = "".join(
-            ""
-            if unicodedata.category(character).startswith("C")
-            or unicodedata.category(character) in {"Zl", "Zp"}
-            else character
-            for character in normalized
+
+        def detection_view(control_replacement: str) -> str:
+            return "".join(
+                control_replacement
+                if unicodedata.category(character).startswith("C")
+                or unicodedata.category(character) in {"Zl", "Zp"}
+                else character
+                for character in normalized
+            )
+
+        detection_views = tuple(
+            dict.fromkeys(
+                (
+                    detection_view(""),
+                    " ".join(detection_view(" ").split()),
+                )
+            )
         )
-        identifier_detection = _DIGIT_WHITESPACE.sub("", detection)
-        if _has_credential_syntax(detection):
+        if any(_has_credential_syntax(view) for view in detection_views):
             detail = "[REDACTED_EXTERNAL_CREDENTIAL]"
-        elif _LONG_IDENTIFIER.search(identifier_detection):
+        elif any(
+            _LONG_IDENTIFIER.search(_DIGIT_WHITESPACE.sub("", view)) for view in detection_views
+        ):
             detail = "[REDACTED_EXTERNAL_IDENTIFIER]"
         else:
             normalized = "".join(
