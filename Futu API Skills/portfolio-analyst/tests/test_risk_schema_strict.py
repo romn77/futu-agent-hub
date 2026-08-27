@@ -188,7 +188,21 @@ def test_runtime_validation_rejects_breached_policy_candidate_omitted_for_unrate
     payload["top_risks"][0]["evidence"]["policy_threshold_applied"] = True
     payload["overall_risk"] = "HIGH"
 
-    with pytest.raises(ValueError, match="breached policy candidate"):
+    with pytest.raises(ValueError, match="policy candidate"):
+        validate_risk_document(payload)
+
+
+def test_runtime_validation_rejects_nonbreaching_policy_candidate_omitted_for_unrated_finding():
+    source = snapshot()
+    positions = tuple(replace(position, position_role="OFFENSIVE") for position in source.positions)
+    payload = analyze_risk(replace(source, positions=positions)).to_dict()
+    assert "REGION_CONCENTRATION" not in {finding["type"] for finding in payload["top_risks"]}
+    payload["policy_status"] = "CONFIGURED"
+    payload["policy_checks"] = {
+        "region": {"measured": "0.7", "threshold": "0.8", "breached": False}
+    }
+
+    with pytest.raises(ValueError, match="policy candidate"):
         validate_risk_document(payload)
 
 
@@ -249,3 +263,22 @@ def test_runtime_validation_rejects_noncanonical_or_negative_exposure_evidence()
     negative["exposures"]["theme_split"]["weights"]["AI"] = "-0.1"
     with pytest.raises(ValueError, match="exposure semantic"):
         validate_risk_document(negative)
+
+
+def test_runtime_validation_rejects_structural_position_omission():
+    payload = _risk()
+    payload["coverage"]["positions"] -= 1
+    payload["coverage"]["omitted_positions"] = 1
+    payload["coverage"]["budget_status"] = "BUDGET_LIMIT"
+    payload["coverage"]["budget_reason"] = "structure capped"
+
+    with pytest.raises(ValueError, match="structural population"):
+        validate_risk_document(payload)
+
+
+def test_runtime_validation_rejects_market_cutoff_after_snapshot_session_boundary():
+    payload = _risk()
+    payload["correlation"]["date_cutoffs"]["US.AAA"] = "2026-08-27"
+
+    with pytest.raises(ValueError, match="date cutoff"):
+        validate_risk_document(payload)

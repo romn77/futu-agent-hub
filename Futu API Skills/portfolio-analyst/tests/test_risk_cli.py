@@ -147,6 +147,19 @@ def test_analyze_explicit_output_saves_json_and_markdown_immutably(monkeypatch, 
     assert stdout == json_report
     assert stdout["source_snapshot_id"] == snapshot().snapshot_id
     assert snapshot().snapshot_id in markdown
+    assert "authoritative JSON at `portfolio_report.json`" in markdown
+
+
+def test_analyze_no_save_markdown_does_not_claim_a_json_file_exists(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "private"
+    _saved_snapshot(home)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+
+    assert cli.main(["analyze", "--snapshot", "snapshots/source.json", "--no-save"]) == 0
+    markdown = capsys.readouterr().out
+
+    assert "portfolio_report.json" not in markdown
+    assert "authoritative JSON representation" in markdown
 
 
 @pytest.mark.parametrize("unsafe", ["../outside", "/tmp/outside"])

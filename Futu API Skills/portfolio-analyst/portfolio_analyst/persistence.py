@@ -120,11 +120,11 @@ class SnapshotStore:
             for name, content in ordered:
                 temporary = f".{name}.{secrets.token_hex(8)}.tmp"
                 descriptor = os.open(temporary, create_flags, 0o600, dir_fd=current_fd)
+                staged[name] = temporary
                 with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
-                staged[name] = temporary
             try:
                 for name, _content in ordered:
                     try:
@@ -152,15 +152,17 @@ class SnapshotStore:
                 os.fsync(current_fd)
                 raise
         finally:
-            for temporary in staged.values():
-                try:
-                    os.unlink(temporary, dir_fd=current_fd)
-                except FileNotFoundError:
-                    pass
-            if staged:
-                os.fsync(current_fd)
-            os.close(current_fd)
-            os.close(root_fd)
+            try:
+                for temporary in staged.values():
+                    try:
+                        os.unlink(temporary, dir_fd=current_fd)
+                    except FileNotFoundError:
+                        pass
+                if staged:
+                    os.fsync(current_fd)
+            finally:
+                os.close(current_fd)
+                os.close(root_fd)
         return {name: self.data_home.joinpath(*directory_parts, name) for name, _content in ordered}
 
     def _parent_anchor_matches(
@@ -249,11 +251,11 @@ class SnapshotStore:
                     prefix=f".{name}.", suffix=".tmp", dir=current
                 )
                 temporary = Path(temporary_name)
+                staged[name] = temporary
                 with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
-                staged[name] = temporary
             for name, _content in ordered:
                 try:
                     os.link(staged[name], destinations[name], follow_symlinks=False)

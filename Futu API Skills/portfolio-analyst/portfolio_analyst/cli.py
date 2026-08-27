@@ -154,6 +154,8 @@ def _human_risk_report(payload: dict[str, Any]) -> str:
         + safe(json.dumps(payload["exposures"]["theme_split"]["weights"], sort_keys=True)),
         f"Correlation status: {payload['correlation']['status']}",
         f"Correlation thresholds: medium={payload['correlation']['medium_threshold']}, high={payload['correlation']['high_threshold']}",
+        "Market close cutoffs: "
+        + safe(json.dumps(payload["correlation"]["date_cutoffs"], sort_keys=True)),
         "Positive risk pairs: " + safe(json.dumps(payload["correlation"]["pairs"], sort_keys=True)),
         "Inverse diversification pairs: "
         + safe(json.dumps(payload["correlation"]["inverse_pairs"], sort_keys=True)),
@@ -263,7 +265,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output,
                     {
                         "portfolio_report.json": rendered + "\n",
-                        "portfolio_report.md": report.to_markdown(),
+                        "portfolio_report.md": report.to_markdown(
+                            json_artifact="portfolio_report.json"
+                        ),
                     },
                 )
             print(

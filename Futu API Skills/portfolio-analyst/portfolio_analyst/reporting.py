@@ -22,7 +22,7 @@ class PortfolioReport:
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self.payload)
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, *, json_artifact: str | None = None) -> str:
         data = self.to_dict()
         md = markdown_text
         matrix_digest = hashlib.sha256(
@@ -144,6 +144,8 @@ class PortfolioReport:
                 f"{data['correlation']['coverage']['requested']} histories",
                 f"- Medium threshold: {data['correlation']['medium_threshold']}",
                 f"- High threshold: {data['correlation']['high_threshold']}",
+                "- Market close cutoffs: "
+                + md(json.dumps(data["correlation"]["date_cutoffs"], sort_keys=True)),
                 "- Positive risk pairs: "
                 + (", ".join(pair_text(pair) for pair in data["correlation"]["pairs"]) or "None"),
                 "- Inverse diversification pairs: "
@@ -159,7 +161,11 @@ class PortfolioReport:
                     )
                     or "None"
                 ),
-                "- Matrix: authoritative JSON at `portfolio_report.json`",
+                (
+                    f"- Matrix: authoritative JSON at `{md(json_artifact)}`"
+                    if json_artifact
+                    else "- Matrix: authoritative JSON representation/output"
+                ),
                 f"- Matrix JSON digest: `{matrix_digest}` (SHA-256)",
                 f"- Policy status: {md(data['policy_status'])}",
                 "- Policy checks: "

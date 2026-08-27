@@ -75,12 +75,22 @@ both report entry points checks coverage/status consistency, threshold ordering,
 matrix identity and diagonal rules, pair uniqueness/count/band agreement, and exact connected
 components for high-correlation clusters. Structurally valid but semantically inconsistent reports
 are rejected with a domain validation error.
-The requested calendar interval is `as_of - max(2 * lookback, 180) days` through `as_of`, inclusive;
-rows outside it are rejected as lookahead/out-of-request evidence. Defaults cap current positions at 200, history symbols and
-requests at 100, pair operations at 4,950, wall time at 30 seconds, each provider call at 5 seconds,
-and lookback at 5,000. Top NAV-weight positions are selected deterministically; omissions set
-`BUDGET_LIMIT`, a reason, and partial quality. Requests are sequential, optionally rate-spaced, and
-a timeout or source-wide exception opens an early circuit breaker.
+The upper date bound is computed separately for every market-qualified identity from the snapshot
+instant, its IANA market timezone, and regular close time. Before that local close, the preceding
+weekday is used; weekends roll back to Friday. This prevents a US close later on the snapshot's UTC
+calendar date from entering evidence. The requested interval starts
+`max(2 * lookback, 180) days` before that cutoff, and every cutoff is serialized in `date_cutoffs`.
+Rows outside the interval are rejected as lookahead/out-of-request evidence. Exchange holidays
+produce no row and therefore cannot be fabricated as a return observation.
+
+All O(N) structure metrics, exposures, policies, and findings always use the complete canonical
+current-position population; `max_positions` is retained only as a compatibility setting and never
+truncates those calculations. Only adjusted-history requests and O(N²) pair work are bounded.
+Defaults cap history symbols and requests at 100, pair operations at 4,950, wall time at 30 seconds,
+each provider call at 5 seconds, and lookback at 5,000. Top NAV-weight history symbols are selected
+deterministically; history omissions set `BUDGET_LIMIT`, a reason, and partial quality without
+changing structural metrics or producing a false policy non-breach. Requests are sequential,
+optionally rate-spaced, and a timeout or source-wide exception opens an early circuit breaker.
 
 The live adapter requires the Futu SDK and OpenD. When either is unavailable, the portfolio report
 still succeeds and states correlation is unavailable. Tests inject deterministic adjusted-price
@@ -148,5 +158,7 @@ close structured objects with `additionalProperties: false`; dynamic exposure/ma
 typed value schemas.
 Markdown escapes every untrusted label, note, finding, link/HTML metacharacter, and control;
 terminal output strips ANSI/control/newline injection. Matrix details remain authoritative in
-`portfolio_report.json`, and Markdown records the matrix SHA-256 digest. Portfolio JSON embeds the
-complete risk report, and runtime validation requires every duplicated risk field to match exactly.
+the JSON representation, and Markdown records the matrix SHA-256 digest. Saved bundles name
+`portfolio_report.json`; no-save Markdown does not claim that an artifact exists. Portfolio JSON
+embeds the complete risk report, and runtime validation requires every duplicated risk field to
+match exactly.

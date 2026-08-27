@@ -52,12 +52,12 @@
     "cluster": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/positionIdentity"}},
     "correlation": {
       "type": "object", "additionalProperties": false,
-      "required": ["status", "lookback", "minimum_observations", "medium_threshold", "high_threshold", "adjusted_prices", "coverage", "matrix", "pairs", "inverse_pairs", "clusters", "notes"],
+      "required": ["status", "lookback", "minimum_observations", "medium_threshold", "high_threshold", "adjusted_prices", "coverage", "date_cutoffs", "matrix", "pairs", "inverse_pairs", "clusters", "notes"],
       "properties": {
         "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]}, "lookback": {"type": "integer", "minimum": 2, "maximum": 5000},
         "minimum_observations": {"type": "integer", "minimum": 1, "maximum": 4999},
         "medium_threshold": {"$ref": "#/$defs/unitDecimal"}, "high_threshold": {"$ref": "#/$defs/unitDecimal"}, "adjusted_prices": {"const": true},
-        "coverage": {"$ref": "#/$defs/countCoverage"}, "matrix": {"$ref": "#/$defs/matrix"},
+        "coverage": {"$ref": "#/$defs/countCoverage"}, "date_cutoffs": {"type": "object", "propertyNames": {"$ref": "#/$defs/positionIdentity"}, "additionalProperties": {"type": "string", "format": "date"}}, "matrix": {"$ref": "#/$defs/matrix"},
         "pairs": {"type": "array", "items": {"$ref": "#/$defs/correlationPair"}}, "inverse_pairs": {"type": "array", "items": {"$ref": "#/$defs/correlationPair"}}, "clusters": {"type": "array", "items": {"$ref": "#/$defs/cluster"}},
         "notes": {"type": "array", "items": {"type": "string", "minLength": 1}}
       }

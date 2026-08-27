@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 import inspect
 import queue
@@ -12,6 +12,7 @@ import threading
 import time
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol, Sequence
+from zoneinfo import ZoneInfo
 
 from .models import NormalizedPosition, PortfolioSnapshot, _json_value
 from .normalization import canonical_unknown
@@ -300,6 +301,7 @@ class CorrelationEvidence:
     high_threshold: Decimal
     adjusted_prices: bool
     coverage: Mapping[str, int]
+    date_cutoffs: Mapping[str, str]
     matrix: Mapping[str, Mapping[str, Decimal | None]]
     pairs: tuple[CorrelationPair, ...]
     inverse_pairs: tuple[CorrelationPair, ...]
@@ -556,6 +558,30 @@ def _bounded_history_call(
     return value
 
 
+_MARKET_CLOSE = {
+    "US": ("America/New_York", datetime_time(16, 0)),
+    "CA": ("America/Toronto", datetime_time(16, 0)),
+    "HK": ("Asia/Hong_Kong", datetime_time(16, 0)),
+    "CN": ("Asia/Shanghai", datetime_time(15, 0)),
+    "SG": ("Asia/Singapore", datetime_time(17, 0)),
+    "MY": ("Asia/Kuala_Lumpur", datetime_time(17, 0)),
+    "JP": ("Asia/Tokyo", datetime_time(15, 0)),
+    "AU": ("Australia/Sydney", datetime_time(16, 0)),
+}
+
+
+def _latest_complete_market_close_date(snapshot_instant: datetime, market: str) -> date:
+    timezone_name, close_time = _MARKET_CLOSE[market]
+    local = snapshot_instant.astimezone(ZoneInfo(timezone_name))
+    candidate = local.date()
+    close = datetime.combine(candidate, close_time, tzinfo=local.tzinfo)
+    if local < close:
+        candidate -= timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
 def _correlation(
     snapshot: PortfolioSnapshot,
     positions: Sequence[EconomicPosition],
@@ -572,6 +598,13 @@ def _correlation(
 ) -> CorrelationEvidence:
     identities = {position.identity: position for position in positions}
     symbols = tuple(sorted(identities))
+    cutoff_dates = {
+        identity: _latest_complete_market_close_date(snapshot.as_of, identities[identity].market)
+        for identity in symbols
+    }
+    serialized_cutoffs = MappingProxyType(
+        {identity: cutoff.isoformat() for identity, cutoff in cutoff_dates.items()}
+    )
     if provider is None:
         return CorrelationEvidence(
             "UNAVAILABLE",
@@ -581,6 +614,7 @@ def _correlation(
             high,
             True,
             MappingProxyType({"requested": len(symbols), "available": 0}),
+            serialized_cutoffs,
             MappingProxyType({}),
             (),
             (),
@@ -590,9 +624,10 @@ def _correlation(
     histories: dict[str, dict[date, Decimal]] = {}
     invalid: list[str] = []
     source_failure: str | None = None
-    requested_start = snapshot.as_of.date() - timedelta(days=max(lookback * 2, 180))
     for identity in symbols:
         position = identities[identity]
+        cutoff = cutoff_dates[identity]
+        requested_start = cutoff - timedelta(days=max(lookback * 2, 180))
         remaining = deadline - Decimal(str(clock()))
         if remaining <= 0:
             source_failure = (
@@ -605,11 +640,11 @@ def _correlation(
                     provider,
                     position,
                     lookback=lookback,
-                    as_of=snapshot.as_of.date(),
+                    as_of=cutoff,
                     timeout_seconds=min(budget.provider_timeout_seconds, remaining),
                 ),
                 start=requested_start,
-                as_of=snapshot.as_of.date(),
+                as_of=cutoff,
                 max_points=lookback,
             )
         except Exception:
@@ -685,6 +720,7 @@ def _correlation(
         high,
         True,
         MappingProxyType({"requested": len(symbols), "available": len(histories)}),
+        serialized_cutoffs,
         frozen_matrix,
         tuple(sorted(pairs, key=lambda pair: (-pair.coefficient, pair.symbols))),
         tuple(sorted(inverse_pairs, key=lambda pair: (pair.coefficient, pair.symbols))),
@@ -789,12 +825,12 @@ def _findings(
             "Hypothetical only: simulate lower exposure to the largest sector and recompute views.",
         )
     )
-    if policy_checks.get("region", {}).get("breached"):
+    if "region" in policy_checks:
         region, region_weight = max(exposures.region.items(), key=lambda item: (item[1], item[0]))
         findings.append(
             RiskFinding(
                 "REGION_CONCENTRATION",
-                "HIGH",
+                "HIGH" if policy_checks["region"]["breached"] else "LOW",
                 f"{region} is the largest deterministic region exposure.",
                 MappingProxyType(
                     {
@@ -974,14 +1010,12 @@ def analyze_risk(
     ranked_positions = sorted(
         all_economic_positions, key=lambda position: (-position.weight, position.identity)
     )
-    economic_positions = tuple(ranked_positions[: active_budget.max_positions])
+    economic_positions = tuple(ranked_positions)
     history_count = min(len(economic_positions), active_budget.max_history_symbols)
     while history_count * (history_count - 1) // 2 > active_budget.max_pair_operations:
         history_count -= 1
     history_positions = economic_positions[:history_count]
     budget_reasons = []
-    if len(economic_positions) < len(all_economic_positions):
-        budget_reasons.append("current position population capped by max_positions")
     if history_count < len(economic_positions):
         budget_reasons.append("history symbols capped by request or pair-operation budget")
     concentration = _concentration(snapshot, economic_positions)

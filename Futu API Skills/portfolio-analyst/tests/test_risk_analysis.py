@@ -300,10 +300,10 @@ def test_user_policy_checks_are_explicit_and_never_apply_to_theme_overlap_view()
     assert payload["policy_checks"]["theme_split"]["measured"] == "0.5"
     assert "theme_full" not in payload["policy_checks"]
     assert payload["top_risks"][0]["evidence"]["policy_threshold_applied"] is True
-    theme_finding = next(
-        item for item in payload["top_risks"] if item["type"] == "THEME_CONCENTRATION"
+    region_finding = next(
+        item for item in payload["top_risks"] if item["type"] == "REGION_CONCENTRATION"
     )
-    assert theme_finding["evidence"]["policy_threshold_applied"] is True
+    assert region_finding["severity"] == "LOW"
 
 
 @pytest.mark.parametrize("threshold", [Decimal("0"), Decimal("-0.1"), Decimal("1.01")])

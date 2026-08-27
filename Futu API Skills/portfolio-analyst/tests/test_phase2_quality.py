@@ -375,7 +375,7 @@ def test_human_risk_output_strips_terminal_controls_and_carries_full_evidence():
     assert "Policy status:" in output
 
 
-def test_large_portfolio_is_deterministically_capped_and_reports_budget_omissions():
+def test_large_portfolio_caps_only_history_and_keeps_full_structural_population():
     source = snapshot()
     positions = tuple(
         replace(
@@ -405,12 +405,94 @@ def test_large_portfolio_is_deterministically_capped_and_reports_budget_omission
     )
 
     assert report.coverage["total_positions"] == 10
-    assert report.coverage["positions"] == 3
-    assert report.coverage["omitted_positions"] == 7
+    assert report.coverage["positions"] == 10
+    assert report.coverage["omitted_positions"] == 0
     assert report.coverage["budget_status"] == "BUDGET_LIMIT"
+    assert report.concentration.top_1 == Decimal("0.1")
+    assert report.concentration.top_5 == Decimal("0.49")
+    assert report.exposures.sector == {"TECH": Decimal("0.955")}
     assert provider.calls == ["P000", "P001"]
     assert report.correlation.coverage["requested"] == 2
     assert len(report.correlation.matrix) <= 2
+
+
+def test_nonbreaching_region_policy_still_emits_low_candidate():
+    report = analyze_risk(snapshot(), policy=PortfolioPolicy(region=Decimal("0.8")))
+
+    finding = next(item for item in report.top_risks if item.type == "REGION_CONCENTRATION")
+    assert finding.severity == "LOW"
+    assert finding.evidence["policy_threshold_applied"] is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="descriptor temp cleanup is POSIX-specific")
+def test_bundle_cleans_registered_posix_temp_when_file_fsync_fails(monkeypatch, tmp_path):
+    home = tmp_path / "private"
+    home.mkdir()
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_first(descriptor):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected file fsync failure")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_first)
+    with pytest.raises(OSError, match="injected file fsync"):
+        SnapshotStore(home).save_bundle(
+            "reports/run",
+            {"portfolio_report.json": "json", "portfolio_report.md": "markdown"},
+        )
+
+    assert not tuple((home / "reports/run").glob(".*.tmp"))
+
+
+def test_bundle_fallback_cleans_registered_temp_when_file_fsync_fails(monkeypatch, tmp_path):
+    home = tmp_path / "private"
+    home.mkdir()
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_first(descriptor):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected fallback fsync failure")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_first)
+    with pytest.raises(OSError, match="injected fallback fsync"):
+        SnapshotStore(home)._save_bundle_fallback(
+            ("reports", "run"),
+            (("portfolio_report.json", "json"), ("portfolio_report.md", "markdown")),
+        )
+
+    assert not tuple((home / "reports/run").glob(".*.tmp"))
+
+
+def test_us_same_utc_date_close_after_snapshot_is_rejected_by_market_cutoff():
+    source = snapshot()
+    requested = []
+
+    class LookaheadPrices:
+        def history(self, symbol, *, market, lookback, as_of):
+            requested.append((symbol, market, as_of))
+            return (
+                PricePoint(source.as_of.date() - timedelta(days=1), Decimal("100")),
+                PricePoint(source.as_of.date(), Decimal("101")),
+            )
+
+    report = analyze_risk(
+        replace(source, positions=(source.positions[0],)),
+        price_provider=LookaheadPrices(),
+        lookback=2,
+        minimum_observations=1,
+    )
+
+    assert requested == [("AAA", "US", date(2026, 8, 26))]
+    assert report.correlation.date_cutoffs == {"US.AAA": "2026-08-26"}
+    assert report.correlation.coverage["available"] == 0
 
 
 def test_price_provider_timeout_trips_circuit_breaker_without_waiting_for_all_symbols():

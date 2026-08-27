@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
@@ -12,6 +13,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from .normalization import canonical_unknown
+from .risk import _latest_complete_market_close_date
 
 
 class ReportSemanticError(ValueError):
@@ -91,7 +93,7 @@ def _high_components(
     return components
 
 
-def _validate_correlation_semantics(correlation: dict[str, Any]) -> None:
+def _validate_correlation_semantics(correlation: dict[str, Any], snapshot_as_of: str) -> None:
     lookback = correlation["lookback"]
     minimum = correlation["minimum_observations"]
     if isinstance(lookback, bool) or not isinstance(lookback, int) or not 2 <= lookback <= 5000:
@@ -114,6 +116,23 @@ def _validate_correlation_semantics(correlation: dict[str, Any]) -> None:
         _semantic_error("coverage requires 0 <= available <= requested")
     matrix = correlation["matrix"]
     identities = set(matrix)
+    cutoffs = correlation["date_cutoffs"]
+    if len(cutoffs) != requested or not identities.issubset(cutoffs):
+        _semantic_error("date cutoffs must cover every requested canonical identity")
+    try:
+        instant = datetime.fromisoformat(snapshot_as_of.replace("Z", "+00:00"))
+        expected_cutoffs = {
+            identity: _latest_complete_market_close_date(
+                instant, identity.split(".", 1)[0]
+            ).isoformat()
+            for identity in cutoffs
+        }
+    except (KeyError, ValueError) as exc:
+        raise ReportSemanticError(
+            "correlation semantic validation failed: date cutoff input is invalid"
+        ) from exc
+    if cutoffs != expected_cutoffs:
+        _semantic_error("date cutoff must equal the latest completed market session boundary")
     if len(identities) != available:
         _semantic_error("matrix identities must match available coverage")
 
@@ -212,10 +231,14 @@ def _validate_correlation_semantics(correlation: dict[str, Any]) -> None:
 
 def _validate_report_semantics(payload: dict[str, Any]) -> None:
     correlation = payload["correlation"]
-    _validate_correlation_semantics(correlation)
+    _validate_correlation_semantics(correlation, payload["as_of"])
     coverage = payload["coverage"]
     if coverage["positions"] + coverage["omitted_positions"] != coverage["total_positions"]:
         _semantic_error("position budget coverage does not reconcile")
+    if coverage["positions"] != coverage["total_positions"] or coverage["omitted_positions"] != 0:
+        raise ReportSemanticError(
+            "risk semantic validation failed: structural population cannot be budget-omitted"
+        )
     expected_budget = "BUDGET_LIMIT" if coverage["budget_reason"] else "COMPLETE"
     if coverage["budget_status"] != expected_budget:
         _semantic_error("budget status and reason are inconsistent")
@@ -336,7 +359,7 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         )
         if finding["severity"] != expected_severity:
             raise ReportSemanticError("finding severity is not supported by policy evidence")
-    breached_candidate_types = {
+    policy_candidate_types = {
         candidate_type
         for check_name, candidate_type in {
             "single_position": "POSITION_CONCENTRATION",
@@ -346,27 +369,36 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
             "region": "REGION_CONCENTRATION",
             "theme_split": "THEME_CONCENTRATION",
         }.items()
-        if checks.get(check_name, {}).get("breached")
+        if check_name in checks
     }
-    missing_breaches = breached_candidate_types - finding_types
+    missing_candidates = policy_candidate_types - finding_types
     candidate_priority = {
         "POSITION_CONCENTRATION": 1,
         "REGION_CONCENTRATION": 2,
         "SECTOR_CONCENTRATION": 2,
         "THEME_CONCENTRATION": 3,
     }
-    if missing_breaches:
+    candidate_checks = {
+        "POSITION_CONCENTRATION": ("single_position", "top_3", "top_5"),
+        "REGION_CONCENTRATION": ("region",),
+        "SECTOR_CONCENTRATION": ("sector",),
+        "THEME_CONCENTRATION": ("theme_split",),
+    }
+    if missing_candidates:
         worst_reported = (
             severity_order[findings[-1]["severity"]],
             priority_order[findings[-1]["review_priority"]],
             findings[-1]["type"],
         )
-        if any(
-            (severity_order["HIGH"], candidate_priority[item], item) < worst_reported
-            for item in missing_breaches
-        ):
+
+        def omitted_rank(candidate_type: str) -> tuple[int, int, str]:
+            relevant = tuple(name for name in candidate_checks[candidate_type] if name in checks)
+            severity = "HIGH" if any(checks[name]["breached"] for name in relevant) else "LOW"
+            return severity_order[severity], candidate_priority[candidate_type], candidate_type
+
+        if any(omitted_rank(item) < worst_reported for item in missing_candidates):
             raise ReportSemanticError(
-                "breached policy candidate was omitted in favor of a lower-ranked finding"
+                "policy candidate was omitted in favor of a lower-ranked finding"
             )
 
 

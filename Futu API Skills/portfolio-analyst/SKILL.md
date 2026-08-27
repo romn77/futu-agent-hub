@@ -125,3 +125,6 @@ Risk candidates are generated independently before the deterministic Top-3 selec
 P&L concentration uses separate profit and absolute-loss pools only when realized and unrealized
 base P&L are finite and complete for the full analyzed current population; otherwise coverage is
 PARTIAL and no P&L finding is emitted.
+O(N) structure, exposure, policy, and finding calculations always use every canonical current
+position; only history requests and correlation pairs are budgeted. Correlation uses serialized
+market-local completed-close cutoffs, so a later close on the same UTC date is excluded.
