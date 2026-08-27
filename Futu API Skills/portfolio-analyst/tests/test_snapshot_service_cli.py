@@ -11,7 +11,7 @@ import pytest
 from portfolio_analyst import cli, service as snapshot_service
 from portfolio_analyst.account_alias import AccountAliaser
 from portfolio_analyst.classification import Classification, ClassificationMapper
-from portfolio_analyst.fx import StaticCurrencyConverter
+from portfolio_analyst.fx import IdentityOnlyCurrencyConverter, StaticCurrencyConverter
 from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
 from portfolio_analyst.repository import FutuPortfolioRepository, SourceDataError
 from portfolio_analyst.service import (
@@ -40,6 +40,16 @@ class FixtureAdapter:
         return json.loads(
             (FIXTURES / f"portfolio_account_{number}.json").read_text(encoding="utf-8")
         )
+
+
+class BaseCurrencyOnlyFixtureAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_portfolio":
+            payload["positions"] = [
+                position for position in payload["positions"] if position["code"].startswith("US.")
+            ]
+        return payload
 
 
 def _configured_home(tmp_path):
@@ -237,9 +247,49 @@ def test_service_stops_when_no_discovered_account_portfolio_was_read(tmp_path):
         )
 
 
-def test_missing_fx_config_fails_closed_instead_of_inventing_rates(tmp_path):
-    with pytest.raises(ConfigError, match="fx_rates.json"):
-        load_currency_converter(tmp_path)
+def test_missing_fx_config_loads_identity_only_converter(tmp_path):
+    converter = load_currency_converter(tmp_path)
+
+    assert isinstance(converter, IdentityOnlyCurrencyConverter)
+    as_of = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    evidence = converter.quote("USD", "USD", as_of)
+    assert evidence is not None
+    assert evidence.rate == 1
+    assert evidence.source == "BASE_CURRENCY_IDENTITY"
+    assert converter.quote("HKD", "USD", as_of) is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX no-follow FX config contract")
+def test_present_symlinked_fx_config_is_rejected_instead_of_treated_as_absent(tmp_path):
+    home = tmp_path / "private"
+    config = home / "config"
+    config.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text((FIXTURES / "fx_rates.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (config / "fx_rates.json").symlink_to(outside)
+
+    with pytest.raises(ConfigError, match="unsafe"):
+        load_currency_converter(home)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX no-follow FX config CLI contract")
+def test_present_symlinked_fx_config_is_structured_cli_config_error(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "private"
+    config = home / "config"
+    config.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text((FIXTURES / "fx_rates.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (config / "fx_rates.json").symlink_to(outside)
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        cli,
+        "generate_snapshot",
+        lambda *_args, **_kwargs: load_currency_converter(home),
+    )
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "CONFIG_ERROR"
 
 
 @pytest.mark.parametrize(
@@ -341,6 +391,89 @@ def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
     assert exit_code == 0
     assert payload["schema_version"] == "1.0"
     assert not (home / "snapshots").exists()
+
+
+def test_absent_fx_file_base_only_cli_succeeds_without_writes_and_uses_identity_only(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "never-created"
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        snapshot_service,
+        "load_security_metadata",
+        lambda _home: SecurityMetadataMapper(
+            {
+                "US.AAPL": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+                "US.MSFT": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+            }
+        ),
+    )
+
+    def generate_base_only(settings, **kwargs):
+        return snapshot_service.generate_snapshot(
+            settings,
+            adapter=BaseCurrencyOnlyFixtureAdapter(),
+            discovery_complete=True,
+            as_of=datetime(2026, 8, 27, 10, tzinfo=timezone.utc),
+            account_currency_loader=lambda _home: {
+                "90000001": "USD",
+                "90000002": "USD",
+            },
+            **kwargs,
+        )
+
+    monkeypatch.setattr(cli, "generate_snapshot", generate_base_only)
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert not home.exists()
+    assert payload["fx_evidence"] == [
+        {
+            "source_currency": "USD",
+            "target_currency": "USD",
+            "rate": "1",
+            "source": "BASE_CURRENCY_IDENTITY",
+            "effective_at": "2026-08-27T10:00:00Z",
+        }
+    ]
+
+
+def test_absent_fx_file_cross_currency_cli_fails_closed_structurally(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "never-created"
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(
+        snapshot_service,
+        "load_security_metadata",
+        lambda _home: SecurityMetadataMapper(
+            {
+                "US.AAPL": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+                "HK.00700": SecurityMetadata("HKD", "STOCK", "USER_CONFIG"),
+                "US.MSFT": SecurityMetadata("USD", "STOCK", "USER_CONFIG"),
+            }
+        ),
+    )
+
+    def generate_cross_currency(settings, **kwargs):
+        return snapshot_service.generate_snapshot(
+            settings,
+            adapter=FixtureAdapter(),
+            discovery_complete=True,
+            as_of=datetime(2026, 8, 27, 10, tzinfo=timezone.utc),
+            account_currency_loader=lambda _home: {
+                "90000001": "USD",
+                "90000002": "USD",
+            },
+            **kwargs,
+        )
+
+    monkeypatch.setattr(cli, "generate_snapshot", generate_cross_currency)
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "UNSAFE_AGGREGATION"
+    assert "HKD" in payload["error"]["message"]
+    assert "USD" in payload["error"]["message"]
+    assert not home.exists()
 
 
 @pytest.mark.parametrize("argv", [["snapshot", "--json"], ["snapshot", "--json", "--no-save"]])

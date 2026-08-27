@@ -53,6 +53,9 @@ The source and timezone-aware effective timestamp are mandatory. The maximum age
 capped at 96 hours so a Friday close can cover an ordinary weekend without allowing older evidence.
 Future, stale, missing, non-positive, or provenance-free rates stop valuation. The snapshot records
 only the rate evidence actually used, including deterministic base-currency identity evidence.
+If `fx_rates.json` is absent, base-currency-only portfolios can still be valued with that identity
+evidence; the first required cross-currency conversion fails closed. A present malformed or unsafe
+FX file remains a configuration error and is never treated as absent.
 
 Every returned securities account also requires an explicit valuation currency, keyed by the private
 account ID in `config/account_currencies.json`. This is query configuration, not firm or market

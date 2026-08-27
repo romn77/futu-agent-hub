@@ -21,6 +21,28 @@ class CurrencyConverter(Protocol):
     def quote(self, source: str, target: str, as_of: datetime) -> FxRateEvidence | None: ...
 
 
+class IdentityOnlyCurrencyConverter:
+    """Base-currency identity evidence without any cross-currency assumption."""
+
+    def validate(self, as_of: datetime) -> None:
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise FxEvidenceError("valuation as_of must be timezone-aware")
+
+    def quote(self, source: str, target: str, as_of: datetime) -> FxRateEvidence | None:
+        self.validate(as_of)
+        source = source.upper()
+        target = target.upper()
+        if source != target:
+            return None
+        return FxRateEvidence(
+            source_currency=source,
+            target_currency=target,
+            rate=Decimal("1"),
+            source="BASE_CURRENCY_IDENTITY",
+            effective_at=as_of,
+        )
+
+
 class StaticCurrencyConverter:
     """Explicit source snapshot rates with a bounded weekend-aware maximum age."""
 

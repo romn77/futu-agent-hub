@@ -11,7 +11,12 @@ from typing import Any, Callable, Mapping
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .classification import Classification, ClassificationMapper
 from .futu_adapter import FutuAdapter
-from .fx import FxEvidenceError, StaticCurrencyConverter
+from .fx import (
+    CurrencyConverter,
+    FxEvidenceError,
+    IdentityOnlyCurrencyConverter,
+    StaticCurrencyConverter,
+)
 from .models import PortfolioSnapshot
 from .normalization import (
     canonical_currency_provenance,
@@ -21,7 +26,7 @@ from .normalization import (
 from .repository import FutuPortfolioRepository, PrivateJsonReader, SourceDataError
 from .schema import validate_snapshot_document
 from .security_metadata import SecurityMetadata, SecurityMetadataMapper
-from .secure_config import PrivateConfigError, load_private_json_object
+from .secure_config import PrivateConfigError, load_optional_json_object, load_private_json_object
 from .settings import Settings, discover_futuapi_skill
 from .snapshot import PortfolioBuilder
 
@@ -42,9 +47,13 @@ def _load_json_object(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_currency_converter(data_home: Path) -> StaticCurrencyConverter:
-    path = data_home / "config" / "fx_rates.json"
-    payload = _load_json_object(path)
+def load_currency_converter(data_home: Path) -> CurrencyConverter:
+    try:
+        payload = load_optional_json_object(data_home, "fx_rates.json")
+    except PrivateConfigError as exc:
+        raise ConfigError(f"fx_rates.json is unavailable or unsafe: {exc}") from exc
+    if payload is None:
+        return IdentityOnlyCurrencyConverter()
     raw_rates = payload.get("rates")
     if not isinstance(raw_rates, dict):
         raise ConfigError("fx_rates.json requires an object named rates")
