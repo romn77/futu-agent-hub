@@ -1,9 +1,9 @@
 ---
 name: portfolio-analyst
-description: Read-only diagnostics and, in later phases, portfolio analysis using the official futuapi Skill.
+description: Read-only portfolio snapshots, risk and trade review, plus non-executable rebalance simulation using the official futuapi Skill.
 allowed-tools: Bash Read
 metadata:
-  version: 0.1.0
+  version: 0.3.0
 ---
 
 # Portfolio Analyst
@@ -130,3 +130,34 @@ position; only history requests and correlation pairs are budgeted. Correlation 
 market-local completed-close cutoffs under the versioned `REGULAR_SESSIONS_V1` approximation, so a
 later close on the same UTC date is excluded. It is not a full exchange calendar; exceptional
 sessions remain fail-closed/partial when bars are absent or inconsistent.
+
+Review observed trading activity over an explicit, bounded period:
+
+```bash
+python scripts/portfolio.py trades --from 2026-08-01 --to 2026-08-27 --json --no-save
+```
+
+The command calls only the digest-pinned historical order and fill readers. It masks account and
+source order/deal identifiers, separates accounts and market-qualified securities, merges partial
+fills by order, and reconstructs only evidenced long-stock FIFO matches. Sells without opening
+inventory in the selected window and the upstream 200-order cap are explicit `PARTIAL` quality
+notes, never fabricated round trips. Market-open checks use exchange-local IANA timezones (including
+DST), and findings describe observed patterns while motive remains `UNVERIFIED`. The optional
+private `config/trade-policy.yaml` follows `config/trade-policy.example.yaml` and requires a real
+0700 config directory plus a regular 0600 file. See
+[references/trade-review.md](references/trade-review.md).
+
+Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
+
+```bash
+python scripts/portfolio.py simulate \
+  --snapshot snapshots/FILE.json \
+  --request requests/rebalance.json \
+  --json --no-save
+```
+
+The strict request supports `TARGET_WEIGHT`, `AMOUNT_DELTA`, and `SHARE_DELTA`, plus explicit new
+cash, sell-only, new-cash-only, margin, and short constraints. Every result says `HYPOTHETICAL` and
+`execution_disabled=true`; there is no order generation or trading-write path. `--output DIR`
+transactionally saves `request.json`, `result.json`, and `summary.md` without replacement. See
+[references/rebalance-simulation.md](references/rebalance-simulation.md).

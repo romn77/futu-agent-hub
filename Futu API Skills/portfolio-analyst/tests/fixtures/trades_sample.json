@@ -1,0 +1,8 @@
+{
+  "orders": [
+    {"order_id": "masked-order-1", "code": "US.AAA", "side": "BUY", "status": "FILLED_ALL", "qty": 2, "price": 10, "dealt_qty": 2, "create_time": "2026-08-03 09:31:00", "updated_time": "2026-08-03 09:31:01"}
+  ],
+  "deals": [
+    {"deal_id": "masked-fill-1", "order_id": "masked-order-1", "code": "US.AAA", "trd_side": "BUY", "qty": 2, "price": 10, "create_time": "2026-08-03 09:31:01"}
+  ]
+}

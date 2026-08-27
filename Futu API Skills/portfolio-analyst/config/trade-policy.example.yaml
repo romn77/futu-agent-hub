@@ -1,0 +1,16 @@
+schema_version: "1.0"
+market_open_rules:
+  US:
+    no_trade_minutes_after_open: 20
+  HK:
+    no_trade_minutes_after_open: 20
+  CN:
+    no_trade_minutes_after_open: 20
+reentry:
+  cooldown_minutes: 60
+frequency:
+  max_round_trips_per_symbol_per_day: 2
+  max_trades_per_day: 8
+position_management:
+  flag_add_to_loser: true
+  flag_cost_proximity_stop: true

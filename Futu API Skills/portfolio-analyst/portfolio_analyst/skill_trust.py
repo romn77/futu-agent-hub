@@ -20,7 +20,7 @@ class AuditedCommand:
     script_path: Path
 
 
-# Audited against the repository's current official Skill. The two commands import only
+# Audited against the repository's current official Skill. Every command imports only
 # scripts/common.py locally; all other imports are Python stdlib or the external futu SDK.
 _AUDITED_FILES = (
     AuditedFile(
@@ -42,11 +42,24 @@ _AUDITED_FILES = (
         Path("scripts/quote/get_kline.py"),
         "b60f94cd952be5617a098ffd56e19a4c7ee48780ef0346c47d65b77dd63fc345",
     ),
+    AuditedFile(
+        Path("scripts/trade/get_history_orders.py"),
+        "c49d0db84f46b13f680943ebc2c68434b4d53ad7190edb9587cdc2f787059946",
+    ),
+    AuditedFile(
+        Path("scripts/trade/get_history_order_fill_list.py"),
+        "94a7885729f7a68d912ca0c24d8295da91e2c722d2e750d6b09e8d2aba4b418a",
+    ),
 )
 _AUDITED_COMMANDS = (
     AuditedCommand("get_accounts", Path("scripts/trade/get_accounts.py")),
     AuditedCommand("get_portfolio", Path("scripts/trade/get_portfolio.py")),
     AuditedCommand("get_kline", Path("scripts/quote/get_kline.py")),
+    AuditedCommand("get_history_orders", Path("scripts/trade/get_history_orders.py")),
+    AuditedCommand(
+        "get_history_order_fill_list",
+        Path("scripts/trade/get_history_order_fill_list.py"),
+    ),
 )
 _AUDITED_COMMAND_NAMES = frozenset(command.name for command in _AUDITED_COMMANDS)
 

@@ -6,15 +6,18 @@ import argparse
 import hashlib
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, Sequence
 
 from .doctor import run_doctor
+from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
 from .reporting import build_portfolio_report
 from .rendering import terminal_text
 from .repository import SourceDataError
+from .rebalance import RebalanceError, load_rebalance_request, simulate_rebalance
 from .risk import (
     PolicyConfigError,
     RiskConfigError,
@@ -23,11 +26,17 @@ from .risk import (
     analyze_risk,
     load_portfolio_policy,
 )
-from .schema import validate_portfolio_report_document, validate_risk_document
+from .schema import (
+    validate_portfolio_report_document,
+    validate_rebalance_result_document,
+    validate_risk_document,
+)
 from .service import ConfigError, generate_snapshot
 from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
 from .snapshot import UnsafeAggregationError
 from .snapshot_io import InvalidSnapshot, load_latest_snapshot, load_snapshot
+from .trade_history import FutuTradeHistoryService
+from .trade_review import TradePolicyConfigError, TradeReviewInputError, load_trade_policy
 
 
 class _JsonParseError(ValueError):
@@ -94,6 +103,26 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         analysis.add_argument("--output", help="relative output path under data home")
         analysis.add_argument("--no-save", action="store_true")
         analysis.add_argument("--verbose", action="store_true")
+    simulate = subparsers.add_parser("simulate", help="run a non-executable rebalance simulation")
+    source = simulate.add_mutually_exclusive_group(required=True)
+    source.add_argument("--latest", action="store_true", help="use latest valid saved snapshot")
+    source.add_argument("--snapshot", help="relative immutable snapshot path under data home")
+    simulate.add_argument("--request", required=True, help="relative request JSON under data home")
+    simulate.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS)
+    simulate.add_argument("--output", help="relative output directory under data home")
+    simulate.add_argument("--no-save", action="store_true")
+    simulate.add_argument("--verbose", action="store_true")
+    trades = subparsers.add_parser("trades", help="review historical orders and fills read-only")
+    trades.add_argument("--from", required=True, dest="start", help="inclusive YYYY-MM-DD")
+    trades.add_argument("--to", required=True, dest="end", help="inclusive YYYY-MM-DD")
+    trades.add_argument("--trd-env", choices=["REAL", "SIMULATE"], default="REAL")
+    trade_snapshot = trades.add_mutually_exclusive_group()
+    trade_snapshot.add_argument("--latest", action="store_true", help="use latest NAV evidence")
+    trade_snapshot.add_argument("--snapshot", help="relative immutable snapshot for NAV evidence")
+    trades.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS)
+    trades.add_argument("--output", help="relative output directory under data home")
+    trades.add_argument("--no-save", action="store_true")
+    trades.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -275,6 +304,99 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        if args.command == "simulate":
+            source_snapshot = (
+                load_latest_snapshot(settings.data_home)
+                if args.latest
+                else load_snapshot(settings.data_home, args.snapshot)
+            )
+            request, request_payload = load_rebalance_request(settings.data_home, args.request)
+            result = simulate_rebalance(source_snapshot, request)
+            payload = result.to_dict()
+            validate_rebalance_result_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                resolve_output_path(settings.data_home, Path(args.output) / "result.json")
+                SnapshotStore(settings.data_home).save_bundle(
+                    args.output,
+                    {
+                        "request.json": json.dumps(
+                            request_payload, ensure_ascii=False, indent=2, sort_keys=True
+                        )
+                        + "\n",
+                        "result.json": rendered + "\n",
+                        "summary.md": result.to_markdown(),
+                    },
+                )
+            print(rendered if args.as_json else result.to_human())
+            return 0 if result.feasible else 1
+
+        if args.command == "trades":
+            try:
+                start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+            except ValueError:
+                raise TradeReviewInputError("trade review dates must use YYYY-MM-DD") from None
+            if start > end or end > date.today() or (end - start).days > 90:
+                raise TradeReviewInputError(
+                    "trade review range is outside the bounded 90-day policy"
+                )
+            skill_dir = discover_futuapi_skill()
+            if skill_dir is None:
+                raise ConfigError("audited-compatible futuapi Skill is unavailable")
+            should_save = bool(args.output and not args.no_save)
+            aliaser = (
+                AccountAliasStore(settings.data_home).load_or_create()
+                if should_save
+                else AccountAliaser.ephemeral()
+            )
+            nav_snapshot = None
+            if args.latest:
+                nav_snapshot = load_latest_snapshot(settings.data_home)
+            elif args.snapshot:
+                nav_snapshot = load_snapshot(settings.data_home, args.snapshot)
+            if nav_snapshot is not None and nav_snapshot.trd_env != args.trd_env:
+                raise TradeReviewInputError(
+                    "turnover snapshot environment must match the trade review environment"
+                )
+            review = FutuTradeHistoryService(FutuAdapter(skill_dir), aliaser=aliaser).review(
+                start=start,
+                end=end,
+                trd_env=args.trd_env,
+                policy=load_trade_policy(settings.data_home),
+                portfolio_nav=nav_snapshot.nav_base if nav_snapshot else None,
+                source_snapshot_id=nav_snapshot.snapshot_id if nav_snapshot else None,
+            )
+            payload = review.to_dict()
+            from .schema import validate_trade_review_document
+
+            validate_trade_review_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if should_save:
+                resolve_output_path(settings.data_home, Path(args.output) / "trade_review.json")
+                SnapshotStore(settings.data_home).save_bundle(
+                    args.output,
+                    {
+                        "normalized_trades.json": json.dumps(
+                            {
+                                "order_groups": payload["order_groups"],
+                                "round_trips": payload["round_trips"],
+                                "open_lots": payload["open_lots"],
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                        + "\n",
+                        "trade_metrics.json": json.dumps(
+                            payload["metrics"], ensure_ascii=False, indent=2
+                        )
+                        + "\n",
+                        "trade_review.json": rendered + "\n",
+                        "trade_review.md": review.to_markdown(json_artifact="trade_review.json"),
+                    },
+                )
+            print(rendered if args.as_json else review.to_human())
+            return 0
+
         should_save = not args.no_save and (args.save or args.output is not None)
         snapshot = generate_snapshot(
             settings,
@@ -312,10 +434,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))
     except ConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except AccountAliasError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
     except PolicyConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except RiskConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except RebalanceError as exc:
+        return _emit_error(args, "INVALID_REQUEST", str(exc))
+    except TradePolicyConfigError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except TradeReviewInputError as exc:
+        return _emit_error(args, "INVALID_TRADE_HISTORY", str(exc))
     except UnsafeAggregationError as exc:
         return _emit_error(args, "UNSAFE_AGGREGATION", str(exc))
     except (FutuReadError, SourceDataError) as exc:

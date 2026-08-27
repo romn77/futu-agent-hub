@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
@@ -30,6 +30,8 @@ def _json_value(value: Any) -> Any:
         return _decimal_text(value)
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, tuple):
         return [_json_value(item) for item in value]
     if isinstance(value, list):

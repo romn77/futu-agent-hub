@@ -441,3 +441,201 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             raise ReportSemanticError(
                 f"embedded risk report does not match portfolio field {portfolio_field}"
             )
+
+
+def validate_trade_review_document(payload: dict[str, Any]) -> None:
+    _validate(payload, "trade_review.schema.json")
+    try:
+        start = datetime.fromisoformat(payload["start"]).date()
+        end = datetime.fromisoformat(payload["end"]).date()
+        if start > end:
+            raise ValueError("period is reversed")
+        metrics = payload["metrics"]
+        groups = payload["order_groups"]
+        trips = payload["round_trips"]
+        if metrics["trade_count"] != len(groups):
+            raise ValueError("trade count does not match order groups")
+        if metrics["fill_count"] != sum(item["fill_count"] for item in groups):
+            raise ValueError("fill count does not match grouped fills")
+        if metrics["order_count"] < len(groups):
+            raise ValueError("order count is smaller than evidenced order groups")
+        identities = {item["identity"] for item in groups}
+        if metrics["distinct_symbols"] != len(identities):
+            raise ValueError("symbol count does not match order groups")
+        if metrics["closed_trips"] != len(trips):
+            raise ValueError("closed-trip count does not match FIFO evidence")
+        expected_win_rate = (
+            None
+            if not trips
+            else Decimal(sum(Decimal(item["realized_pl"]) > 0 for item in trips)) / len(trips)
+        )
+        observed_win_rate = None if metrics["win_rate"] is None else Decimal(metrics["win_rate"])
+        if observed_win_rate != expected_win_rate:
+            raise ValueError("win rate does not match closed FIFO trips")
+        fill_count = metrics["fill_count"]
+        for count_name, rate_name in (
+            ("same_day_reversals", "same_day_reversal_rate"),
+            ("open_window_trades", "open_window_trade_rate"),
+        ):
+            expected_rate = None if not fill_count else Decimal(metrics[count_name]) / fill_count
+            observed_rate = None if metrics[rate_name] is None else Decimal(metrics[rate_name])
+            if expected_rate != observed_rate:
+                raise ValueError(f"{rate_name} does not reconcile")
+        checks = payload["policy_checks"]
+        expected_policy = (
+            "BREACH"
+            if any(item["status"] == "BREACH" for item in checks)
+            else "PASS"
+            if checks
+            else "UNCONFIGURED"
+        )
+        if payload["policy_status"] != expected_policy:
+            raise ValueError("policy status does not match checks")
+        expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
+        if payload["data_quality_status"] != expected_quality:
+            raise ValueError("quality status does not match notes")
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ReportSemanticError(f"trade review semantic validation failed: {exc}") from exc
+
+
+def validate_rebalance_request_document(payload: dict[str, Any]) -> None:
+    _validate(payload, "rebalance_request.schema.json")
+
+
+def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
+    _validate(payload, "rebalance_result.schema.json")
+    try:
+        before = payload["before"]
+        after = payload["after"]
+        if (
+            before["snapshot_id"] != payload["source_snapshot_id"]
+            or after["snapshot_id"] != payload["source_snapshot_id"]
+        ):
+            raise ValueError("state identities must match the source snapshot")
+
+        def decimal(raw: Any) -> Decimal:
+            value = Decimal(raw)
+            if not value.is_finite():
+                raise ValueError("non-finite decimal")
+            return value
+
+        def validate_state(state: dict[str, Any]) -> None:
+            nav = decimal(state["nav_base"])
+            if nav <= 0 or decimal(state["cash_weight"]) != decimal(state["cash_base"]) / nav:
+                raise ValueError("cash weight does not reconcile")
+            values = {
+                identity: decimal(item["market_value_base"])
+                for identity, item in state["positions"].items()
+            }
+            for identity, item in state["positions"].items():
+                if decimal(item["weight"]) != values[identity] / nav:
+                    raise ValueError("position weight does not reconcile")
+            weights = sorted((value / nav for value in values.values()), reverse=True)
+            expected = {
+                "top_1": sum(weights[:1], Decimal(0)),
+                "top_3": sum(weights[:3], Decimal(0)),
+                "top_5": sum(weights[:5], Decimal(0)),
+                "hhi": sum((weight * weight for weight in weights), Decimal(0)),
+            }
+            if any(
+                decimal(state["concentration"][name]) != value for name, value in expected.items()
+            ):
+                raise ValueError("concentration does not reconcile")
+            position_weight = sum((value / nav for value in values.values()), Decimal(0))
+            for dimension in ("sector", "region", "theme_split"):
+                if (
+                    sum(
+                        (decimal(value) for value in state["exposures"][dimension].values()),
+                        Decimal(0),
+                    )
+                    != position_weight
+                ):
+                    raise ValueError("additive exposure does not reconcile")
+
+        validate_state(before)
+        validate_state(after)
+        before_values = {
+            key: decimal(value["market_value_base"]) for key, value in before["positions"].items()
+        }
+        after_values = {
+            key: decimal(value["market_value_base"]) for key, value in after["positions"].items()
+        }
+        before_quantities = {
+            key: decimal(value["quantity"]) for key, value in before["positions"].items()
+        }
+        after_quantities = {
+            key: decimal(value["quantity"]) for key, value in after["positions"].items()
+        }
+        deltas: dict[str, Decimal] = {}
+        quantity_deltas: dict[str, Decimal] = {}
+        for change in payload["changes"]:
+            symbol = change["symbol"]
+            if symbol in deltas:
+                raise ValueError("duplicate changes are forbidden")
+            deltas[symbol] = decimal(change["amount_delta_base"])
+            quantity_deltas[symbol] = decimal(change["quantity_delta"])
+        for symbol in set(before_values) | set(after_values):
+            if after_values.get(symbol, Decimal(0)) - before_values.get(
+                symbol, Decimal(0)
+            ) != deltas.get(symbol, Decimal(0)):
+                raise ValueError("position deltas do not reconcile")
+            if after_quantities.get(symbol, Decimal(0)) - before_quantities.get(
+                symbol, Decimal(0)
+            ) != quantity_deltas.get(symbol, Decimal(0)):
+                raise ValueError("quantity deltas do not reconcile")
+        nav_delta = decimal(after["nav_base"]) - decimal(before["nav_base"])
+        constraints = payload["constraints"]
+        if nav_delta != decimal(constraints["new_cash"]):
+            raise ValueError("NAV delta must equal explicitly supplied new cash")
+        expected_cash = decimal(before["cash_base"]) + nav_delta - sum(deltas.values(), Decimal(0))
+        if decimal(after["cash_base"]) != expected_cash:
+            raise ValueError("cash delta does not reconcile")
+        for name in ("top_1", "top_3", "top_5", "hhi"):
+            expected_change = decimal(after["concentration"][name]) - decimal(
+                before["concentration"][name]
+            )
+            if decimal(payload["risk_changes"][name]) != expected_change:
+                raise ValueError("risk delta does not reconcile")
+            if decimal(payload["risk_changes"]["concentration"][name]) != decimal(
+                after["concentration"][name]
+            ):
+                raise ValueError("after concentration evidence does not reconcile")
+        for dimension in ("sector", "region", "theme_full", "theme_split"):
+            labels = set(before["exposures"][dimension]) | set(after["exposures"][dimension])
+            expected_deltas = {
+                label: decimal(after["exposures"][dimension].get(label, "0"))
+                - decimal(before["exposures"][dimension].get(label, "0"))
+                for label in labels
+            }
+            observed_deltas = {
+                label: decimal(value) for label, value in payload["risk_changes"][dimension].items()
+            }
+            if observed_deltas != expected_deltas:
+                raise ValueError(f"{dimension} exposure deltas do not reconcile")
+        violations = (
+            (decimal(after["cash_base"]) < 0 and not constraints["allow_margin"])
+            or (
+                any(value < 0 for value in after_quantities.values())
+                and not constraints["allow_short"]
+            )
+            or (constraints["sell_only"] and any(value > 0 for value in deltas.values()))
+            or (
+                constraints["new_cash_only"]
+                and (
+                    any(value < 0 for value in deltas.values())
+                    or sum((max(value, Decimal(0)) for value in deltas.values()), Decimal(0))
+                    > decimal(constraints["new_cash"])
+                )
+            )
+        )
+        if payload["feasible"] == violations:
+            raise ValueError("feasibility does not match declared constraints")
+        expected_quality = "PARTIAL" if payload["warnings"] else "COMPLETE"
+        if payload["data_quality_status"] != expected_quality:
+            raise ValueError("quality status does not match warnings")
+        signed = any(value < 0 for value in after_quantities.values())
+        expected_risk_status = "STRUCTURAL_ONLY_SIGNED" if signed else "STRUCTURAL_ONLY"
+        if payload["risk_changes"]["status"] != expected_risk_status:
+            raise ValueError("risk status does not match signed-position semantics")
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ReportSemanticError(f"rebalance semantic validation failed: {exc}") from exc

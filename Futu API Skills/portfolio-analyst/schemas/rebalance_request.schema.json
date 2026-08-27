@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://portfolio-analyst.local/schemas/rebalance_request.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "base_currency", "allow_margin", "allow_short", "sell_only", "new_cash_only", "new_cash", "changes"],
+  "properties": {"schema_version": {"const": "1.0"}, "snapshot_id": {"type": "string", "pattern": "^ps-"}, "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"}, "allow_margin": {"type": "boolean"}, "allow_short": {"type": "boolean"}, "sell_only": {"type": "boolean"}, "new_cash_only": {"type": "boolean"}, "new_cash": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"}, "changes": {"type": "array", "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["symbol", "operation", "value"], "properties": {"symbol": {"type": "string", "pattern": "^[A-Z]{2,4}\\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*$"}, "operation": {"enum": ["TARGET_WEIGHT", "AMOUNT_DELTA", "SHARE_DELTA"]}, "value": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"}}}}}
+}

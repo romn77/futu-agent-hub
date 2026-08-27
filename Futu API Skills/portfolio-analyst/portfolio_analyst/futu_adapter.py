@@ -173,6 +173,8 @@ class FutuAdapter:
             raise UnsafeFutuCommand("credential and unlock arguments are forbidden")
         if name == "get_kline":
             return self._validate_kline_request(tuple(map(str, arguments)))
+        if name in {"get_history_orders", "get_history_order_fill_list"}:
+            return self._validate_trade_history_request(name, tuple(map(str, arguments)))
         normalized: list[str] = []
         sensitive_values: list[str] = []
         seen: set[str] = set()
@@ -216,6 +218,73 @@ class FutuAdapter:
             normalized.append(value)
             index += 1
         return FutuRequest(name, tuple(normalized), tuple(sensitive_values))
+
+    @staticmethod
+    def _validate_trade_history_request(name: str, arguments: tuple[str, ...]) -> FutuRequest:
+        value_options = {
+            "--acc-id",
+            "--market",
+            "--trd-env",
+            "--start",
+            "--end",
+            "--security-firm",
+            "--ctx-type",
+        }
+        if name == "get_history_orders":
+            value_options.add("--limit")
+        values: dict[str, str | None] = {}
+        normalized: list[str] = []
+        sensitive: list[str] = []
+        index = 0
+        while index < len(arguments):
+            option = arguments[index]
+            if option == "--json":
+                if option in values:
+                    raise UnsafeFutuCommand("duplicate Futu options are forbidden")
+                values[option] = None
+                normalized.append(option)
+                index += 1
+                continue
+            if option not in value_options or option in values or index + 1 >= len(arguments):
+                raise UnsafeFutuCommand("Futu option is not in the command policy")
+            value = arguments[index + 1]
+            if not value or value.startswith("--"):
+                raise UnsafeFutuCommand("Futu option requires a value")
+            values[option] = value
+            normalized.extend((option, value))
+            index += 2
+        required = {
+            "--acc-id",
+            "--market",
+            "--trd-env",
+            "--start",
+            "--end",
+            "--security-firm",
+            "--ctx-type",
+            "--json",
+        }
+        if name == "get_history_orders":
+            required.add("--limit")
+        if set(values) != required:
+            raise UnsafeFutuCommand("historical trade read requires the complete option policy")
+        try:
+            validate_account_id(str(values["--acc-id"]))
+            start = date.fromisoformat(str(values["--start"]))
+            end = date.fromisoformat(str(values["--end"]))
+        except ValueError:
+            raise UnsafeFutuCommand("historical trade account/date values are invalid") from None
+        if start > end or end > date.today() or (end - start).days > 90:
+            raise UnsafeFutuCommand("historical trade date range is outside the bounded policy")
+        if values["--market"] not in _MARKETS:
+            raise UnsafeFutuCommand("historical trade market is outside the command policy")
+        if values["--trd-env"] not in _TRADING_ENVIRONMENTS:
+            raise UnsafeFutuCommand("historical trade environment is outside the command policy")
+        if values["--security-firm"] not in _SECURITY_FIRMS or values["--ctx-type"] != "SEC":
+            raise UnsafeFutuCommand("historical trade context is outside the command policy")
+        if name == "get_history_orders" and values["--limit"] != "200":
+            raise UnsafeFutuCommand("historical order limit must be exactly 200")
+        sensitive.append(str(values["--acc-id"]))
+        return FutuRequest(name, tuple(normalized), tuple(sensitive))
 
     @staticmethod
     def _validate_kline_request(arguments: tuple[str, ...]) -> FutuRequest:
