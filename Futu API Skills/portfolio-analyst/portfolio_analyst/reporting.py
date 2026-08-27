@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping
 
 from .models import PortfolioSnapshot, _deep_freeze, _json_value
-from .risk import RiskReport
+from .risk import RiskReport, aggregate_economic_positions
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class PortfolioReport:
         lines = [
             "# Portfolio analysis",
             "",
-            f"- Source snapshot: `{data['source_snapshot_id']}`",
+            f"- source_snapshot_id: `{data['source_snapshot_id']}`",
             f"- As of: {data['as_of']}",
             f"- NAV: {data['summary']['nav_base']} {data['base_currency']}",
             f"- Cash: {data['summary']['cash_base']} {data['base_currency']}",
@@ -33,6 +34,19 @@ class PortfolioReport:
             f"- Data range: point-in-time snapshot at {data['as_of']}; "
             f"correlation lookback {data['correlation']['lookback']} trading days.",
             f"- Data quality: {data['data_quality_status']}",
+            "",
+            "## Coverage",
+            "",
+            f"- Source holdings: {data['coverage']['source_holdings']}",
+            f"- Economic positions: {data['coverage']['positions']}",
+            f"- Classified sector: {data['coverage']['classified_sector']}",
+            f"- Classified region: {data['coverage']['classified_region']}",
+            f"- Price histories: {data['coverage']['price_histories']['available']}/"
+            f"{data['coverage']['price_histories']['requested']}",
+            "",
+            "## Data quality notes",
+            "",
+            *([f"- {note}" for note in data["data_quality_notes"]] or ["- None"]),
             "",
             "## Top holdings",
             "",
@@ -46,9 +60,19 @@ class PortfolioReport:
             "",
         ]
         for index, risk in enumerate(data["largest_risks"], 1):
-            lines.append(
-                f"{index}. **{risk['type']} / {risk['severity']} / {risk['review_priority']}** — "
-                f"{risk['summary']}"
+            lines.extend(
+                [
+                    f"### Risk {index}",
+                    "",
+                    f"- Type: {risk['type']}",
+                    f"- Severity: {risk['severity']}",
+                    f"- Summary: {risk['summary']}",
+                    f"- Evidence: {json.dumps(risk['evidence'], ensure_ascii=False, sort_keys=True)}",
+                    "- Affected positions: " + (", ".join(risk["affected_positions"]) or "None"),
+                    f"- Review priority: {risk['review_priority']}",
+                    "- Simulation direction: " + (risk["simulation_direction"] or "Not available"),
+                    "",
+                ]
             )
         lines.extend(
             [
@@ -109,8 +133,9 @@ class PortfolioReport:
 def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> PortfolioReport:
     if risk.source_snapshot_id != snapshot.snapshot_id or risk.as_of != snapshot.as_of:
         raise ValueError("risk and portfolio report inputs must reference the same snapshot")
+    economic_positions = aggregate_economic_positions(snapshot)
     top_holdings = sorted(
-        snapshot.positions, key=lambda position: (-abs(position.weight), position.symbol)
+        economic_positions, key=lambda position: (-abs(position.weight), position.identity)
     )
     payload = {
         "schema_version": "1.0",
@@ -124,10 +149,10 @@ def build_portfolio_report(snapshot: PortfolioSnapshot, risk: RiskReport) -> Por
             "nav_base": snapshot.nav_base,
             "cash_base": snapshot.cash_base,
             "cash_weight": snapshot.cash_weight,
-            "position_count": len(snapshot.positions),
+            "position_count": len(economic_positions),
             "top_holdings": [
                 {
-                    "symbol": position.symbol,
+                    "symbol": position.identity,
                     "weight": position.weight,
                     "market_value_base": position.market_value_base,
                 }

@@ -114,3 +114,6 @@ JSON; `analyze --output DIRECTORY` saves `portfolio_report.json` and `portfolio_
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
 order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
 correlation, optional user-policy, unavailable-data, and Phase 4-6 placeholder contracts.
+Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` identity and metadata
+agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather
+than distorting Top-N, HHI, P&L, role, or correlation evidence.

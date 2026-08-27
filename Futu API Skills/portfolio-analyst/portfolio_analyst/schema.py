@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+from referencing import Registry, Resource
 
 
 def _schema_path(name: str = "portfolio_snapshot.schema.json") -> Path:
@@ -29,7 +30,11 @@ def validate_snapshot_document(payload: dict[str, Any]) -> None:
 
 def _validate(payload: dict[str, Any], name: str) -> None:
     schema = json.loads(_schema_path(name).read_text(encoding="utf-8"))
-    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+    definitions = json.loads(_schema_path("report_defs.schema.json").read_text(encoding="utf-8"))
+    registry = Registry().with_resource(definitions["$id"], Resource.from_contents(definitions))
+    validator = jsonschema.Draft202012Validator(
+        schema, registry=registry, format_checker=jsonschema.FormatChecker()
+    )
     validator.validate(payload)
 
 

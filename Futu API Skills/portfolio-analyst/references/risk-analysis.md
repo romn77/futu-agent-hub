@@ -10,6 +10,12 @@ is recomputed before analysis.
 
 Concentration uses nonnegative position weights divided by NAV; cash is excluded. Top 1, Top 3,
 and Top 5 are descending sums. HHI is `sum(weight ** 2)`, and effective positions is `1 / HHI`.
+Before these metrics, holdings from different accounts are grouped by normalized
+`MARKET.SYMBOL`. The report, correlation matrix, clusters, and affected-position lists use that
+market-qualified identity. A bare ticker in two markets remains two economic positions. Duplicate
+rows with conflicting currency/provenance, security type, sector, industry, region, theme set,
+asset class, or configured role fail closed; empty, already-qualified, or unsupported identities
+are not guessed. Market values, weights, and supported P&L fields are summed only after these gates.
 When a snapshot has any signed short/hedge weight or positive short exposure, all long-only
 concentration metrics are `UNAVAILABLE`: signed weights are never silently squared into an HHI.
 The report retains gross/net evidence for review.
@@ -34,8 +40,12 @@ with explicit start/end dates, `NONE` session, page size 1000, and JSON output. 
 unadjusted prices, arbitrary pagination, malformed codes/dates, and unknown flags fail before a
 subprocess starts. The official file is not modified.
 
-Correlation uses aligned adjusted-close daily returns. Defaults are 120 trading days, at least 60
-overlapping return observations, high absolute correlation 0.75, and medium 0.55. Dates must be
+Correlation uses aligned adjusted-close daily returns. Defaults are 120 trading prices, at least 60
+overlapping return observations, high absolute correlation 0.75, and medium 0.55. Lookback is an
+integer from 2 through 5000; minimum overlap is a positive integer no greater than `lookback - 1`.
+Thresholds are finite Decimals satisfying `0 <= medium <= high <= 1` and are serialized in the
+correlation evidence. Pearson means, covariance, variance, square root, and division all remain
+Decimal at a deterministic precision; there is no float conversion. Dates must be
 strictly increasing and unique; closes must be finite and positive. Constant series, malformed
 rows, duplicate/non-monotonic dates, missing histories, or too little overlap produce
 `PARTIAL`/`UNAVAILABLE` coverage and notes. No value is imputed and no pseudo-correlation is made.
@@ -93,3 +103,10 @@ largest review risks, concentration/exposure/correlation evidence, hypothetical 
 directions, gaps, and explicit unavailable placeholders for lifecycle (Phase 4), performance
 (Phase 5), and options (Phase 6). A simulation direction is hypothetical evidence work, never an
 order or an independent buy/sell conclusion.
+
+Both human risk output and comprehensive Markdown repeat `source_snapshot_id`, `as_of`, complete
+coverage, data-quality status and notes. Every one of the three findings includes type, severity,
+summary, structured evidence, affected market-qualified positions, review priority, and its
+explicitly hypothetical simulation direction or an unavailable marker. JSON Schemas recursively
+close structured objects with `additionalProperties: false`; dynamic exposure/matrix keys retain
+typed value schemas.

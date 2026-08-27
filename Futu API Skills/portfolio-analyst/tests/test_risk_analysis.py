@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -178,10 +179,10 @@ def test_correlation_uses_adjusted_return_overlap_and_reports_partial_coverage()
 
     assert report.correlation.status == "PARTIAL"
     assert report.correlation.minimum_observations == 60
-    assert report.correlation.pairs[0].symbols == ("AAA", "BBB")
+    assert report.correlation.pairs[0].symbols == ("US.AAA", "US.BBB")
     assert report.correlation.pairs[0].sample_count == 69
     assert report.correlation.pairs[0].coefficient == Decimal("1")
-    assert report.correlation.clusters == (("AAA", "BBB"),)
+    assert report.correlation.clusters == (("US.AAA", "US.BBB"),)
     assert report.correlation.coverage == {"requested": 3, "available": 2}
 
 
@@ -232,9 +233,27 @@ def test_comprehensive_report_reuses_snapshot_identity_and_has_required_placehol
     assert payload["options"]["status"] == "NOT_RUN_PHASE_6"
     markdown = report.to_markdown()
     assert "NAV basis" in markdown
-    assert "AAA: 0.4" in markdown
+    assert "US.AAA: 0.4" in markdown
     assert "TECH: 0.7" in markdown
     assert "Correlation: PARTIAL" in markdown
+    assert "Source holdings: 3" in markdown
+    assert "Economic positions: 3" in markdown
+    assert "Classified sector: 3" in markdown
+    assert "Classified region: 3" in markdown
+    for finding in payload["largest_risks"]:
+        assert f"Type: {finding['type']}" in markdown
+        assert f"Severity: {finding['severity']}" in markdown
+        assert f"Summary: {finding['summary']}" in markdown
+        assert f"Evidence: {json.dumps(finding['evidence'], sort_keys=True)}" in markdown
+        assert (
+            f"Affected positions: {', '.join(finding['affected_positions']) or 'None'}" in markdown
+        )
+        assert f"Review priority: {finding['review_priority']}" in markdown
+        assert (
+            f"Simulation direction: {finding['simulation_direction'] or 'Not available'}"
+            in markdown
+        )
+    assert not re.search(r"\b(?:BUY|SELL)\b", markdown, flags=re.IGNORECASE)
     validate_portfolio_report_document(payload)
 
     with pytest.raises(TypeError):
@@ -308,7 +327,7 @@ def test_pnl_concentration_is_reported_only_when_source_fields_support_it():
 
     finding = next(item for item in report.top_risks if item.type == "PNL_CONCENTRATION")
     assert finding.evidence["largest_absolute_share"] == Decimal("0.9")
-    assert finding.affected_positions == ("AAA",)
+    assert finding.affected_positions == ("US.AAA",)
 
 
 def test_role_imbalance_is_absent_until_roles_are_configured_then_uses_nav_exposure():

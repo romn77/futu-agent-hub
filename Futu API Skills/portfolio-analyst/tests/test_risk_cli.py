@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -30,6 +31,37 @@ def test_risk_cli_revalidates_snapshot_and_is_no_save_by_default(monkeypatch, tm
         "snapshots",
         "snapshots/source.json",
     ]
+
+
+def test_risk_human_output_contains_complete_source_quality_coverage_and_findings(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    _saved_snapshot(home)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+
+    assert cli.main(["risk", "--snapshot", "snapshots/source.json", "--no-save"]) == 0
+    output = capsys.readouterr().out
+    assert f"source_snapshot_id: {snapshot().snapshot_id}" in output
+    assert "As of: 2026-08-27T10:00:00Z" in output
+    assert "Source holdings: 3" in output
+    assert "Economic positions: 3" in output
+    assert "Classified sector: 3" in output
+    assert "Classified region: 3" in output
+    assert "Price histories: 0/3" in output
+    assert "Data quality: PARTIAL" in output
+    assert "fixture warning" in output
+    for label in (
+        "Type:",
+        "Severity:",
+        "Summary:",
+        "Evidence:",
+        "Affected positions:",
+        "Review priority:",
+        "Simulation direction:",
+    ):
+        assert output.count(label) == 3
+    assert not re.search(r"\b(?:BUY|SELL)\b", output, flags=re.IGNORECASE)
 
 
 def test_tampered_snapshot_identity_is_structured_invalid_input(monkeypatch, tmp_path, capsys):

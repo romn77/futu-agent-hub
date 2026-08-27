@@ -6,14 +6,20 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .doctor import run_doctor
 from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore
 from .reporting import build_portfolio_report
 from .repository import SourceDataError
-from .risk import PolicyConfigError, analyze_risk, load_portfolio_policy
+from .risk import (
+    PolicyConfigError,
+    RiskConfigError,
+    RiskInputError,
+    analyze_risk,
+    load_portfolio_policy,
+)
 from .schema import validate_portfolio_report_document, validate_risk_document
 from .service import ConfigError, generate_snapshot
 from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
@@ -100,6 +106,40 @@ def _human_report(report: dict[str, object], verbose: bool) -> str:
     return "\n".join(lines)
 
 
+def _human_risk_report(payload: dict[str, Any]) -> str:
+    coverage = payload["coverage"]
+    price_coverage = coverage["price_histories"]
+    lines = [
+        "Portfolio risk",
+        f"source_snapshot_id: {payload['source_snapshot_id']}",
+        f"As of: {payload['as_of']}",
+        f"Overall risk: {payload['overall_risk']}",
+        f"Source holdings: {coverage['source_holdings']}",
+        f"Economic positions: {coverage['positions']}",
+        f"Classified sector: {coverage['classified_sector']}",
+        f"Classified region: {coverage['classified_region']}",
+        f"Price histories: {price_coverage['available']}/{price_coverage['requested']}",
+        f"Data quality: {payload['data_quality_status']}",
+        "Data quality notes:",
+        *([f"- {note}" for note in payload["data_quality_notes"]] or ["- None"]),
+        "Largest three risks:",
+    ]
+    for index, finding in enumerate(payload["top_risks"], 1):
+        lines.extend(
+            [
+                f"Risk {index}",
+                f"Type: {finding['type']}",
+                f"Severity: {finding['severity']}",
+                f"Summary: {finding['summary']}",
+                "Evidence: " + json.dumps(finding["evidence"], ensure_ascii=False, sort_keys=True),
+                "Affected positions: " + (", ".join(finding["affected_positions"]) or "None"),
+                f"Review priority: {finding['review_priority']}",
+                "Simulation direction: " + (finding["simulation_direction"] or "Not available"),
+            ]
+        )
+    return "\n".join(lines)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     json_requested = "--json" in raw_argv
@@ -162,16 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.as_json:
                     print(rendered)
                 else:
-                    print(
-                        f"Portfolio risk for {risk.source_snapshot_id}\n"
-                        f"As of: {risk.as_of.isoformat()}\n"
-                        f"Overall: {risk.overall_risk}\n"
-                        + "\n".join(
-                            f"- {finding.type} [{finding.severity}/{finding.review_priority}]: "
-                            f"{finding.summary}"
-                            for finding in risk.top_risks
-                        )
-                    )
+                    print(_human_risk_report(payload))
                 return 0
             report = build_portfolio_report(source_snapshot, risk)
             payload = report.to_dict()
@@ -221,11 +252,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except InvalidSnapshot as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
+    except RiskInputError as exc:
+        return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except SnapshotAlreadyExists as exc:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))
     except ConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except PolicyConfigError as exc:
+        return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except RiskConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except UnsafeAggregationError as exc:
         return _emit_error(args, "UNSAFE_AGGREGATION", str(exc))
