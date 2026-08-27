@@ -18,6 +18,9 @@ _LABELLED_CREDENTIAL = re.compile(
     r"(?:(?:access|refresh)[ _-]?)?token|credentials?)\b"
     r"(?P<separator>\s*(?:[:=]\s*|\s+))(?P<value>\S+)"
 )
+_COLLAPSED_CREDENTIAL = re.compile(
+    r"(?i)(?:password|passwd|pwd|secret|token|api[-_]?key|bearer|sk-|credential)"
+)
 
 
 QUALITY_DETAILS = {
@@ -59,24 +62,43 @@ def canonical_external_source_evidence(notes: Iterable[str]) -> list[dict[str, s
             raise ValueError("too many external source notes")
         if not isinstance(raw, str):
             raise ValueError("source note must be a string")
+        if len(raw) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
+            raise ValueError("EXTERNAL_SOURCE_EVIDENCE_TOO_LONG")
         normalized = unicodedata.normalize("NFKC", raw)
-        normalized = "".join(
-            ""
-            if unicodedata.category(character) in {"Cf", "Cs"}
-            else " "
-            if unicodedata.category(character) == "Cc"
-            else character
+        if len(normalized) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
+            raise ValueError("EXTERNAL_SOURCE_EVIDENCE_TOO_LONG")
+        detection = "".join(
+            character
             for character in normalized
+            if not unicodedata.category(character).startswith(("C", "Z"))
+            and not character.isspace()
         )
-        detail = FutuAdapter.sanitize_output(normalized)
-        detail = _LABELLED_CREDENTIAL.sub(
-            lambda match: f"{match.group('label')}{match.group('separator')}{FutuAdapter.REDACTION}",
-            detail,
-        )
-        detail = _STANDALONE_SECRET.sub(FutuAdapter.REDACTION, detail)
+        if _COLLAPSED_CREDENTIAL.search(detection):
+            detail = "[REDACTED_EXTERNAL_CREDENTIAL]"
+        else:
+            normalized = "".join(
+                " "
+                if unicodedata.category(character) == "Cc"
+                or unicodedata.category(character).startswith("Z")
+                or character.isspace()
+                else ""
+                if unicodedata.category(character).startswith("C")
+                else character
+                for character in normalized
+            )
+            detail = FutuAdapter.sanitize_output(normalized)
+            detail = _LABELLED_CREDENTIAL.sub(
+                lambda match: (
+                    f"{match.group('label')}{match.group('separator')}{FutuAdapter.REDACTION}"
+                ),
+                detail,
+            )
+            detail = _STANDALONE_SECRET.sub(FutuAdapter.REDACTION, detail)
         detail = " ".join(detail.split())
-        if not detail or len(detail) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
-            raise ValueError("source note must contain 1 to 512 safe characters")
+        if not detail:
+            raise ValueError("source note must contain safe text")
+        if len(detail) > MAX_EXTERNAL_SOURCE_NOTE_CHARS:
+            raise ValueError("EXTERNAL_SOURCE_EVIDENCE_TOO_LONG")
         if detail in seen:
             continue
         seen.add(detail)

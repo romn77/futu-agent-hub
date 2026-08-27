@@ -1290,7 +1290,7 @@ def test_trade_external_source_notes_are_bounded_and_sanitized():
         source_notes=["ambiguous\ntransfer\x1b[2J"],
     )
     assert report.external_source_evidence[0]["detail"] == "ambiguous transfer [2J"
-    with pytest.raises(Exception, match="source note"):
+    with pytest.raises(Exception, match="EXTERNAL_SOURCE_EVIDENCE_TOO_LONG"):
         build_trade_review(
             orders=[],
             deals=[],
@@ -1314,7 +1314,7 @@ def test_trade_external_source_evidence_scrubs_secrets_and_unicode_controls_ever
 
     for sensitive in ("123456789", "sk-live-secret", "\u202e", "exe.txt"):
         assert sensitive not in rendered
-    assert "[REDACTED]" in payload["external_source_evidence"][0]["detail"]
+    assert payload["external_source_evidence"][0]["detail"] == ("[REDACTED_EXTERNAL_CREDENTIAL]")
     validate_trade_review_document(payload)
 
     forged = deepcopy(payload)
@@ -1374,3 +1374,43 @@ def test_trade_external_source_evidence_deletes_credential_splitting_controls(
     assert "\u200b" not in rendered
     assert "\u202e" not in rendered
     assert "\u2066" not in rendered
+
+
+def test_trade_external_source_evidence_rejects_million_character_raw_before_sanitizing():
+    with pytest.raises(Exception, match="EXTERNAL_SOURCE_EVIDENCE_TOO_LONG"):
+        build_trade_review(
+            orders=[],
+            deals=[],
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 27),
+            source_notes=["token: " + "x" * 1_000_000],
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "pass\nword: password-suffix",
+        "to\u2028ken: token-suffix",
+        "api\u2029key: api-key-suffix",
+        "Bear\ter: bear\x85er-suffix",
+        "sk-\u200bpri\tvate-suffix",
+        "creden\u2066tial: credential-suffix",
+    ],
+)
+def test_trade_external_source_credential_detection_collapses_all_separators_and_redacts_note(raw):
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        source_notes=[raw],
+    )
+    detail = report.external_source_evidence[0]["detail"]
+    rendered = (
+        json.dumps(report.to_dict(), ensure_ascii=False) + report.to_markdown() + report.to_human()
+    )
+
+    assert detail == "[REDACTED_EXTERNAL_CREDENTIAL]"
+    assert "suffix" not in rendered
+    validate_trade_review_document(report.to_dict())

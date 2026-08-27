@@ -181,9 +181,11 @@ permitting Cartesian findings-by-evidence expansion.
 Externally supplied source notes are preserved in bounded `external_source_evidence` entries with
 `EXTERNAL_SOURCE_NOTE` and `UNVERIFIED_EXTERNAL`; they are escaped in Markdown/terminal output and
 are ambiguity evidence only, not independently verified facts or inferred motives. Before becoming
-authoritative JSON, external text is NFKC-normalized, has every Cf/Cs control deleted so zero-width or
-bidi characters cannot split credentials, maps Cc/C1 controls to single-line spaces, and then passes
-the shared account/credential scrub; runtime
+authoritative JSON, its raw Python string is type/length checked at 512 characters before any
+normalization or scan. A bounded NFKC detection copy removes every Unicode C*/Z*/whitespace separator;
+if this rejoins any credential pattern, the whole note becomes `[REDACTED_EXTERNAL_CREDENTIAL]` so no
+suffix survives. Otherwise the display copy safely becomes one line and passes the shared account
+scrub. Oversize input fails with `EXTERNAL_SOURCE_EVIDENCE_TOO_LONG`; runtime
 validation reapplies the same sanitizer. Internal row-cap, turnover, failure, and budget evidence is
 derived only from coverage/status codes and never enters `external_source_evidence`.
 
