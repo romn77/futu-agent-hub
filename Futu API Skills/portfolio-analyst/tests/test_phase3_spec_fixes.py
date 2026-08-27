@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -750,6 +751,240 @@ def test_trade_semantic_validation_rejects_oversized_document_before_deep_valida
     ).to_dict()
     report["normalized_fills"] *= 20_001
     with pytest.raises(Exception, match="VALIDATION_ROW_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_validation_rejects_oversized_secondary_array_in_preflight():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    report["policy_checks"] = [
+        {"name": "max_trades_per_day", "observed": 1, "limit": 1, "status": "PASS"}
+    ] * 20_001
+
+    with pytest.raises(Exception, match="VALIDATION_SHAPE_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_review_schema_publishes_business_collection_limits():
+    schema = json.loads(
+        (Path(__file__).parents[1] / "schemas" / "trade_review.schema.json").read_text()
+    )
+    properties = schema["properties"]
+    definitions = schema["$defs"]
+
+    assert properties["policy_checks"]["maxItems"] == 6
+    assert properties["behavior_findings"]["maxItems"] == 20_000
+    assert properties["unverified_interpretations"]["maxItems"] == 16
+    assert properties["quality_issues"]["maxItems"] == 19
+    assert properties["data_quality_notes"]["maxItems"] == 19
+    for name in (
+        "requested_contexts",
+        "successful_contexts",
+        "failed_contexts",
+        "omitted_contexts",
+    ):
+        assert definitions["coverage"]["properties"][name]["maxItems"] == 20
+    assert definitions["behaviorFinding"]["properties"]["affected_events"]["maxItems"] == 20_000
+    assert definitions["behaviorFinding"]["properties"]["affected_symbols"]["maxItems"] == 20_000
+    assert definitions["metrics"]["properties"]["notional_by_currency"]["maxProperties"] == 64
+    assert definitions["metrics"]["properties"]["per_symbol_turnover"]["maxProperties"] == 20_000
+    assert definitions["provenance"]["properties"]["audited_source_digests"]["maxProperties"] == 4
+
+
+def test_trade_review_schema_bounds_every_array_and_map_shape():
+    schema = json.loads(
+        (Path(__file__).parents[1] / "schemas" / "trade_review.schema.json").read_text()
+    )
+    pending = [("$", schema)]
+    while pending:
+        path, node = pending.pop()
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type")
+        types = (
+            set(node_type)
+            if isinstance(node_type, list)
+            else {node_type}
+            if isinstance(node_type, str)
+            else set()
+        )
+        if "array" in types:
+            assert "maxItems" in node, path
+        if "object" in types:
+            assert "maxProperties" in node, path
+        pending.extend(
+            (f"{path}.{key}", child) for key, child in node.items() if isinstance(child, dict)
+        )
+        pending.extend(
+            (f"{path}.{key}[]", child)
+            for key, children in node.items()
+            if isinstance(children, list)
+            for child in children
+            if isinstance(child, dict)
+        )
+
+
+def test_trade_semantic_validation_preflights_oversized_nested_currency_map():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    report["metrics"]["per_symbol_turnover"] = {f"US.S{index}": "0" for index in range(20_001)}
+
+    with pytest.raises(Exception, match="VALIDATION_SHAPE_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_validation_preflights_oversized_currency_bucket_body():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    report["metrics"]["notional_by_currency"]["USD"]["unexpected"] = "0"
+
+    with pytest.raises(Exception, match="VALIDATION_SHAPE_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_validation_preflights_nested_behavior_event_array():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    report["behavior_findings"] = [
+        {
+            "type": "SAME_DAY_REVERSAL",
+            "severity": "INFORMATIONAL",
+            "evidence": "observed",
+            "verified": True,
+            "affected_events": ["acct/order"] * 20_001,
+            "affected_symbols": ["US.AAPL"],
+            "period_start": "2026-08-03T14:00:00Z",
+            "period_end": "2026-08-03T14:00:00Z",
+        }
+    ]
+
+    with pytest.raises(Exception, match="VALIDATION_SHAPE_LIMIT_EXCEEDED"):
+        validate_trade_review_document(report)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda report: report["coverage"].__setitem__(
+                "requested_contexts", [{"account_ref": "acct", "market": "US"}] * 21
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report.__setitem__("quality_issues", [report["quality_issues"][0]] * 20),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report.__setitem__(
+                "data_quality_notes", [report["data_quality_notes"][0]] * 20
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report.__setitem__(
+                "unverified_interpretations", ["motive unverified"] * 17
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report["metrics"].__setitem__(
+                "notional_by_currency",
+                {
+                    f"{chr(65 + index // 26)}{chr(65 + index % 26)}A": {
+                        "buy": "0",
+                        "sell": "0",
+                    }
+                    for index in range(65)
+                },
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report["provenance"].__setitem__(
+                "audited_source_digests", {f"source-{index}": "0" * 64 for index in range(5)}
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+        (
+            lambda report: report["provenance"].__setitem__(
+                "audited_source_version", "x" * (1024 * 1024 + 1)
+            ),
+            "VALIDATION_DOCUMENT_SIZE_EXCEEDED",
+        ),
+        (
+            lambda report: report["provenance"].__setitem__(
+                "audited_source_version", [None] * 120_001
+            ),
+            "VALIDATION_SHAPE_LIMIT_EXCEEDED",
+        ),
+    ],
+)
+def test_trade_semantic_preflight_closes_secondary_shape_bypasses(mutate, expected_code):
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    mutate(report)
+
+    with pytest.raises(Exception, match=expected_code):
+        validate_trade_review_document(report)
+
+
+def test_trade_semantic_validation_accepts_twenty_context_business_limit():
+    contexts = [{"account_ref": f"acct-{index:02d}", "market": "US"} for index in range(20)]
+    report = build_trade_review(
+        orders=[],
+        deals=[],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+        acquired_at=datetime(2026, 8, 28, 16, tzinfo=timezone.utc),
+        coverage_context={
+            "accounts_requested": 20,
+            "accounts_covered": 20,
+            "contexts_requested": 20,
+            "contexts_read": 20,
+            "contexts_failed": 0,
+            "contexts_omitted_budget": 0,
+            "requested_contexts": contexts,
+            "successful_contexts": contexts,
+            "failed_contexts": [],
+            "omitted_contexts": [],
+        },
+    )
+
+    validate_trade_review_document(report.to_dict())
+
+
+def test_trade_semantic_preflight_bounds_normalized_document_bytes_without_canonicalizing():
+    report = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "BUY", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    escaped_chunk = "\x00" * 700_000
+    report["unverified_interpretations"] = [escaped_chunk] * 16
+
+    with pytest.raises(Exception, match="VALIDATION_DOCUMENT_SIZE_EXCEEDED"):
         validate_trade_review_document(report)
 
 

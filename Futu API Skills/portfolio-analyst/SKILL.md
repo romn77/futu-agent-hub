@@ -169,7 +169,11 @@ reconciliation, FX, corporate-event, and current-session evidence. Analysis is i
 operation and wall-clock budgets. Snapshot/date checks use requested exchange-local markets.
 Quality issue codes, ordering, details, and data-quality notes are canonical and runtime-rebuilt. Direct analysis and
 semantic validation have separate hard row caps plus cumulative operation/wall budgets; FIFO uses a
-deque and indexed validation remains linear for the documented 20,000-row boundary.
+deque and indexed validation remains linear for the documented 20,000-row boundary. Before JSON
+Schema or report-ID canonicalization, semantic validation iteratively preflights the entire untrusted
+body for bounded depth, nodes, array items, map entries, strings, and normalized document bytes. The
+published schema also caps every array/map, including contexts, policy/quality/behavior evidence,
+currency buckets, symbol turnover, and provenance maps.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 

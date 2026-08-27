@@ -92,9 +92,14 @@ valid UTC cross-midnight snapshot is not rejected.
 Direct analysis accepts at most 20,000 combined normalized input rows, 20,000 groups, and 40,000 FIFO
 trip rows. Its cumulative budget is charged during normalization, grouping, FIFO, reconciliation,
 metrics, and behavior phases; FIFO uses a deque. Semantic validation independently rejects oversized
-arrays before JSON Schema traversal, applies its own cumulative operation/wall budget, and rebuilds
-FIFO and indexed evidence in linear time. The 20,000-row acceptance test uses the generous default
-budget rather than a fragile machine-specific elapsed-time threshold.
+documents before JSON Schema traversal or report-ID canonicalization. Its iterative whole-body
+preflight caps nesting depth, total nodes, total array items, total map entries, individual/aggregate
+string bytes, and normalized JSON bytes. Business caps cover requested/successful/failed/omitted
+contexts, policy checks, quality issues/notes, behavior findings and their event/symbol evidence,
+unverified interpretations, currency/P&L buckets, symbol turnover, and provenance maps; every schema
+array/map publishes a matching `maxItems`/`maxProperties`. Validation then applies its own cumulative
+operation/wall budget and rebuilds FIFO and indexed evidence in linear time. The 20,000-row acceptance
+test uses the generous default budget rather than a fragile machine-specific elapsed-time threshold.
 
 `trade-policy.yaml` uses this strict shape:
 

@@ -27,6 +27,173 @@ class ReportSemanticError(ValueError):
     """A structurally valid report violates the risk evidence contract."""
 
 
+_TRADE_ARRAY_LIMITS = {
+    "normalized_orders": 20_000,
+    "normalized_fills": 20_000,
+    "order_groups": 20_000,
+    "round_trips": 40_000,
+    "open_lots": 20_000,
+    "policy_checks": 6,
+    "behavior_findings": 20_000,
+    "unverified_interpretations": 16,
+    "quality_issues": 19,
+    "data_quality_notes": 19,
+    "coverage.requested_contexts": 20,
+    "coverage.successful_contexts": 20,
+    "coverage.failed_contexts": 20,
+    "coverage.omitted_contexts": 20,
+}
+_TRADE_PRIMARY_ROW_ARRAYS = {
+    "normalized_orders",
+    "normalized_fills",
+    "order_groups",
+    "round_trips",
+    "open_lots",
+}
+_TRADE_MAP_LIMITS = {
+    "": 26,
+    "coverage": 22,
+    "metrics": 30,
+    "metrics.notional_by_currency": 64,
+    "metrics.realized_pl_by_currency": 64,
+    "metrics.pnl_statistics_by_currency": 64,
+    "metrics.per_symbol_turnover": 20_000,
+    "policy": 7,
+    "policy.market_open_no_trade_minutes_by_market": 8,
+    "provenance": 9,
+    "provenance.audited_source_digests": 4,
+}
+_TRADE_ITEM_MAP_LIMITS = {
+    "normalized_orders[]": 12,
+    "normalized_fills[]": 13,
+    "order_groups[]": 11,
+    "round_trips[]": 11,
+    "open_lots[]": 6,
+    "coverage.requested_contexts[]": 2,
+    "coverage.successful_contexts[]": 2,
+    "coverage.failed_contexts[]": 3,
+    "coverage.omitted_contexts[]": 2,
+    "policy_checks[]": 4,
+    "behavior_findings[]": 8,
+    "quality_issues[]": 2,
+}
+_TRADE_MAX_TOTAL_NODES = 1_500_000
+_TRADE_MAX_TOTAL_ARRAY_ITEMS = 120_000
+_TRADE_MAX_TOTAL_MAP_ENTRIES = 1_500_000
+_TRADE_MAX_TOTAL_STRING_BYTES = 32 * 1024 * 1024
+_TRADE_MAX_NORMALIZED_BYTES = 64 * 1024 * 1024
+_TRADE_MAX_STRING_BYTES = 1024 * 1024
+_TRADE_MAX_DEPTH = 64
+
+
+def _trade_map_business_limit(path: str) -> int | None:
+    if path.startswith("metrics.notional_by_currency."):
+        return 2
+    if path.startswith("metrics.pnl_statistics_by_currency."):
+        return 10
+    return _TRADE_MAP_LIMITS.get(path, _TRADE_ITEM_MAP_LIMITS.get(path))
+
+
+def _normalized_json_string_bytes(value: str, remaining: int) -> tuple[int, int]:
+    """Count UTF-8 content and ensure-ascii JSON bytes without materializing either."""
+
+    content_bytes = 0
+    normalized_bytes = 2  # quotes
+    for character in value:
+        codepoint = ord(character)
+        if codepoint <= 0x7F:
+            content_bytes += 1
+            if character in {'"', "\\"} or character in "\b\f\n\r\t":
+                normalized_bytes += 2
+            else:
+                normalized_bytes += 6 if codepoint < 0x20 else 1
+        elif codepoint <= 0x7FF:
+            content_bytes += 2
+            normalized_bytes += 6
+        elif codepoint <= 0xFFFF:
+            content_bytes += 3
+            normalized_bytes += 6
+        else:
+            content_bytes += 4
+            normalized_bytes += 12
+        if content_bytes > _TRADE_MAX_STRING_BYTES or normalized_bytes > remaining:
+            raise ReportSemanticError("VALIDATION_DOCUMENT_SIZE_EXCEEDED")
+    return content_bytes, normalized_bytes
+
+
+def _preflight_trade_review_shape(payload: Any) -> None:
+    """Bound the complete untrusted JSON shape before invoking JSON Schema."""
+
+    nodes = 0
+    array_items = 0
+    map_entries = 0
+    string_bytes = 0
+    normalized_bytes = 0
+    stack: list[tuple[Any, str, int]] = [(payload, "", 0)]
+    while stack:
+        value, path, depth = stack.pop()
+        nodes += 1
+        if nodes > _TRADE_MAX_TOTAL_NODES or depth > _TRADE_MAX_DEPTH:
+            raise ReportSemanticError("VALIDATION_SHAPE_LIMIT_EXCEEDED")
+        if isinstance(value, dict):
+            entries = len(value)
+            business_limit = _trade_map_business_limit(path)
+            if business_limit is not None and entries > business_limit:
+                raise ReportSemanticError(f"VALIDATION_SHAPE_LIMIT_EXCEEDED: {path or '$'}")
+            map_entries += entries
+            normalized_bytes += 2 + max(entries - 1, 0) + entries
+            if map_entries > _TRADE_MAX_TOTAL_MAP_ENTRIES:
+                raise ReportSemanticError("VALIDATION_SHAPE_LIMIT_EXCEEDED")
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise ReportSemanticError("VALIDATION_SHAPE_TYPE_INVALID")
+                key_content, key_normalized = _normalized_json_string_bytes(
+                    key, _TRADE_MAX_NORMALIZED_BYTES - normalized_bytes
+                )
+                string_bytes += key_content
+                normalized_bytes += key_normalized
+                if string_bytes > _TRADE_MAX_TOTAL_STRING_BYTES:
+                    raise ReportSemanticError("VALIDATION_DOCUMENT_SIZE_EXCEEDED")
+                child_path = f"{path}.{key}" if path else str(key)
+                stack.append((child, child_path, depth + 1))
+        elif isinstance(value, (list, tuple)):
+            items = len(value)
+            business_limit = _TRADE_ARRAY_LIMITS.get(path)
+            if business_limit is None and path.endswith((".affected_events", ".affected_symbols")):
+                business_limit = 20_000
+            if business_limit is not None and items > business_limit:
+                code = (
+                    "VALIDATION_ROW_LIMIT_EXCEEDED"
+                    if path in _TRADE_PRIMARY_ROW_ARRAYS
+                    else "VALIDATION_SHAPE_LIMIT_EXCEEDED"
+                )
+                raise ReportSemanticError(f"{code}: {path}")
+            array_items += items
+            normalized_bytes += 2 + max(items - 1, 0)
+            if array_items > _TRADE_MAX_TOTAL_ARRAY_ITEMS:
+                raise ReportSemanticError("VALIDATION_SHAPE_LIMIT_EXCEEDED")
+            for child in value:
+                stack.append((child, f"{path}[]", depth + 1))
+        elif isinstance(value, str):
+            content, normalized = _normalized_json_string_bytes(
+                value, _TRADE_MAX_NORMALIZED_BYTES - normalized_bytes
+            )
+            string_bytes += content
+            normalized_bytes += normalized
+        elif value is None:
+            normalized_bytes += 4
+        elif isinstance(value, bool):
+            normalized_bytes += 4 if value else 5
+        elif isinstance(value, int):
+            normalized_bytes += max(1, (value.bit_length() * 30_103) // 100_000 + 1) + (value < 0)
+        else:
+            normalized_bytes += 32
+        if string_bytes > _TRADE_MAX_TOTAL_STRING_BYTES:
+            raise ReportSemanticError("VALIDATION_DOCUMENT_SIZE_EXCEEDED")
+        if normalized_bytes > _TRADE_MAX_NORMALIZED_BYTES:
+            raise ReportSemanticError("VALIDATION_DOCUMENT_SIZE_EXCEEDED")
+
+
 def _schema_path(name: str = "portfolio_snapshot.schema.json") -> Path:
     candidates = (
         Path(__file__).resolve().parents[1] / "schemas" / name,
@@ -473,6 +640,7 @@ def validate_trade_review_document(
 ) -> None:
     if max_validation_operations <= 0 or max_validation_seconds <= 0:
         raise ReportSemanticError("validation budgets must be positive")
+    _preflight_trade_review_shape(payload)
     validation_started = validation_clock()
     remaining_operations = max_validation_operations
 
