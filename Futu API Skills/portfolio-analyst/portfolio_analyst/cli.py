@@ -316,6 +316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_rebalance_result_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
             if args.output and not args.no_save:
+                result_bytes = (rendered + "\n").encode("utf-8")
+                result_digest = hashlib.sha256(result_bytes).hexdigest()
                 resolve_output_path(settings.data_home, Path(args.output) / "result.json")
                 SnapshotStore(settings.data_home).save_bundle(
                     args.output,
@@ -325,7 +327,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                         + "\n",
                         "result.json": rendered + "\n",
-                        "summary.md": result.to_markdown(),
+                        "summary.md": result.to_markdown(
+                            json_artifact="result.json", json_digest=result_digest
+                        ),
                     },
                 )
             print(rendered if args.as_json else result.to_human())
@@ -371,6 +375,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_trade_review_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
             if should_save:
+                review_bytes = (rendered + "\n").encode("utf-8")
+                review_digest = hashlib.sha256(review_bytes).hexdigest()
                 resolve_output_path(settings.data_home, Path(args.output) / "trade_review.json")
                 SnapshotStore(settings.data_home).save_bundle(
                     args.output,
@@ -392,7 +398,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                         + "\n",
                         "trade_review.json": rendered + "\n",
-                        "trade_review.md": review.to_markdown(json_artifact="trade_review.json"),
+                        "trade_review.md": review.to_markdown(
+                            json_artifact="trade_review.json", json_digest=review_digest
+                        ),
                     },
                 )
             print(rendered if args.as_json else review.to_human())

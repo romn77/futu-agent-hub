@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from decimal import Decimal
+import hashlib
+import json
 
 import pytest
 
@@ -13,6 +15,24 @@ from portfolio_analyst.schema import (
 )
 from portfolio_analyst.trade_review import TradePolicy, build_trade_review
 from test_risk_analysis import snapshot
+
+
+def _rehash_simulation(payload):
+    body = dict(payload)
+    body.pop("simulation_id")
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    payload["simulation_id"] = "sim_" + digest
+
+
+def _rehash_trade(payload):
+    body = dict(payload)
+    body.pop("review_id")
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    payload["review_id"] = "tr_" + digest
 
 
 def _deal(
@@ -145,11 +165,11 @@ def test_complete_fx_enables_base_pnl_and_currency_qualified_statistics():
     assert report.source_snapshot_as_of == snapshot_as_of
     assert report.metrics.buy_notional_base == Decimal("10")
     assert report.metrics.sell_notional_base == Decimal("11")
-    assert report.metrics.average_win_base == Decimal("1")
-    assert report.metrics.expectancy_base == Decimal("1")
+    assert report.metrics.average_win_base is None
+    assert report.metrics.expectancy_base is None
     assert report.round_trips[0].currency == "HKD"
     assert report.round_trips[0].realized_pl_local == Decimal("8")
-    assert report.round_trips[0].realized_pl_base == Decimal("1")
+    assert report.round_trips[0].realized_pl_base is None
     validate_trade_review_document(report.to_dict())
 
 
@@ -295,6 +315,67 @@ def test_global_trade_and_rebalance_contracts_are_self_contained_and_reject_old_
         request_from_document(old_request)
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("changes", 0, "operation"), "SHARE_DELTA"),
+        (("after", "cash_base"), "999"),
+        (("after", "nav_base"), "999"),
+        (("changes", 0, "unit_price_local"), "999"),
+    ],
+)
+def test_rebalance_semantics_reject_rehashed_formula_state_and_evidence_tampering(path, value):
+    payload = simulate_rebalance(
+        snapshot(),
+        RebalanceRequest(
+            snapshot().snapshot_id,
+            "USD",
+            changes=(RebalanceChange("US.AAA", "AMOUNT_DELTA", Decimal("-10")),),
+        ),
+    ).to_dict()
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    _rehash_simulation(payload)
+    with pytest.raises(Exception):
+        validate_rebalance_result_document(payload)
+
+
+def test_trade_semantics_reject_rehashed_fifo_and_required_quality_tampering():
+    closed = build_trade_review(
+        orders=[],
+        deals=[
+            _deal("d1", "o1", "BUY", "2", "10", "2026-08-03 10:00:00"),
+            _deal("d2", "o2", "SELL", "1", "11", "2026-08-04 10:00:00"),
+        ],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    bad_holding = deepcopy(closed)
+    bad_holding["round_trips"][0]["holding_seconds"] = "1"
+    _rehash_trade(bad_holding)
+    with pytest.raises(Exception):
+        validate_trade_review_document(bad_holding)
+    bad_open = deepcopy(closed)
+    bad_open["open_lots"][0]["quantity"] = "999"
+    _rehash_trade(bad_open)
+    with pytest.raises(Exception):
+        validate_trade_review_document(bad_open)
+
+    unmatched = build_trade_review(
+        orders=[],
+        deals=[_deal("d1", "o1", "SELL", "1", "10", "2026-08-03 10:00:00")],
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 27),
+    ).to_dict()
+    unmatched["data_quality_notes"] = []
+    unmatched["data_quality_status"] = "COMPLETE"
+    _rehash_trade(unmatched)
+    with pytest.raises(Exception):
+        validate_trade_review_document(unmatched)
+
+
 def test_behavior_and_frequency_use_order_groups_not_partial_fill_rows():
     report = build_trade_review(
         orders=[],
@@ -340,6 +421,33 @@ def test_behavior_and_frequency_use_order_groups_not_partial_fill_rows():
         for finding in report.behavior_findings
         for event in finding.affected_events
     )
+
+    forged_open_window = report.to_dict()
+    forged_open_window["metrics"]["open_window_trades"] = 0
+    forged_open_window["metrics"]["open_window_trade_rate"] = "0"
+    for check in forged_open_window["policy_checks"]:
+        if check["name"] == "market_open_no_trade_minutes":
+            check["observed"] = 0
+            check["status"] = "PASS"
+    forged_open_window["behavior_findings"] = [
+        finding
+        for finding in forged_open_window["behavior_findings"]
+        if finding["type"] != "EARLY_SESSION_TRADING"
+    ]
+    _rehash_trade(forged_open_window)
+    with pytest.raises(Exception):
+        validate_trade_review_document(forged_open_window)
+
+    forged_behavior_type = report.to_dict()
+    reversal = next(
+        finding
+        for finding in forged_behavior_type["behavior_findings"]
+        if finding["type"] == "SAME_DAY_REVERSAL"
+    )
+    reversal["type"] = "SELL_THEN_REENTRY"
+    _rehash_trade(forged_behavior_type)
+    with pytest.raises(Exception):
+        validate_trade_review_document(forged_behavior_type)
 
 
 @pytest.mark.parametrize(

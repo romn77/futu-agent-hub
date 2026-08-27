@@ -383,6 +383,21 @@ def test_run_uses_utf8_decoding_with_safe_error_replacement(monkeypatch, tmp_pat
     assert "text" not in observed
 
 
+def test_run_rejects_combined_stdout_stderr_over_response_budget(monkeypatch, tmp_path):
+    adapter = FutuAdapter(_skill(tmp_path))
+    adapter.MAX_RESPONSE_BYTES = 5
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="123", stderr="456"
+        ),
+    )
+
+    with pytest.raises(futu_adapter.FutuReadError, match="response budget"):
+        adapter.run("get_accounts", ["--json"])
+
+
 def test_run_uses_controlled_environment_without_credentials_or_python_injection(
     monkeypatch, tmp_path
 ):

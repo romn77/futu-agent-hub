@@ -11,7 +11,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .models import NormalizedPosition, PortfolioSnapshot, _json_value
+from .models import NormalizedPosition, PortfolioSnapshot, _deep_freeze, _json_value
 from .rendering import markdown_text, terminal_text
 from .schema import validate_rebalance_request_document
 from .snapshot_io import InvalidSnapshot, _read_confined_bytes, _unique_object
@@ -113,6 +113,8 @@ class RebalanceResult:
     execution_disabled: bool
     feasible: bool
     constraints: Mapping[str, Any]
+    request: Mapping[str, Any]
+    evidence: Mapping[str, Mapping[str, Any]]
     before: PortfolioState
     after: PortfolioState
     changes: tuple[Mapping[str, Any], ...]
@@ -123,17 +125,21 @@ class RebalanceResult:
     data_quality_notes: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "constraints", MappingProxyType(dict(self.constraints)))
-        object.__setattr__(self, "changes", tuple(MappingProxyType(dict(x)) for x in self.changes))
-        object.__setattr__(self, "risk_changes", MappingProxyType(dict(self.risk_changes)))
+        object.__setattr__(self, "constraints", _deep_freeze(dict(self.constraints)))
+        object.__setattr__(self, "request", _deep_freeze(dict(self.request)))
+        object.__setattr__(self, "evidence", _deep_freeze(dict(self.evidence)))
+        object.__setattr__(self, "changes", _deep_freeze(tuple(self.changes)))
+        object.__setattr__(self, "risk_changes", _deep_freeze(dict(self.risk_changes)))
         object.__setattr__(self, "warnings", tuple(self.warnings))
-        object.__setattr__(self, "coverage", MappingProxyType(dict(self.coverage)))
+        object.__setattr__(self, "coverage", _deep_freeze(dict(self.coverage)))
         object.__setattr__(self, "data_quality_notes", tuple(self.data_quality_notes))
 
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
 
-    def to_markdown(self) -> str:
+    def to_markdown(
+        self, *, json_artifact: str | None = None, json_digest: str | None = None
+    ) -> str:
         safe = markdown_text
         lines = [
             "# Hypothetical Rebalance Simulation\n",
@@ -144,9 +150,16 @@ class RebalanceResult:
             f"- As of: {self.as_of.isoformat()}",
             f"- Base currency: {safe(self.base_currency)}",
             f"- Feasible: {str(self.feasible).lower()}",
+            f"- Authoritative request: {safe(json.dumps(_json_value(self.request), sort_keys=True))}",
+            f"- Price/FX evidence: {safe(json.dumps(_json_value(self.evidence), sort_keys=True))}",
             f"- Before cash: {self.before.cash_base}",
             f"- After cash: {self.after.cash_base}",
             f"- Risk comparison status: {safe(self.risk_changes['status'])}",
+            f"- Before weights: {safe(json.dumps(_json_value({k: v['weight'] for k, v in self.before.positions.items()}), sort_keys=True))}",
+            f"- After weights: {safe(json.dumps(_json_value({k: v['weight'] for k, v in self.after.positions.items()}), sort_keys=True))}",
+            f"- Before concentration: {safe(json.dumps(_json_value(self.before.concentration), sort_keys=True))}",
+            f"- After concentration: {safe(json.dumps(_json_value(self.after.concentration), sort_keys=True))}",
+            f"- Exposure/risk deltas: {safe(json.dumps(_json_value(self.risk_changes), sort_keys=True))}",
             f"- Coverage: {self.coverage['changes_applied']} of {self.coverage['changes_requested']} changes; {self.coverage['price_evidence']} price and {self.coverage['fx_evidence']} FX evidence records",
             f"- Data quality: {safe(self.data_quality_status)}",
             "\n## Hypothetical changes\n",
@@ -165,6 +178,10 @@ class RebalanceResult:
         lines.append(
             "\nThis artifact is analysis only and cannot be converted into an executable order.\n"
         )
+        if json_artifact:
+            lines.append(f"Authoritative JSON: `{safe(json_artifact)}`\n")
+        if json_digest:
+            lines.append(f"Authoritative JSON SHA-256: `{safe(json_digest)}`\n")
         return "\n".join(lines)
 
     def to_human(self) -> str:
@@ -177,9 +194,16 @@ class RebalanceResult:
                 f"Base currency: {terminal_text(self.base_currency)}",
                 f"Feasible: {self.feasible}",
                 "Execution disabled: True",
+                f"Authoritative request: {terminal_text(json.dumps(_json_value(self.request), sort_keys=True))}",
+                f"Price/FX evidence: {terminal_text(json.dumps(_json_value(self.evidence), sort_keys=True))}",
                 f"Before cash: {self.before.cash_base}",
                 f"After cash: {self.after.cash_base}",
                 f"Risk comparison: {terminal_text(self.risk_changes['status'])}",
+                f"Before weights: {terminal_text(json.dumps(_json_value({k: v['weight'] for k, v in self.before.positions.items()}), sort_keys=True))}",
+                f"After weights: {terminal_text(json.dumps(_json_value({k: v['weight'] for k, v in self.after.positions.items()}), sort_keys=True))}",
+                f"Before concentration: {terminal_text(json.dumps(_json_value(self.before.concentration), sort_keys=True))}",
+                f"After concentration: {terminal_text(json.dumps(_json_value(self.after.concentration), sort_keys=True))}",
+                f"Exposure/risk deltas: {terminal_text(json.dumps(_json_value(self.risk_changes), sort_keys=True))}",
                 f"Coverage: {self.coverage['changes_applied']}/{self.coverage['changes_requested']} changes, {self.coverage['price_evidence']} price, {self.coverage['fx_evidence']} FX",
                 f"Data quality: {terminal_text(self.data_quality_status)}",
                 *[f"Warning: {terminal_text(item)}" for item in self.warnings],
@@ -292,6 +316,10 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         raise RebalanceError("request base currency does not match snapshot currency")
     if snapshot.nav_base <= 0:
         raise RebalanceError("source NAV must be positive")
+    if any(
+        position.quantity < 0 or position.market_value_base < 0 for position in snapshot.positions
+    ):
+        raise RebalanceError("UNSUPPORTED_PORTFOLIO: signed source positions are not supported")
     metadata: dict[str, NormalizedPosition] = {}
     values: dict[str, Decimal] = {}
     quantities: dict[str, Decimal] = {}
@@ -364,6 +392,8 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
                 "value": change.value,
                 "amount_delta_base": delta,
                 "quantity_delta": quantity_delta,
+                "unit_price_local": position.last_price_local,
+                "fx_to_base": position.fx_to_base,
             }
         )
     if request.new_cash_only and positive_delta > request.new_cash:
@@ -375,17 +405,16 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     if any(quantity < 0 for quantity in quantities.values()) and not request.allow_short:
         warnings.append("simulated quantity is negative while shorting is disabled")
         feasible = False
-    after = _state(snapshot.snapshot_id, values, quantities, metadata, cash, final_nav)
-    signed_hypothetical = any(quantity < 0 for quantity in quantities.values())
-    if signed_hypothetical:
-        warnings.append(
-            "signed hypothetical portfolio: Phase 2 long-only risk authority is unavailable; structural metrics only"
+    if any(quantity < 0 for quantity in quantities.values()):
+        raise RebalanceError(
+            "UNSUPPORTED_PORTFOLIO: signed hypothetical positions are not supported"
         )
+    after = _state(snapshot.snapshot_id, values, quantities, metadata, cash, final_nav)
     risk_changes: dict[str, Any] = {
         name: after.concentration[name] - before.concentration[name]
         for name in before.concentration
     }
-    risk_changes["status"] = "STRUCTURAL_ONLY_SIGNED" if signed_hypothetical else "STRUCTURAL_ONLY"
+    risk_changes["status"] = "STRUCTURAL_ONLY"
     risk_changes["concentration"] = MappingProxyType(dict(after.concentration))
     for dimension in ("sector", "region", "theme_full", "theme_split"):
         risk_changes[dimension] = MappingProxyType(
@@ -397,25 +426,30 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
                 )
             }
         )
-    body = {
+    request_body = {
+        "schema_version": request.schema_version,
         "snapshot_id": request.snapshot_id,
         "base_currency": request.base_currency,
-        "new_cash": str(request.new_cash),
+        "new_cash_base": request.new_cash,
         "allow_margin": request.allow_margin,
         "allow_short": request.allow_short,
         "sell_only": request.sell_only,
         "new_cash_only": request.new_cash_only,
         "changes": [
-            {"symbol": x.symbol, "operation": x.operation, "value": str(x.value)}
+            {"symbol": x.symbol, "operation": x.operation, "value": x.value}
             for x in request.changes
         ],
     }
-    simulation_id = (
-        "sim_"
-        + hashlib.sha256(
-            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()[:16]
-    )
+    evidence = {
+        identity: {
+            "unit_price_local": position.last_price_local,
+            "currency": position.currency,
+            "fx_to_base": position.fx_to_base,
+            "fx_as_of": snapshot.as_of,
+            "fx_method": "SOURCE_SNAPSHOT_CURRENT_VALUATION",
+        }
+        for identity, position in sorted(metadata.items())
+    }
     constraints = {
         "allow_margin": request.allow_margin,
         "allow_short": request.allow_short,
@@ -432,9 +466,49 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
             )
         )
     )
+    if snapshot.data_quality.status != "COMPLETE" and not source_quality_notes:
+        source_quality_notes = (f"source snapshot data quality is {snapshot.data_quality.status}",)
     quality_notes = tuple(dict.fromkeys((*source_quality_notes, *warnings)))
+    coverage = {
+        "source_positions": len(snapshot.positions),
+        "hypothetical_positions": len(after.positions),
+        "changes_requested": len(request.changes),
+        "changes_applied": len(applied),
+        "price_evidence": len(metadata),
+        "fx_evidence": len(metadata),
+        "source_data_quality_status": snapshot.data_quality.status,
+    }
+    quality_status = "PARTIAL" if quality_notes else "COMPLETE"
+    identity_body = _json_value(
+        {
+            "schema_version": "1.2",
+            "source_snapshot_id": snapshot.snapshot_id,
+            "as_of": snapshot.as_of,
+            "base_currency": snapshot.base_currency,
+            "status": "HYPOTHETICAL",
+            "execution_disabled": True,
+            "feasible": feasible,
+            "constraints": constraints,
+            "request": request_body,
+            "evidence": evidence,
+            "before": before,
+            "after": after,
+            "changes": applied,
+            "risk_changes": risk_changes,
+            "warnings": warnings,
+            "data_quality_status": quality_status,
+            "coverage": coverage,
+            "data_quality_notes": quality_notes,
+        }
+    )
+    simulation_id = (
+        "sim_"
+        + hashlib.sha256(
+            json.dumps(identity_body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+    )
     return RebalanceResult(
-        "1.1",
+        "1.2",
         simulation_id,
         snapshot.snapshot_id,
         snapshot.as_of,
@@ -443,20 +517,14 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         True,
         feasible,
         constraints,
+        request_body,
+        evidence,
         before,
         after,
         tuple(applied),
         risk_changes,
         tuple(warnings),
-        "PARTIAL" if quality_notes else "COMPLETE",
-        {
-            "source_positions": len(snapshot.positions),
-            "hypothetical_positions": len(after.positions),
-            "changes_requested": len(request.changes),
-            "changes_applied": len(applied),
-            "price_evidence": len(metadata),
-            "fx_evidence": len(metadata),
-            "source_data_quality_status": snapshot.data_quality.status,
-        },
+        quality_status,
+        coverage,
         quality_notes,
     )

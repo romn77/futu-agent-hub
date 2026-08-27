@@ -5,14 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
+from zoneinfo import ZoneInfo
 
 import jsonschema
 from referencing import Registry, Resource
 
+from .models import _json_value
 from .normalization import canonical_unknown
 from .risk import _latest_complete_market_close_date
 
@@ -42,10 +44,17 @@ def _validate(payload: dict[str, Any], name: str) -> None:
     schema = json.loads(_schema_path(name).read_text(encoding="utf-8"))
     definitions = json.loads(_schema_path("report_defs.schema.json").read_text(encoding="utf-8"))
     risk_schema = json.loads(_schema_path("risk_report.schema.json").read_text(encoding="utf-8"))
+    rebalance_request_schema = json.loads(
+        _schema_path("rebalance_request.schema.json").read_text(encoding="utf-8")
+    )
     registry = Registry().with_resources(
         [
             (definitions["$id"], Resource.from_contents(definitions)),
             (risk_schema["$id"], Resource.from_contents(risk_schema)),
+            (
+                rebalance_request_schema["$id"],
+                Resource.from_contents(rebalance_request_schema),
+            ),
         ]
     )
     validator = jsonschema.Draft202012Validator(
@@ -458,8 +467,8 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             datetime.fromisoformat(payload["source_snapshot_as_of"].replace("Z", "+00:00"))
         start = datetime.fromisoformat(payload["start"]).date()
         end = datetime.fromisoformat(payload["end"]).date()
-        if start > end or as_of.date() < end:
-            raise ValueError("period is reversed or as-of precedes its end")
+        if start > end:
+            raise ValueError("period is reversed")
         metrics = payload["metrics"]
         groups = payload["order_groups"]
         trips = payload["round_trips"]
@@ -477,6 +486,31 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             return item["account_ref"], item["market"]
 
         requested_contexts = {context_key(item) for item in coverage["requested_contexts"]}
+        exchange_zones = {
+            "US": "America/New_York",
+            "HK": "Asia/Hong_Kong",
+            "CN": "Asia/Shanghai",
+            "SG": "Asia/Singapore",
+            "MY": "Asia/Kuala_Lumpur",
+            "JP": "Asia/Tokyo",
+            "CA": "America/Toronto",
+            "AU": "Australia/Sydney",
+        }
+
+        def group_local_datetime(group: dict[str, Any]) -> datetime:
+            market = group["identity"].split(".", 1)[0]
+            instant = datetime.fromisoformat(group["effective_at"].replace("Z", "+00:00"))
+            return instant.astimezone(ZoneInfo(exchange_zones[market]))
+
+        current_session = any(
+            as_of.astimezone(ZoneInfo(exchange_zones[market])).date() == end
+            for _, market in requested_contexts
+        )
+        if any(
+            as_of.astimezone(ZoneInfo(exchange_zones[market])).date() < end
+            for _, market in requested_contexts
+        ) or (not requested_contexts and as_of.date() < end):
+            raise ValueError("as-of precedes the requested exchange-local period end")
         successful_contexts = {context_key(item) for item in coverage["successful_contexts"]}
         failed_contexts = {context_key(item) for item in coverage["failed_contexts"]}
         omitted_contexts = {context_key(item) for item in coverage["omitted_contexts"]}
@@ -611,6 +645,61 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 or group["last_fill_at"] != related[-1]["executed_at"]
             ):
                 raise ValueError("order-group normalization does not reconcile")
+        fifo_lots: dict[tuple[str, str], list[list[Any]]] = {}
+        expected_trips: list[dict[str, Any]] = []
+        unmatched_sells = 0
+        for fill in sorted(fills, key=lambda item: (item["executed_at"], item["deal_id"])):
+            key = (fill["account_ref"], fill["identity"])
+            lots = fifo_lots.setdefault(key, [])
+            quantity = Decimal(fill["quantity"])
+            price = Decimal(fill["price"])
+            if fill["side"] == "BUY":
+                lots.append([quantity, price, fill["executed_at"], fill["currency"]])
+                continue
+            remaining = quantity
+            while remaining and lots:
+                lot = lots[0]
+                matched = min(remaining, lot[0])
+                opened = datetime.fromisoformat(lot[2].replace("Z", "+00:00"))
+                closed = datetime.fromisoformat(fill["executed_at"].replace("Z", "+00:00"))
+                expected_trips.append(
+                    {
+                        "account_ref": fill["account_ref"],
+                        "identity": fill["identity"],
+                        "currency": fill["currency"],
+                        "quantity": matched,
+                        "entry_price": lot[1],
+                        "exit_price": price,
+                        "opened_at": lot[2],
+                        "closed_at": fill["executed_at"],
+                        "realized_pl_local": (price - lot[1]) * matched,
+                        "realized_pl_base": None,
+                        "holding_seconds": Decimal(str((closed - opened).total_seconds())),
+                    }
+                )
+                lot[0] -= matched
+                remaining -= matched
+                if lot[0] == 0:
+                    lots.pop(0)
+            if remaining:
+                unmatched_sells += 1
+        expected_open_lots = [
+            {
+                "account_ref": account,
+                "identity": identity,
+                "currency": lot[3],
+                "quantity": lot[0],
+                "price": lot[1],
+                "opened_at": lot[2],
+            }
+            for (account, identity), lots in sorted(fifo_lots.items())
+            for lot in lots
+            if lot[0]
+        ]
+        if trips != _json_value(expected_trips) or payload["open_lots"] != _json_value(
+            expected_open_lots
+        ):
+            raise ValueError("FIFO round trips or open lots do not reconcile")
         order_keys = {(item["account_ref"], item["order_id"]) for item in orders}
         fill_order_keys = {(item["account_ref"], item["order_id"]) for item in fills}
         if metrics["order_count"] != len(order_keys | fill_order_keys):
@@ -670,6 +759,32 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
             raise ValueError("symbol count does not match normalized fills")
         if metrics["closed_trips"] != len(trips):
             raise ValueError("closed-trip count does not match FIFO evidence")
+        holdings = [Decimal(item["holding_seconds"]) for item in trips]
+        expected_average_holding = (
+            None if not holdings else sum(holdings, Decimal(0)) / len(holdings)
+        )
+        ordered_holdings = sorted(holdings)
+        expected_median_holding = (
+            None
+            if not ordered_holdings
+            else ordered_holdings[len(ordered_holdings) // 2]
+            if len(ordered_holdings) % 2
+            else (
+                ordered_holdings[len(ordered_holdings) // 2 - 1]
+                + ordered_holdings[len(ordered_holdings) // 2]
+            )
+            / 2
+        )
+        if (
+            None
+            if metrics["average_holding_seconds"] is None
+            else Decimal(metrics["average_holding_seconds"])
+        ) != expected_average_holding or (
+            None
+            if metrics["median_holding_seconds"] is None
+            else Decimal(metrics["median_holding_seconds"])
+        ) != expected_median_holding:
+            raise ValueError("holding-time metrics do not reconcile")
         expected_win_rate = (
             None
             if not trips
@@ -679,6 +794,61 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         if observed_win_rate != expected_win_rate:
             raise ValueError("win rate does not match closed FIFO trips")
         trade_count = metrics["trade_count"]
+        chronological_groups = sorted(
+            groups, key=lambda item: (item["effective_at"], item["group_ref"])
+        )
+        groups_by_security: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        activity: dict[tuple[str, str, str], int] = {}
+        for group in chronological_groups:
+            groups_by_security.setdefault((group["account_ref"], group["identity"]), []).append(
+                group
+            )
+            day_key = (
+                group["account_ref"],
+                group["identity"],
+                group_local_datetime(group).date().isoformat(),
+            )
+            activity[day_key] = activity.get(day_key, 0) + 1
+        reversal_pairs = [
+            (left, right)
+            for items in groups_by_security.values()
+            for left, right in zip(items, items[1:])
+            if group_local_datetime(left).date() == group_local_datetime(right).date()
+            and left["side"] != right["side"]
+        ]
+        expected_reversals = len(reversal_pairs)
+        add_winner = add_loser = 0
+        add_winner_refs: list[str] = []
+        add_loser_refs: list[str] = []
+        inventory_cost: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
+        for group in chronological_groups:
+            key = (group["account_ref"], group["identity"])
+            quantity, cost = inventory_cost.get(key, (Decimal(0), Decimal(0)))
+            group_quantity = Decimal(group["quantity"])
+            group_price = Decimal(group["average_price"])
+            if group["side"] == "BUY":
+                if quantity > 0:
+                    average = cost / quantity
+                    add_winner += group_price > average
+                    add_loser += group_price < average
+                    if group_price > average:
+                        add_winner_refs.append(group["group_ref"])
+                    elif group_price < average:
+                        add_loser_refs.append(group["group_ref"])
+                inventory_cost[key] = (
+                    quantity + group_quantity,
+                    cost + group_quantity * group_price,
+                )
+            elif quantity > 0:
+                matched = min(quantity, group_quantity)
+                inventory_cost[key] = (quantity - matched, cost - cost / quantity * matched)
+        if (
+            metrics["same_day_reversals"] != expected_reversals
+            or metrics["repeated_symbol_days"] != sum(count > 1 for count in activity.values())
+            or metrics["add_to_winner_count"] != add_winner
+            or metrics["add_to_loser_count"] != add_loser
+        ):
+            raise ValueError("observed behavior metrics do not reconcile")
         expected_reversal_rate = (
             None if not trade_count else Decimal(metrics["same_day_reversals"]) / trade_count
         )
@@ -689,13 +859,74 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         )
         if expected_reversal_rate != observed_reversal_rate:
             raise ValueError("same-day reversal rate does not reconcile")
+        policy = payload["policy"]
+        expected_check_names: set[str] = set()
+        if policy is not None:
+            if (
+                policy["market_open_no_trade_minutes"] is not None
+                or policy["market_open_no_trade_minutes_by_market"]
+            ):
+                expected_check_names.add("market_open_no_trade_minutes")
+            if policy["reentry_cooldown_minutes"] is not None:
+                expected_check_names.add("reentry_cooldown_minutes")
+            if policy["max_trades_per_day"] is not None:
+                expected_check_names.add("max_trades_per_day")
+            if policy["max_round_trips_per_symbol_day"] is not None:
+                expected_check_names.add("max_round_trips_per_symbol_day")
+            if policy["flag_add_to_loser"]:
+                expected_check_names.add("flag_add_to_loser")
+            if policy["flag_cost_proximity"]:
+                expected_check_names.add("flag_cost_proximity_stop")
         check_names = {item["name"] for item in payload["policy_checks"]}
-        open_configured = "market_open_no_trade_minutes" in check_names
-        reentry_configured = "reentry_cooldown_minutes" in check_names
-        if (metrics["reentries_within_cooldown"] is not None) != reentry_configured:
-            raise ValueError("cooldown metric availability does not match policy evidence")
-        if (metrics["open_window_trades"] is not None) != open_configured:
-            raise ValueError("open-window metric availability does not match policy evidence")
+        if check_names != expected_check_names:
+            raise ValueError("policy checks do not match the authoritative policy body")
+        open_configured = "market_open_no_trade_minutes" in expected_check_names
+        reentry_configured = "reentry_cooldown_minutes" in expected_check_names
+        adjacent_groups = [
+            pair for items in groups_by_security.values() for pair in zip(items, items[1:])
+        ]
+        expected_reentry_pairs = [
+            pair
+            for pair in adjacent_groups
+            if reentry_configured
+            and pair[0]["side"] == "SELL"
+            and pair[1]["side"] == "BUY"
+            and datetime.fromisoformat(pair[1]["effective_at"].replace("Z", "+00:00"))
+            - datetime.fromisoformat(pair[0]["effective_at"].replace("Z", "+00:00"))
+            <= timedelta(minutes=policy["reentry_cooldown_minutes"])
+        ]
+        market_opens = {
+            "US": (9, 30),
+            "HK": (9, 30),
+            "CN": (9, 30),
+            "SG": (9, 0),
+            "MY": (9, 0),
+            "JP": (9, 0),
+            "CA": (9, 30),
+            "AU": (10, 0),
+        }
+        expected_open_groups: list[dict[str, Any]] = []
+        if open_configured:
+            for group in chronological_groups:
+                market = group["identity"].split(".", 1)[0]
+                window = policy["market_open_no_trade_minutes_by_market"].get(
+                    market, policy["market_open_no_trade_minutes"]
+                )
+                if window is None:
+                    continue
+                local = group_local_datetime(group)
+                opening = market_opens[market][0] * 60 + market_opens[market][1]
+                minute = local.hour * 60 + local.minute
+                if opening <= minute < opening + window:
+                    expected_open_groups.append(group)
+        if metrics["reentries_within_cooldown"] != (
+            len(expected_reentry_pairs) if reentry_configured else None
+        ):
+            raise ValueError("cooldown metric does not reconcile with normalized groups")
+        if metrics["open_window_trades"] != (
+            len(expected_open_groups) if open_configured else None
+        ):
+            raise ValueError("open-window metric does not reconcile with normalized groups")
         if not open_configured and metrics["open_window_trade_rate"] is not None:
             raise ValueError("open-window rate must be unavailable without policy evidence")
         if open_configured:
@@ -766,35 +997,17 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
                 )
                 if Decimal(metrics[name]) != expected:
                     raise ValueError(f"{name} does not reconcile")
-            base_trip_values = [Decimal(item["realized_pl_base"]) for item in trips]
-            profits = [value for value in base_trip_values if value > 0]
-            losses = [value for value in base_trip_values if value < 0]
-            expected_statistics = {
-                "average_win_base": (
-                    None if not profits else sum(profits, Decimal(0)) / len(profits)
-                ),
-                "average_loss_base": (
-                    None if not losses else sum(losses, Decimal(0)) / len(losses)
-                ),
-                "payoff_ratio_base": (
-                    None
-                    if not profits or not losses
-                    else (sum(profits, Decimal(0)) / len(profits))
-                    / (-sum(losses, Decimal(0)) / len(losses))
-                ),
-                "profit_factor_base": (
-                    None if not losses else sum(profits, Decimal(0)) / -sum(losses, Decimal(0))
-                ),
-                "expectancy_base": (
-                    None
-                    if not base_trip_values
-                    else sum(base_trip_values, Decimal(0)) / len(base_trip_values)
-                ),
-            }
-            for name, expected in expected_statistics.items():
-                observed = None if metrics[name] is None else Decimal(metrics[name])
-                if observed != expected:
-                    raise ValueError(f"{name} does not reconcile")
+            if any(item["realized_pl_base"] is not None for item in trips) or any(
+                metrics[name] is not None
+                for name in (
+                    "average_win_base",
+                    "average_loss_base",
+                    "payoff_ratio_base",
+                    "profit_factor_base",
+                    "expectancy_base",
+                )
+            ):
+                raise ValueError("historical base P&L requires transaction-date FX evidence")
         elif any(metrics[name] is not None for name in base_fields):
             raise ValueError("base monetary metrics require complete FX evidence")
         nav = (
@@ -842,6 +1055,51 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         checks = payload["policy_checks"]
         if len({item["name"] for item in checks}) != len(checks):
             raise ValueError("policy checks must have unique names")
+        per_account_day: dict[tuple[str, str], int] = {}
+        completed_inventory_days: dict[tuple[str, str, str], int] = {}
+        policy_inventory: dict[tuple[str, str], Decimal] = {}
+        for group in chronological_groups:
+            day = group_local_datetime(group).date().isoformat()
+            account_day = (group["account_ref"], day)
+            per_account_day[account_day] = per_account_day.get(account_day, 0) + 1
+            key = (group["account_ref"], group["identity"])
+            current = policy_inventory.get(key, Decimal(0))
+            quantity = Decimal(group["quantity"])
+            if group["side"] == "BUY":
+                policy_inventory[key] = current + quantity
+            elif current > 0:
+                remaining = current - min(current, quantity)
+                policy_inventory[key] = remaining
+                if remaining == 0:
+                    trip_key = (group["account_ref"], group["identity"], day)
+                    completed_inventory_days[trip_key] = (
+                        completed_inventory_days.get(trip_key, 0) + 1
+                    )
+        expected_policy_observed = {
+            "max_trades_per_day": max(per_account_day.values(), default=0),
+            "max_round_trips_per_symbol_day": max(completed_inventory_days.values(), default=0),
+            "flag_add_to_loser": add_loser,
+            "flag_cost_proximity_stop": metrics["cost_proximity_exit_count"],
+            "market_open_no_trade_minutes": metrics["open_window_trades"],
+            "reentry_cooldown_minutes": metrics["reentries_within_cooldown"],
+        }
+        expected_policy_limits = {
+            "max_trades_per_day": None if policy is None else policy["max_trades_per_day"],
+            "max_round_trips_per_symbol_day": (
+                None if policy is None else policy["max_round_trips_per_symbol_day"]
+            ),
+            "flag_add_to_loser": 0,
+            "flag_cost_proximity_stop": 0,
+            "market_open_no_trade_minutes": 0,
+            "reentry_cooldown_minutes": 0,
+        }
+        for check in checks:
+            if (
+                check["observed"] != expected_policy_observed[check["name"]]
+                or check["limit"] != expected_policy_limits[check["name"]]
+                or check["status"] != ("BREACH" if check["observed"] > check["limit"] else "PASS")
+            ):
+                raise ValueError("policy observation does not reconcile")
         expected_policy = (
             "BREACH"
             if any(item["status"] == "BREACH" for item in checks)
@@ -852,26 +1110,120 @@ def validate_trade_review_document(payload: dict[str, Any]) -> None:
         if payload["policy_status"] != expected_policy:
             raise ValueError("policy status does not match checks")
         events_by_id = {item["group_ref"]: item for item in groups}
-        for finding in payload["behavior_findings"]:
-            affected = [events_by_id.get(event_id) for event_id in finding["affected_events"]]
-            if not finding["verified"] or any(item is None for item in affected):
-                raise ValueError("behavior finding lacks normalized-event evidence")
-            expected_symbols = sorted({item["identity"] for item in affected})
-            if finding["affected_symbols"] != expected_symbols:
-                raise ValueError("behavior finding symbols do not match its events")
-            instants = sorted(
-                datetime.fromisoformat(item["effective_at"].replace("Z", "+00:00"))
-                for item in affected
+        check_status = {item["name"]: item["status"] for item in checks}
+        expected_findings: list[dict[str, Any]] = []
+
+        def add_expected_finding(
+            kind: str,
+            count: int,
+            event_rows: list[dict[str, Any]],
+            *,
+            breached: bool = False,
+        ) -> None:
+            if count <= 0 or not event_rows:
+                return
+            ordered = sorted(
+                {item["group_ref"]: item for item in event_rows}.values(),
+                key=lambda item: (item["effective_at"], item["group_ref"]),
             )
-            if (
-                datetime.fromisoformat(finding["period_start"].replace("Z", "+00:00"))
-                != instants[0]
-                or datetime.fromisoformat(finding["period_end"].replace("Z", "+00:00"))
-                != instants[-1]
-            ):
-                raise ValueError("behavior finding time bounds do not match its events")
+            expected_findings.append(
+                {
+                    "type": kind,
+                    "severity": "MEDIUM" if breached else "INFORMATIONAL",
+                    "evidence": f"Observed {count} qualifying events in normalized execution evidence.",
+                    "verified": True,
+                    "affected_events": [item["group_ref"] for item in ordered],
+                    "affected_symbols": sorted({item["identity"] for item in ordered}),
+                    "period_start": ordered[0]["effective_at"],
+                    "period_end": ordered[-1]["effective_at"],
+                }
+            )
+
+        add_expected_finding(
+            "SAME_DAY_REVERSAL",
+            len(reversal_pairs),
+            [item for pair in reversal_pairs for item in pair],
+        )
+        observed_reentry_pairs = [
+            pair
+            for pair in adjacent_groups
+            if pair[0]["side"] == "SELL"
+            and pair[1]["side"] == "BUY"
+            and group_local_datetime(pair[0]).date() == group_local_datetime(pair[1]).date()
+        ]
+        add_expected_finding(
+            "SELL_THEN_REENTRY",
+            len(observed_reentry_pairs),
+            [item for pair in observed_reentry_pairs for item in pair],
+        )
+        observed_open_groups = []
+        for group in chronological_groups:
+            market = group["identity"].split(".", 1)[0]
+            local = group_local_datetime(group)
+            opening = market_opens[market][0] * 60 + market_opens[market][1]
+            minute = local.hour * 60 + local.minute
+            if opening <= minute < opening + 30:
+                observed_open_groups.append(group)
+        add_expected_finding(
+            "MARKET_OPEN_ACTIVITY", len(observed_open_groups), observed_open_groups
+        )
+        add_expected_finding(
+            "REENTRY_WITHIN_COOLDOWN",
+            len(expected_reentry_pairs),
+            [item for pair in expected_reentry_pairs for item in pair],
+            breached=check_status.get("reentry_cooldown_minutes") == "BREACH",
+        )
+        add_expected_finding(
+            "EARLY_SESSION_TRADING",
+            len(expected_open_groups),
+            expected_open_groups,
+            breached=check_status.get("market_open_no_trade_minutes") == "BREACH",
+        )
+        repeated_keys = sorted(key for key, count in activity.items() if count > 1)
+        for repeated_key in repeated_keys:
+            repeated_rows = [
+                group
+                for group in chronological_groups
+                if (
+                    group["account_ref"],
+                    group["identity"],
+                    group_local_datetime(group).date().isoformat(),
+                )
+                == repeated_key
+            ]
+            repeated_breach = bool(
+                policy is not None
+                and policy["max_trades_per_day"] is not None
+                and per_account_day[(repeated_key[0], repeated_key[2])]
+                > policy["max_trades_per_day"]
+            )
+            add_expected_finding(
+                "REPEATED_SYMBOL_ACTIVITY", 1, repeated_rows, breached=repeated_breach
+            )
+        add_expected_finding(
+            "ADD_TO_WINNER", add_winner, [events_by_id[item] for item in add_winner_refs]
+        )
+        add_expected_finding(
+            "ADD_TO_LOSER",
+            add_loser,
+            [events_by_id[item] for item in add_loser_refs],
+            breached=bool(policy is not None and policy["flag_add_to_loser"]),
+        )
+        if payload["behavior_findings"] != expected_findings:
+            raise ValueError("behavior findings do not reconcile with normalized groups")
         if payload["motive_status"] != "UNVERIFIED" or not payload["unverified_interpretations"]:
             raise ValueError("psychological interpretation must remain explicitly unverified")
+        required_partial = bool(
+            failed_contexts
+            or omitted_contexts
+            or current_session
+            or unmatched_sells
+            or any(coverage[name] for name in expected_reconciliation)
+            or coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE"
+            or (coverage["monetary_base_coverage"] == "PARTIAL" and fills)
+        )
+        if required_partial and not payload["data_quality_notes"]:
+            raise ValueError("required source-quality limitations are missing")
         expected_quality = "PARTIAL" if payload["data_quality_notes"] else "COMPLETE"
         if payload["data_quality_status"] != expected_quality:
             raise ValueError("quality status does not match notes")
@@ -886,6 +1238,16 @@ def validate_rebalance_request_document(payload: dict[str, Any]) -> None:
 def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
     _validate(payload, "rebalance_result.schema.json")
     try:
+        identity_payload = dict(payload)
+        observed_simulation_id = identity_payload.pop("simulation_id")
+        expected_simulation_id = (
+            "sim_"
+            + hashlib.sha256(
+                json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()[:16]
+        )
+        if observed_simulation_id != expected_simulation_id:
+            raise ValueError("simulation identity does not match the authoritative result body")
         datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
         before = payload["before"]
         after = payload["after"]
@@ -909,6 +1271,8 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 identity: decimal(item["market_value_base"])
                 for identity, item in state["positions"].items()
             }
+            if sum(values.values(), Decimal(0)) + decimal(state["cash_base"]) != nav:
+                raise ValueError("cash plus positions must equal NAV")
             for identity, item in state["positions"].items():
                 if decimal(item["weight"]) != values[identity] / nav:
                     raise ValueError("position weight does not reconcile")
@@ -948,6 +1312,18 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
         after_quantities = {
             key: decimal(value["quantity"]) for key, value in after["positions"].items()
         }
+        if set(payload["evidence"]) != set(before_values) or any(
+            decimal(item["unit_price_local"]) <= 0
+            or decimal(item["fx_to_base"]) <= 0
+            or item["fx_as_of"] != payload["as_of"]
+            for item in payload["evidence"].values()
+        ):
+            raise ValueError("immutable price/FX evidence does not match source positions")
+        for identity, evidence in payload["evidence"].items():
+            unit_price = decimal(evidence["unit_price_local"])
+            fx = decimal(evidence["fx_to_base"])
+            if before_quantities[identity] * unit_price * fx != before_values[identity]:
+                raise ValueError("source value does not reconcile with immutable price/FX evidence")
         deltas: dict[str, Decimal] = {}
         quantity_deltas: dict[str, Decimal] = {}
         for change in payload["changes"]:
@@ -956,6 +1332,52 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 raise ValueError("duplicate changes are forbidden")
             deltas[symbol] = decimal(change["amount_delta_base"])
             quantity_deltas[symbol] = decimal(change["quantity_delta"])
+            evidence = payload["evidence"].get(symbol)
+            if evidence is None:
+                raise ValueError("change lacks immutable price/FX evidence")
+            unit_price = decimal(evidence["unit_price_local"])
+            fx = decimal(evidence["fx_to_base"])
+            if (
+                decimal(change["unit_price_local"]) != unit_price
+                or decimal(change["fx_to_base"]) != fx
+                or quantity_deltas[symbol] * unit_price * fx != deltas[symbol]
+            ):
+                raise ValueError("change amount/quantity formula does not reconcile")
+        request = payload["request"]
+        if (
+            request["snapshot_id"] != payload["source_snapshot_id"]
+            or request["base_currency"] != payload["base_currency"]
+            or decimal(request["new_cash_base"]) != decimal(payload["constraints"]["new_cash_base"])
+            or any(
+                request[name] != payload["constraints"][name]
+                for name in ("allow_margin", "allow_short", "sell_only", "new_cash_only")
+            )
+            or len(request["changes"]) != len(payload["changes"])
+        ):
+            raise ValueError("authoritative request does not match result constraints")
+        request_by_symbol = {item["symbol"]: item for item in request["changes"]}
+        if len(request_by_symbol) != len(request["changes"]) or set(request_by_symbol) != set(
+            deltas
+        ):
+            raise ValueError("authoritative request changes do not match result changes")
+        final_nav = decimal(after["nav_base"])
+        for change in payload["changes"]:
+            source = request_by_symbol[change["symbol"]]
+            if source["operation"] != change["operation"] or decimal(source["value"]) != decimal(
+                change["value"]
+            ):
+                raise ValueError("result operation does not match authoritative request")
+            current = before_values.get(change["symbol"], Decimal(0))
+            value = decimal(change["value"])
+            expected_delta = (
+                value * final_nav - current
+                if change["operation"] == "TARGET_WEIGHT"
+                else value
+                if change["operation"] == "AMOUNT_DELTA"
+                else value * decimal(change["unit_price_local"]) * decimal(change["fx_to_base"])
+            )
+            if deltas[change["symbol"]] != expected_delta:
+                raise ValueError("operation-specific amount formula does not reconcile")
         for symbol in set(before_values) | set(after_values):
             if after_values.get(symbol, Decimal(0)) - before_values.get(
                 symbol, Decimal(0)
@@ -1028,9 +1450,17 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             raise ValueError("all requested changes must be represented")
         if payload["coverage"]["source_positions"] <= 0:
             raise ValueError("source position coverage must be explicit")
-        signed = any(value < 0 for value in after_quantities.values())
-        expected_risk_status = "STRUCTURAL_ONLY_SIGNED" if signed else "STRUCTURAL_ONLY"
-        if payload["risk_changes"]["status"] != expected_risk_status:
+        if payload["coverage"]["source_positions"] < len(before_values) or payload["coverage"][
+            "hypothetical_positions"
+        ] != len(after_values):
+            raise ValueError("position population coverage does not reconcile")
+        if payload["coverage"]["price_evidence"] != len(payload["evidence"]) or payload["coverage"][
+            "fx_evidence"
+        ] != len(payload["evidence"]):
+            raise ValueError("price/FX evidence coverage does not reconcile")
+        if any(value < 0 for value in (*before_quantities.values(), *after_quantities.values())):
+            raise ValueError("UNSUPPORTED_PORTFOLIO: signed states are outside long-only authority")
+        if payload["risk_changes"]["status"] != "STRUCTURAL_ONLY":
             raise ValueError("risk status does not match signed-position semantics")
     except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise ReportSemanticError(f"rebalance semantic validation failed: {exc}") from exc

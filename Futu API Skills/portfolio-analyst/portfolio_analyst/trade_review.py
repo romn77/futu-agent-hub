@@ -240,6 +240,7 @@ class TradeReview:
     round_trips: tuple[RoundTrip, ...]
     open_lots: tuple[OpenLot, ...]
     metrics: TradeMetrics
+    policy: Mapping[str, Any] | None
     policy_status: str
     policy_checks: tuple[Mapping[str, Any], ...]
     behavior_findings: tuple[BehaviorFinding, ...]
@@ -256,6 +257,12 @@ class TradeReview:
         object.__setattr__(self, "order_groups", tuple(self.order_groups))
         object.__setattr__(self, "round_trips", tuple(self.round_trips))
         object.__setattr__(self, "open_lots", tuple(self.open_lots))
+        if self.policy is not None:
+            frozen_policy = dict(self.policy)
+            frozen_policy["market_open_no_trade_minutes_by_market"] = MappingProxyType(
+                dict(frozen_policy["market_open_no_trade_minutes_by_market"])
+            )
+            object.__setattr__(self, "policy", MappingProxyType(frozen_policy))
         object.__setattr__(
             self, "policy_checks", tuple(MappingProxyType(dict(x)) for x in self.policy_checks)
         )
@@ -269,7 +276,9 @@ class TradeReview:
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
 
-    def to_markdown(self, *, json_artifact: str | None = None) -> str:
+    def to_markdown(
+        self, *, json_artifact: str | None = None, json_digest: str | None = None
+    ) -> str:
         safe = markdown_text
         metrics = self.metrics
         lines = [
@@ -286,12 +295,17 @@ class TradeReview:
             f"- Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
             f"- Data quality: {self.data_quality_status}",
             f"- Policy status: {self.policy_status}",
+            f"- Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
             "- Motive: unverified; only observed execution patterns are described.",
             f"- Orders / fills / symbols: {_shown(metrics.order_count)} / {_shown(metrics.fill_count)} / {_shown(metrics.distinct_symbols)}",
             f"- Closed FIFO trips: {_shown(metrics.closed_trips)}",
             f"- Win rate: {metrics.win_rate if metrics.win_rate is not None else 'Unavailable'}",
             f"- Local-currency notional buckets: {safe(json.dumps(_json_value(metrics.notional_by_currency), sort_keys=True)) if metrics.notional_by_currency is not None else 'Unavailable'}",
             f"- Buy / sell notional ({safe(self.base_currency or 'base unavailable')}): {metrics.buy_notional_base if metrics.buy_notional_base is not None else 'Unavailable'} / {metrics.sell_notional_base if metrics.sell_notional_base is not None else 'Unavailable'}",
+            f"- Portfolio turnover: {_shown(metrics.portfolio_turnover)}",
+            f"- Per-symbol turnover: {safe(json.dumps(_json_value(metrics.per_symbol_turnover), sort_keys=True)) if metrics.per_symbol_turnover is not None else 'Unavailable'}",
+            f"- Average / median holding seconds: {_shown(metrics.average_holding_seconds)} / {_shown(metrics.median_holding_seconds)}",
+            f"- Expectancy / profit factor ({safe(self.base_currency or 'base unavailable')}): {_shown(metrics.expectancy_base)} / {_shown(metrics.profit_factor_base)}",
             f"- Same-day reversals: {_shown(metrics.same_day_reversals)}",
             f"- Same-day reversal rate: {metrics.same_day_reversal_rate if metrics.same_day_reversal_rate is not None else 'Unavailable'}",
             f"- Reentries within configured cooldown: {_shown(metrics.reentries_within_cooldown)}",
@@ -299,6 +313,15 @@ class TradeReview:
             f"- Market-open-window rate: {metrics.open_window_trade_rate if metrics.open_window_trade_rate is not None else 'Unavailable'}",
             f"- Add-to-winner / add-to-loser: {_shown(metrics.add_to_winner_count)} / {_shown(metrics.add_to_loser_count)}",
             f"- Cost-proximity exits (within 1% of evidenced FIFO entry): {_shown(metrics.cost_proximity_exit_count)}",
+            f"- Repeated symbol-days: {_shown(metrics.repeated_symbol_days)}",
+            "\n## Policy checks\n",
+            *(
+                [
+                    f"- {safe(json.dumps(_json_value(item), sort_keys=True))}"
+                    for item in self.policy_checks
+                ]
+                or ["- None"]
+            ),
             "\n## Verified behavior findings\n",
             *(
                 [
@@ -324,6 +347,8 @@ class TradeReview:
         ]
         if json_artifact:
             lines.append(f"\nAuthoritative JSON: `{safe(json_artifact)}`\n")
+        if json_digest:
+            lines.append(f"Authoritative JSON SHA-256: `{safe(json_digest)}`\n")
         return "\n".join(lines)
 
     def to_human(self) -> str:
@@ -342,10 +367,19 @@ class TradeReview:
                 f"Corporate-action evidence: {safe(self.coverage['corporate_action_evidence_status'])}",
                 f"Quality: {self.data_quality_status}",
                 f"Policy: {self.policy_status}",
+                f"Policy configuration: {safe(json.dumps(_json_value(self.policy), sort_keys=True)) if self.policy is not None else 'Unconfigured'}",
                 "Motive: UNVERIFIED; findings describe observed behavior only.",
                 f"Orders: {_shown(self.metrics.order_count)}",
                 f"Fills: {_shown(self.metrics.fill_count)}",
                 f"Closed FIFO trips: {_shown(self.metrics.closed_trips)}",
+                f"Portfolio turnover: {_shown(self.metrics.portfolio_turnover)}",
+                f"Holding average/median seconds: {_shown(self.metrics.average_holding_seconds)}/{_shown(self.metrics.median_holding_seconds)}",
+                f"Expectancy/profit factor: {_shown(self.metrics.expectancy_base)}/{_shown(self.metrics.profit_factor_base)}",
+                f"Repeated symbol-days: {_shown(self.metrics.repeated_symbol_days)}",
+                *[
+                    f"Policy check: {safe(json.dumps(_json_value(item), sort_keys=True))}"
+                    for item in self.policy_checks
+                ],
                 *[
                     f"Verified finding: {safe(item.type)} [{safe(item.severity)}] {safe(item.evidence)}"
                     for item in self.behavior_findings
@@ -568,6 +602,23 @@ def _decimal(value: Any, label: str) -> Decimal:
     return result
 
 
+def _exchange_datetime(raw: Any, timezone_name: str, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except ValueError:
+        raise TradeReviewInputError(f"{label} must use ISO date-time format") from None
+    zone = ZoneInfo(timezone_name)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(zone)
+    first = parsed.replace(tzinfo=zone, fold=0)
+    second = parsed.replace(tzinfo=zone, fold=1)
+    if first.utcoffset() != second.utcoffset():
+        raise TradeReviewInputError(f"{label} is ambiguous or nonexistent in exchange timezone")
+    if first.astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) != parsed:
+        raise TradeReviewInputError(f"{label} is ambiguous or nonexistent in exchange timezone")
+    return first
+
+
 def _fill(raw: Mapping[str, Any], start: date, end: date) -> NormalizedFill:
     required = {"deal_id", "order_id", "account_ref", "code", "side", "qty", "price", "create_time"}
     optional = {"currency", "fx_to_base", "event_type"}
@@ -582,14 +633,7 @@ def _fill(raw: Mapping[str, Any], start: date, end: date) -> NormalizedFill:
     if side not in {"BUY", "SELL"}:
         raise TradeReviewInputError("deal side must be BUY or SELL")
     timezone_name = _MARKET_TIME[market][0]
-    try:
-        parsed = datetime.fromisoformat(str(raw["create_time"]))
-    except ValueError:
-        raise TradeReviewInputError("deal time must use ISO date-time format") from None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
-    else:
-        parsed = parsed.astimezone(ZoneInfo(timezone_name))
+    parsed = _exchange_datetime(raw["create_time"], timezone_name, "deal time")
     if not start <= parsed.date() <= end:
         raise TradeReviewInputError("deal falls outside the requested review range")
     identifiers = tuple(str(raw[name]).strip() for name in ("deal_id", "order_id", "account_ref"))
@@ -646,25 +690,15 @@ def _order(raw: Mapping[str, Any], start: date, end: date) -> NormalizedOrder:
         raise TradeReviewInputError("order side must be BUY or SELL")
     status = normalize_order_status(raw["status"])
     timezone_name = _MARKET_TIME[market][0]
-    try:
-        created = datetime.fromisoformat(str(raw["create_time"]))
-        updated = datetime.fromisoformat(str(raw["updated_time"]))
-    except ValueError:
-        raise TradeReviewInputError("order times must use ISO date-time format") from None
-    created = (
-        created.replace(tzinfo=ZoneInfo(timezone_name))
-        if created.tzinfo is None
-        else created.astimezone(ZoneInfo(timezone_name))
-    )
-    updated = (
-        updated.replace(tzinfo=ZoneInfo(timezone_name))
-        if updated.tzinfo is None
-        else updated.astimezone(ZoneInfo(timezone_name))
-    )
+    created = _exchange_datetime(raw["create_time"], timezone_name, "order create time")
+    updated = _exchange_datetime(raw["updated_time"], timezone_name, "order update time")
     if not start <= created.date() <= end or updated < created:
         raise TradeReviewInputError("order timestamps are outside the requested range or reversed")
     quantity = _decimal(raw["qty"], "order quantity")
-    dealt = Decimal(str(raw["dealt_qty"]))
+    try:
+        dealt = Decimal(str(raw["dealt_qty"]))
+    except (InvalidOperation, ValueError):
+        raise TradeReviewInputError("order dealt quantity is invalid") from None
     if not dealt.is_finite() or dealt < 0 or dealt > quantity:
         raise TradeReviewInputError("order dealt quantity is invalid")
     currency = str(raw.get("currency", "UNKNOWN")).strip().upper()
@@ -742,11 +776,9 @@ def _fifo(
             if lot[3] != fill.currency:
                 raise TradeReviewInputError("one security has conflicting fill currencies")
             realized_local = (fill.price - lot[1]) * matched
-            realized_base = (
-                None
-                if lot[4] is None or fill.fx_to_base is None
-                else (fill.price * fill.fx_to_base - lot[1] * lot[4]) * matched
-            )
+            # Snapshot FX is current valuation evidence, not transaction-date FX.
+            # Exact historical base-currency realized P&L therefore remains unavailable.
+            realized_base = None
             trips.append(
                 RoundTrip(
                     fill.account_ref,
@@ -808,8 +840,6 @@ def build_trade_review(
     if acquisition.tzinfo is None:
         raise TradeReviewInputError("acquisition timestamp must be timezone-aware")
     acquisition = acquisition.astimezone(timezone.utc)
-    if acquisition.date() < end:
-        raise TradeReviewInputError("acquisition timestamp precedes the requested period end")
     if source_snapshot_as_of is not None:
         if source_snapshot_as_of.tzinfo is None:
             raise TradeReviewInputError("source snapshot as-of must be timezone-aware")
@@ -824,12 +854,39 @@ def build_trade_review(
         raise TradeReviewInputError("portfolio NAV requires positive base-currency evidence")
     if corporate_action_evidence_status not in {"AVAILABLE", "UNSUPPORTED_EVIDENCE"}:
         raise TradeReviewInputError("corporate-action evidence status is invalid")
-    normalized_all = tuple(_fill(raw, start, end) for raw in deals)
-    normalized_orders = tuple(_order(raw, start, end) for raw in orders)
+    normalized_all = tuple(
+        sorted(
+            (_fill(raw, start, end) for raw in deals),
+            key=lambda item: (item.account_ref, item.order_id, item.executed_at, item.deal_id),
+        )
+    )
+    normalized_orders = tuple(
+        sorted(
+            (_order(raw, start, end) for raw in orders),
+            key=lambda item: (item.account_ref, item.order_id),
+        )
+    )
     source_unavailable = (
         not coverage_context.get("successful_contexts", ())
         if coverage_context is not None
         else not normalized_all and not normalized_orders
+    )
+    requested_markets = {
+        str(item.get("market", ""))
+        for item in (coverage_context or {}).get("requested_contexts", ())
+        if isinstance(item, Mapping)
+    } or {item.market for item in (*normalized_orders, *normalized_all)}
+    local_dates = {
+        market: acquisition.astimezone(ZoneInfo(_MARKET_TIME[market][0])).date()
+        for market in requested_markets
+        if market in _MARKET_TIME
+    }
+    if local_dates and any(local_date < end for local_date in local_dates.values()):
+        raise TradeReviewInputError("acquisition precedes the requested exchange-local period end")
+    if not local_dates and acquisition.date() < end:
+        raise TradeReviewInputError("acquisition timestamp precedes the requested period end")
+    in_progress_markets = tuple(
+        sorted(market for market, local_date in local_dates.items() if local_date == end)
     )
     deal_ids = [fill.deal_id for fill in normalized_all]
     if len(deal_ids) != len(set(deal_ids)):
@@ -1038,7 +1095,7 @@ def build_trade_review(
             average = cost / quantity if quantity else Decimal(0)
             matched = min(quantity, group.quantity)
             inventory_cost[key] = (quantity - matched, cost - average * matched)
-            if matched > 0:
+            if matched > 0 and quantity - matched == 0:
                 trip_key = (group.account_ref, group.identity, group.effective_at.date())
                 round_trip_groups_day[trip_key] = round_trip_groups_day.get(trip_key, 0) + 1
     additions = add_winner + add_loser
@@ -1131,6 +1188,13 @@ def build_trade_review(
                     }
                 )
     notes = tuple(str(note) for note in source_notes)
+    if in_progress_markets:
+        notes = (
+            *notes,
+            "requested range includes the current exchange-local date for "
+            + ", ".join(in_progress_markets)
+            + "; the session may be incomplete",
+        )
     if corporate_action_evidence_status == "UNSUPPORTED_EVIDENCE":
         notes = (
             *notes,
@@ -1145,6 +1209,11 @@ def build_trade_review(
         notes = (
             *notes,
             "base-currency monetary aggregation is unavailable because fill currency/FX evidence is incomplete",
+        )
+    if base_complete and trips:
+        notes = (
+            *notes,
+            "snapshot FX supports current-value notional normalization only; exact historical base-currency realized P&L requires transaction-date FX and is UNAVAILABLE",
         )
     if cooldown is None:
         notes = (*notes, "reentry metric is UNAVAILABLE because no cooldown policy is configured")
@@ -1176,8 +1245,8 @@ def build_trade_review(
         if any(x["status"] == "BREACH" for x in checks)
         else ("PASS" if checks else "UNCONFIGURED")
     )
-    breached = {item["name"] for item in checks if item["status"] == "BREACH"}
     behavior: list[BehaviorFinding] = []
+    policy_document = _json_value(policy) if policy is not None else None
 
     def add_behavior(
         kind: str,
@@ -1191,10 +1260,23 @@ def build_trade_review(
             {item.group_ref: item for item in events}.values(),
             key=lambda item: (item.effective_at, item.group_ref),
         )
+        policy_breach = False
+        if policy_name == "max_trades_per_day" and policy and policy.max_trades_per_day is not None:
+            policy_breach = any(
+                per_day.get((item.account_ref, item.effective_at.date()), 0)
+                > policy.max_trades_per_day
+                for item in ordered_events
+            )
+        elif policy_name == "flag_add_to_loser" and policy:
+            policy_breach = policy.flag_add_to_loser
+        elif policy_name in {"market_open_no_trade_minutes", "reentry_cooldown_minutes"}:
+            policy_breach = any(
+                item["name"] == policy_name and item["status"] == "BREACH" for item in checks
+            )
         behavior.append(
             BehaviorFinding(
                 kind,
-                "MEDIUM" if policy_name in breached else "INFORMATIONAL",
+                "MEDIUM" if policy_breach else "INFORMATIONAL",
                 f"Observed {count} qualifying events in normalized execution evidence.",
                 True,
                 tuple(item.group_ref for item in ordered_events),
@@ -1233,9 +1315,13 @@ def build_trade_review(
         for group in groups
         if (group.account_ref, group.identity, group.effective_at.date()) in repeated_keys
     ]
-    add_behavior(
-        "REPEATED_SYMBOL_ACTIVITY", len(repeated_keys), repeated_events, "max_trades_per_day"
-    )
+    for repeated_key in sorted(repeated_keys):
+        key_events = [
+            group
+            for group in repeated_events
+            if (group.account_ref, group.identity, group.effective_at.date()) == repeated_key
+        ]
+        add_behavior("REPEATED_SYMBOL_ACTIVITY", 1, key_events, "max_trades_per_day")
     add_behavior("ADD_TO_WINNER", add_winner, add_winner_events)
     add_behavior("ADD_TO_LOSER", add_loser, add_loser_events, "flag_add_to_loser")
     if source_unavailable:
@@ -1287,7 +1373,7 @@ def build_trade_review(
     identity_body = json.dumps(
         _json_value(
             {
-                "schema_version": "1.3",
+                "schema_version": "1.4",
                 "as_of": acquisition,
                 "source": "futuapi",
                 "base_currency": base_currency,
@@ -1302,6 +1388,7 @@ def build_trade_review(
                 "round_trips": trips,
                 "open_lots": open_lots,
                 "metrics": metrics,
+                "policy": policy_document,
                 "policy_status": status,
                 "policy_checks": checks,
                 "behavior_findings": behavior,
@@ -1321,7 +1408,7 @@ def build_trade_review(
     )
     review_id = "tr_" + hashlib.sha256(identity_body.encode()).hexdigest()[:16]
     return TradeReview(
-        "1.3",
+        "1.4",
         review_id,
         acquisition,
         "futuapi",
@@ -1337,6 +1424,7 @@ def build_trade_review(
         trips,
         open_lots,
         metrics,
+        policy_document,
         status,
         tuple(checks),
         tuple(behavior),
@@ -1346,3 +1434,52 @@ def build_trade_review(
         notes,
         provenance,
     )
+
+
+def validate_trade_context_rows(
+    *,
+    orders: Sequence[Mapping[str, Any]],
+    deals: Sequence[Mapping[str, Any]],
+    start: date,
+    end: date,
+    account_ref: str,
+    queried_market: str,
+) -> None:
+    """Fully normalize one context before it is admitted as successful evidence."""
+
+    context = {"account_ref": account_ref, "market": queried_market}
+    probe = build_trade_review(
+        orders=orders,
+        deals=deals,
+        start=start,
+        end=end,
+        acquired_at=datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc),
+        coverage_context={
+            "accounts_requested": 1,
+            "accounts_covered": 1,
+            "contexts_requested": 1,
+            "contexts_read": 1,
+            "contexts_failed": 0,
+            "contexts_omitted_budget": 0,
+            "requested_contexts": [context],
+            "successful_contexts": [context],
+            "failed_contexts": [],
+            "omitted_contexts": [],
+        },
+        corporate_action_evidence_status="AVAILABLE",
+    )
+    if any(
+        item.market != queried_market
+        for item in (*probe.normalized_orders, *probe.normalized_fills)
+    ):
+        raise TradeReviewInputError("historical evidence market conflicts with query context")
+    if any(
+        probe.coverage[name]
+        for name in (
+            "orders_missing_fills",
+            "orphan_fill_orders",
+            "order_fill_qty_mismatches",
+            "order_status_conflicts",
+        )
+    ):
+        raise TradeReviewInputError("historical context order/fill evidence is inconsistent")

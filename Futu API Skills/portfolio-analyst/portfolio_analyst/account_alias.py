@@ -33,10 +33,18 @@ class AccountAliaser:
         return cls(secrets.token_bytes(32), provenance="EPHEMERAL")
 
     def alias(self, account_id: str) -> str:
-        digest = hmac.new(
-            self._key, f"portfolio-account:{account_id}".encode("ascii"), hashlib.sha256
-        ).hexdigest()[:24]
+        digest = self.scoped_digest("account", account_id)
         return f"acct-{digest}"
+
+    def scoped_digest(self, namespace: str, value: str) -> str:
+        if not namespace or not value:
+            raise AccountAliasError("alias namespace and value must be non-empty")
+        digest = hmac.new(
+            self._key,
+            f"portfolio-{namespace}:{value}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()[:24]
+        return digest
 
 
 class AccountAliasStore:

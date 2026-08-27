@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from datetime import date
@@ -164,7 +165,11 @@ def test_simulate_cli_reads_confined_request_and_transactionally_saves_bundle(
         "result.json",
         "summary.md",
     ]
-    assert "HYPOTHETICAL" in (home / "reports/sim-1/summary.md").read_text()
+    result_path = home / "reports/sim-1/result.json"
+    summary = (home / "reports/sim-1/summary.md").read_text()
+    assert "HYPOTHETICAL" in summary
+    assert "Authoritative JSON: `result.json`" in summary
+    assert hashlib.sha256(result_path.read_bytes()).hexdigest() in summary
 
 
 def test_trades_cli_is_no_save_by_default_and_uses_fixture_service(monkeypatch, tmp_path, capsys):

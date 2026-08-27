@@ -148,7 +148,9 @@ injectable UTC clock, keeps snapshot as-of separate, and preserves requested/suc
 budget-omitted masked contexts even when successful reads are empty. Source `HKCC` contexts use the
 canonical `HK` evidence key. If no context succeeds (including when no eligible account yields zero
 requested contexts), the report is `UNAVAILABLE` and every observed activity metric is `null`; only
-a successfully queried empty context establishes a true zero. Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
+a successfully queried empty context establishes a true zero. Raw order/deal aliases are stable
+context-scoped HMACs; duplicate identities, cross-market bodies, DST-ambiguous times, or row-budget
+overflow fail the context atomically. Monetary values remain in explicit currency buckets unless an immutable snapshot supplies
 complete base-currency, NAV, security-currency, and FX evidence; missing evidence makes base
 aggregates `null`, never mixed-currency totals. Orders and fills are reconciled, unsupported
 corporate-action/transfer/cost-adjustment fields are disclosed, and structured verified behavior
@@ -157,6 +159,8 @@ those policy counts/rates are `null`. The optional
 private `config/trade-policy.yaml` follows `config/trade-policy.example.yaml` and requires a real
 0700 config directory plus a regular 0600 file. See
 [references/trade-review.md](references/trade-review.md).
+The report embeds that normalized policy body so semantic validation can rebuild policy-window
+observations and verified behavior findings from exchange-local OrderGroups.
 
 Run a deterministic, non-executable adjustment simulation from one immutable snapshot:
 
@@ -169,7 +173,9 @@ python scripts/portfolio.py simulate \
 
 The strict request supports `TARGET_WEIGHT`, `AMOUNT_DELTA`, and `SHARE_DELTA`, plus explicit new
 cash (`new_cash_base`), sell-only, new-cash-only, margin, and short constraints. Results carry
-`as_of`, `base_currency`, coverage and quality notes. Every result says `HYPOTHETICAL` and
+the authoritative request plus immutable per-symbol unit-price/FX evidence, and the complete body is
+bound by `simulation_id`. Signed source or hypothetical states fail `UNSUPPORTED_PORTFOLIO`.
+Results carry `as_of`, `base_currency`, coverage and quality notes. Every result says `HYPOTHETICAL` and
 `execution_disabled=true`; there is no order generation or trading-write path. `--output DIR`
 transactionally saves `request.json`, `result.json`, and `summary.md` without replacement. See
 [references/rebalance-simulation.md](references/rebalance-simulation.md).

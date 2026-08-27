@@ -16,6 +16,17 @@ from typing import Sequence
 from .child_environment import controlled_child_environment, validate_account_id
 from .skill_trust import audited_command, audited_command_names, load_audited_skill
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows uses bounded post-read checks.
+    resource = None
+
+
+def _limit_child_output_files() -> None:
+    if resource is not None:
+        maximum = 4 * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_FSIZE, (maximum, maximum))
+
 
 class UnsafeFutuCommand(ValueError):
     """Raised when a command falls outside the fixed read-only boundary."""
@@ -115,6 +126,7 @@ class FutuAdapter:
         }
     )
     REDACTION = "[REDACTED]"
+    MAX_RESPONSE_BYTES = 4 * 1024 * 1024
     _TEXT_ACCOUNT_NUMERIC_IDENTIFIER = re.compile(
         r"(?ix)"
         r"(?P<label>"
@@ -436,15 +448,58 @@ class FutuAdapter:
                 *request.arguments,
             ]
             try:
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    check=False,
-                    encoding="utf-8",
-                    errors="replace",
-                    env=child_environment,
-                    timeout=timeout,
-                )
+                with (
+                    tempfile.TemporaryFile() as stdout_file,
+                    tempfile.TemporaryFile() as stderr_file,
+                ):
+                    process = subprocess.run(
+                        command,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        check=False,
+                        encoding="utf-8",
+                        errors="replace",
+                        env=child_environment,
+                        preexec_fn=_limit_child_output_files if resource is not None else None,
+                        timeout=timeout,
+                    )
+                    stdout_file.seek(0, 2)
+                    stderr_file.seek(0, 2)
+                    stdout_size = stdout_file.tell()
+                    stderr_size = stderr_file.tell()
+                    process_stdout = process.stdout if isinstance(process.stdout, str) else None
+                    process_stderr = process.stderr if isinstance(process.stderr, str) else None
+                    captured_size = (
+                        stdout_size
+                        + stderr_size
+                        + sum(
+                            len(value.encode("utf-8"))
+                            for value in (process_stdout, process_stderr)
+                            if value is not None
+                        )
+                    )
+                    if captured_size > self.MAX_RESPONSE_BYTES:
+                        raise FutuReadError(
+                            "audited Futu read exceeded the bounded response budget"
+                        )
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    stdout = (
+                        process_stdout
+                        if process_stdout is not None
+                        else stdout_file.read(stdout_size).decode("utf-8", errors="replace")
+                    )
+                    stderr = (
+                        process_stderr
+                        if process_stderr is not None
+                        else stderr_file.read(stderr_size).decode("utf-8", errors="replace")
+                    )
+                    completed = subprocess.CompletedProcess(
+                        process.args,
+                        process.returncode,
+                        stdout,
+                        stderr,
+                    )
             except subprocess.TimeoutExpired as exc:
                 raise subprocess.TimeoutExpired(
                     cmd=self._sanitize_args(exc.cmd, sensitive_values=sensitive_values),

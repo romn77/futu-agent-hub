@@ -44,6 +44,10 @@ def test_target_amount_share_and_new_cash_are_deterministic_without_mutating_sna
     assert "quantity" in first.after.positions["US.AAA"]
     assert first.before.snapshot_id == source.snapshot_id
     assert first.risk_changes["top_1"] != Decimal("0")
+    with pytest.raises(TypeError):
+        first.request["changes"][0]["value"] = Decimal("999")
+    with pytest.raises(TypeError):
+        first.evidence["US.AAA"]["fx_to_base"] = Decimal("999")
 
 
 def test_no_margin_and_no_short_constraints_fail_closed_but_explicit_modes_are_permitted():
@@ -59,9 +63,23 @@ def test_no_margin_and_no_short_constraints_fail_closed_but_explicit_modes_are_p
         changes=(RebalanceChange("US.AAA", "SHARE_DELTA", Decimal("-2")),),
     )
     assert simulate_rebalance(source, cash_hungry).feasible is False
-    assert simulate_rebalance(source, shorting).feasible is False
+    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
+        simulate_rebalance(source, shorting)
     assert simulate_rebalance(source, replace(cash_hungry, allow_margin=True)).feasible is True
-    assert simulate_rebalance(source, replace(shorting, allow_short=True)).feasible is True
+    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
+        simulate_rebalance(source, replace(shorting, allow_short=True))
+
+
+def test_signed_source_portfolio_fails_closed_before_simulation():
+    source = snapshot()
+    signed_source = replace(
+        source,
+        positions=(replace(source.positions[0], quantity=Decimal("-1")), *source.positions[1:]),
+    )
+    request = RebalanceRequest(signed_source.snapshot_id, signed_source.base_currency)
+
+    with pytest.raises(RebalanceError, match="UNSUPPORTED_PORTFOLIO"):
+        simulate_rebalance(signed_source, request)
 
 
 def test_duplicate_conflicting_changes_missing_identity_and_currency_are_rejected():

@@ -1,6 +1,6 @@
 # Trade review contract
 
-The authoritative report contract is version `1.3`; earlier reports without total-source
+The authoritative report contract is version `1.4`; earlier reports without total-source
 unavailability semantics or canonical context markets are rejected.
 
 `trades` is a read-only review of historical execution records. The inclusive range must be valid,
@@ -24,6 +24,9 @@ Naive source timestamps are interpreted in the security exchange timezone: US Ne
 Kong, CN Shanghai, JP Tokyo, SG Singapore, MY Kuala Lumpur, CA Toronto, and AU Sydney. IANA timezone
 rules provide DST handling. This is a regular-session approximation, not a full exchange holiday or
 auction calendar.
+Naive timestamps that are ambiguous or nonexistent at a DST transition fail closed. Acquisition
+coverage is checked in each requested exchange timezone, and an exchange-local current date is
+explicitly partial because the session may still be in progress.
 
 Orders are normalized with masked account/order identity, canonical security, status, side,
 quantity, dealt quantity, price, and exchange-local timestamps, then reconciled to normalized fills.
@@ -38,10 +41,19 @@ claim those events are absent. Explicitly identified non-trade events remain nor
 are excluded from FIFO and trade metrics.
 
 Every fill is currency-qualified. Local monetary metrics are emitted only as currency buckets.
-Base-currency notional, realized P&L statistics, payoff/profit factor/expectancy, and NAV turnover are
-computed only when one immutable source snapshot supplies base currency, NAV, security currency,
-and FX for every analyzed fill. Otherwise those base aggregates are `null`, turnover maps are empty,
-and monetary coverage is `PARTIAL`; currencies are never added together directly.
+Base-currency notional and NAV turnover are computed only when one immutable source snapshot supplies
+base currency, NAV, security currency, and FX for every analyzed fill. Snapshot FX is current
+valuation evidence, not transaction-date FX: exact historical `realized_pl_base`, payoff, profit
+factor, and expectancy remain `null` and the limitation is explicit. Currencies are never added
+together directly.
+
+Raw order and deal IDs must be non-empty and unique in their account/context. Masked identities are
+HMAC-derived from raw identity plus account/canonical market, so aliases and report identity do not
+depend on upstream row order. Both response bodies must fit per-context/total row budgets and fully
+normalize before the context is atomically successful; duplicate, orphan, status, or queried-market
+conflicts fail that context without partial evidence.
+The adapter streams child stdout/stderr to bounded temporary capture and rejects either response
+above 4 MiB; it never uses an unbounded in-memory `capture_output` path.
 
 An `OrderGroup` is the behavior/frequency trade unit: masked account plus order ID, one canonical
 identity and side, summed fill quantity, quantity-weighted fill price, fill count, first/last fill
@@ -82,6 +94,10 @@ session observation, repeat, and add-to-position patterns are reported even with
 changes only breach/severity. Interpretations are separate and explicitly unverified; reports never
 claim fear, revenge, conviction, or any other motive. Without a configured cooldown or open-window
 rule, the corresponding policy metric count and rate are `null`, not zero.
+The normalized policy body is embedded in the report. Runtime validation rebuilds configured
+open-window, cooldown, daily-frequency, completed-inventory-close, and add-to-position observations
+from OrderGroups in each exchange timezone; policy checks and verified findings cannot be edited
+independently and rehashed into an apparently valid report.
 Same-day reversal and configured open-window rates use total OrderGroup trade count as denominator.
 Cost-proximity evidence means an evidenced FIFO exit within 1% of its matched entry price; this is
 an observable fixed diagnostic definition, not a claim about intent. Add `--latest` or

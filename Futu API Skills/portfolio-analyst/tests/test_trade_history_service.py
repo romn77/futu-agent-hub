@@ -260,6 +260,30 @@ def test_failed_context_does_not_leak_partially_normalized_orders_into_report():
     validate_trade_review_document(review.to_dict())
 
 
+class RecognizedTransferAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_history_orders":
+            payload["orders"][0]["status"] = "CANCELLED_ALL"
+            payload["orders"][0]["dealt_qty"] = 0
+        if name == "get_history_order_fill_list":
+            payload["deals"][0]["event_type"] = "TRANSFER"
+        return payload
+
+
+def test_recognized_nontrade_event_is_explicit_and_excluded_from_fifo():
+    review = FutuTradeHistoryService(
+        RecognizedTransferAdapter(),
+        aliaser=AccountAliaser.from_key(b"stable-test-key-material-32bytes!!"),
+        clock=lambda: datetime(2026, 8, 28, 8, 9, 10, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert {fill.event_type for fill in review.normalized_fills} == {"TRANSFER"}
+    assert review.metrics.fill_count == 0
+    assert review.coverage["excluded_nontrade_events"] == 2
+    assert review.coverage["corporate_action_evidence_status"] == "UNSUPPORTED_EVIDENCE"
+
+
 class HkccFixtureAdapter(FixtureAdapter):
     def read_private_json(self, name, arguments, *, timeout=30):
         if name == "get_accounts":
@@ -314,3 +338,106 @@ def test_hkcc_source_context_uses_hk_canonical_coverage_and_evidence_key():
     _rehash_trade_review(conflicting)
     with pytest.raises(Exception):
         validate_trade_review_document(conflicting)
+
+
+class ReorderedRowsAdapter(FixtureAdapter):
+    def __init__(
+        self,
+        *,
+        reverse=False,
+        reverse_accounts=False,
+        duplicate_order=False,
+        duplicate_deal=False,
+        wrong_market=False,
+    ):
+        super().__init__()
+        self.reverse = reverse
+        self.reverse_accounts = reverse_accounts
+        self.duplicate_order = duplicate_order
+        self.duplicate_deal = duplicate_deal
+        self.wrong_market = wrong_market
+
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        if name == "get_accounts" and self.reverse_accounts:
+            payload["accounts"].reverse()
+        elif name == "get_history_orders":
+            second = dict(payload["orders"][0])
+            second["order_id"] += "-2"
+            second["create_time"] = "2026-08-04 10:00:00"
+            second["updated_time"] = "2026-08-04 10:00:01"
+            payload["orders"].append(second)
+            if self.duplicate_order:
+                payload["orders"][1]["order_id"] = payload["orders"][0]["order_id"]
+        elif name == "get_history_order_fill_list":
+            second = dict(payload["deals"][0])
+            second["deal_id"] += "-2"
+            second["order_id"] += "-2"
+            second["create_time"] = "2026-08-04 10:00:01"
+            payload["deals"].append(second)
+            if self.duplicate_deal:
+                payload["deals"][1]["deal_id"] = payload["deals"][0]["deal_id"]
+            if self.wrong_market:
+                payload["deals"][0]["code"] = "HK.00001"
+        rows = payload.get("orders", payload.get("deals"))
+        if self.reverse and rows:
+            rows.reverse()
+        return payload
+
+
+def test_raw_id_aliases_and_report_identity_are_stable_across_upstream_row_order():
+    acquired = datetime(2026, 8, 28, 8, 9, 10, tzinfo=timezone.utc)
+    key = b"stable-test-key-material-32bytes!!"
+    first = FutuTradeHistoryService(
+        ReorderedRowsAdapter(),
+        aliaser=AccountAliaser.from_key(key),
+        clock=lambda: acquired,
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+    second = FutuTradeHistoryService(
+        ReorderedRowsAdapter(reverse=True, reverse_accounts=True),
+        aliaser=AccountAliaser.from_key(key),
+        clock=lambda: acquired,
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+    assert first.review_id == second.review_id
+    assert first.to_dict() == second.to_dict()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"duplicate_order": True}, {"duplicate_deal": True}, {"wrong_market": True}],
+)
+def test_duplicate_raw_identity_or_cross_market_body_fails_context_atomically(kwargs):
+    review = FutuTradeHistoryService(
+        ReorderedRowsAdapter(**kwargs),
+        aliaser=AccountAliaser.from_key(b"stable-test-key-material-32bytes!!"),
+        clock=lambda: datetime(2026, 8, 28, 8, 9, 10, tzinfo=timezone.utc),
+    ).review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+    assert review.coverage["contexts_failed"] == 2
+    assert review.data_quality_status == "UNAVAILABLE"
+    assert review.normalized_orders == ()
+    assert review.normalized_fills == ()
+
+
+class FailedRowsStillConsumeBudgetAdapter(FixtureAdapter):
+    def read_private_json(self, name, arguments, *, timeout=30):
+        payload = super().read_private_json(name, arguments, timeout=timeout)
+        account = arguments[arguments.index("--acc-id") + 1] if "--acc-id" in arguments else None
+        if name == "get_history_order_fill_list" and account == "12345":
+            payload["deals"][0].pop("qty")
+        return payload
+
+
+def test_total_row_budget_counts_failed_context_bodies_and_stops_later_evidence():
+    service = FutuTradeHistoryService(
+        FailedRowsStillConsumeBudgetAdapter(),
+        aliaser=AccountAliaser.from_key(b"stable-test-key-material-32bytes!!"),
+        clock=lambda: datetime(2026, 8, 28, 8, 9, 10, tzinfo=timezone.utc),
+    )
+    service.MAX_ROWS_TOTAL = 3
+
+    review = service.review(start=date(2026, 8, 1), end=date(2026, 8, 27))
+
+    assert review.coverage["contexts_failed"] == 2
+    assert review.coverage["contexts_read"] == 0
+    assert review.coverage["failed_contexts"][1]["reason"] == "BUDGET_LIMIT"
+    assert review.data_quality_status == "UNAVAILABLE"

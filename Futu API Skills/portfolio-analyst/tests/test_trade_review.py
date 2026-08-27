@@ -150,3 +150,15 @@ def test_mainland_exchange_prefix_is_canonicalized_to_cn_market_identity():
         end=date(2026, 8, 27),
     )
     assert report.open_lots[0].identity == "CN.600519"
+
+
+@pytest.mark.parametrize("at", ["2026-03-08 02:30:00", "2026-11-01 01:30:00"])
+def test_naive_nonexistent_or_ambiguous_exchange_dst_time_fails_closed(at):
+    day = date.fromisoformat(at[:10])
+    with pytest.raises(TradeReviewInputError, match="ambiguous or nonexistent"):
+        build_trade_review(
+            orders=[],
+            deals=[_deal("d1", "o1", "acct-a", "BUY", "1", "10", at)],
+            start=day,
+            end=day,
+        )
