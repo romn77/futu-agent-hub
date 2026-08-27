@@ -165,6 +165,35 @@ def test_json_string_values_are_recursively_text_sanitized():
     assert "safe message" in sanitized
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "failed for account 90000001; retry later",
+        "failed for account id 90000001; retry later",
+        "failed for account_id=90000001; retry later",
+        "账户 90000001 查询失败",
+        json.dumps({"error": "failed for account 90000001; retry later"}),
+    ],
+)
+def test_unregistered_account_labelled_numeric_ids_are_redacted(raw):
+    sanitized = FutuAdapter.sanitize_output(raw)
+
+    assert "90000001" not in sanitized
+    assert "[REDACTED]" in sanitized
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "processed account 2 of 5",
+        "account count: 12",
+        "retry after 30 seconds",
+    ],
+)
+def test_ordinary_counts_are_not_redacted_as_account_identifiers(message):
+    assert FutuAdapter.sanitize_output(message) == message
+
+
 def test_preserved_environment_account_id_is_masked_if_a_script_echoes_it():
     sanitized = FutuAdapter.sanitize_output('{"FUTU_ACC_ID":"123456789"}')
 

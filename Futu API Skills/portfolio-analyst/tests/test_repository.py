@@ -168,3 +168,25 @@ def test_registered_peer_id_is_redacted_from_timeout_exception(monkeypatch):
 
     exposed = f"{caught.value.cmd} {caught.value.output} {caught.value.stderr}"
     assert all(account_id not in exposed for account_id in ACCOUNT_IDS)
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "get_accounts failed for account 90000001",
+        '{"error":"get_accounts failed for account 90000001"}',
+    ],
+)
+def test_initial_account_list_failure_redacts_ids_before_discovery(monkeypatch, stdout):
+    adapter = object.__new__(FutuAdapter)
+    adapter._protected_sensitive_values = set()
+    raw = subprocess.CompletedProcess(
+        args=["python", "get_accounts.py"], returncode=1, stdout=stdout, stderr=""
+    )
+    monkeypatch.setattr(adapter, "_run_unsanitized", lambda *_args, **_kwargs: raw)
+
+    with pytest.raises(FutuReadError) as caught:
+        FutuPortfolioRepository(adapter).read(trd_env="REAL")
+
+    assert "90000001" not in str(caught.value)
+    assert "[REDACTED]" in str(caught.value)

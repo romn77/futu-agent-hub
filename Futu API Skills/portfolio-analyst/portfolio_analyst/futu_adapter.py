@@ -114,6 +114,14 @@ class FutuAdapter:
         }
     )
     REDACTION = "[REDACTED]"
+    _TEXT_ACCOUNT_NUMERIC_IDENTIFIER = re.compile(
+        r"(?ix)"
+        r"(?P<label>"
+        r"(?:\baccount(?:[ _-]?id)?|账户(?:\s*ID)?)"
+        r"(?:\s*[:=]\s*|\s+)"
+        r")"
+        r"(?P<value>\d{5,})(?!\d)"
+    )
     _TEXT_SENSITIVE_VALUE = re.compile(
         r"(?ix)"
         r"(?P<label>"
@@ -378,8 +386,11 @@ class FutuAdapter:
 
     @classmethod
     def _mask_text(cls, output: str, *, sensitive_values: Sequence[str] = ()) -> str:
-        masked = cls._TEXT_SENSITIVE_VALUE.sub(
+        masked = cls._TEXT_ACCOUNT_NUMERIC_IDENTIFIER.sub(
             lambda match: f"{match.group('label')}{cls.REDACTION}", output
+        )
+        masked = cls._TEXT_SENSITIVE_VALUE.sub(
+            lambda match: f"{match.group('label')}{cls.REDACTION}", masked
         )
         for sensitive in sensitive_values:
             masked = re.sub(rf"(?<!\d){re.escape(sensitive)}(?!\d)", cls.REDACTION, masked)

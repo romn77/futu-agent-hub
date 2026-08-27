@@ -1,13 +1,14 @@
 import json
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from portfolio_analyst import cli
-from portfolio_analyst.futu_adapter import FutuReadError
-from portfolio_analyst.repository import SourceDataError
+from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
+from portfolio_analyst.repository import FutuPortfolioRepository, SourceDataError
 from portfolio_analyst.service import ConfigError, generate_snapshot, load_currency_converter
 from portfolio_analyst.settings import Settings
 
@@ -147,6 +148,35 @@ def test_snapshot_cli_json_errors_are_structured_and_stdout_stays_machine_readab
 
     assert exit_code == 2
     assert payload == {"ok": False, "error": {"code": "CONFIG_ERROR", "message": "FX unavailable"}}
+
+
+@pytest.mark.parametrize(
+    "source_error",
+    [
+        "get_accounts failed for account 90000001",
+        '{"error":"get_accounts failed for account 90000001"}',
+    ],
+)
+def test_snapshot_cli_source_error_redacts_account_id_before_discovery(
+    monkeypatch, tmp_path, capsys, source_error
+):
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(tmp_path / "private"))
+    adapter = object.__new__(FutuAdapter)
+    adapter._protected_sensitive_values = set()
+    raw = subprocess.CompletedProcess(
+        args=["python", "get_accounts.py"], returncode=1, stdout=source_error, stderr=""
+    )
+    monkeypatch.setattr(adapter, "_run_unsanitized", lambda *_args, **_kwargs: raw)
+    monkeypatch.setattr(
+        cli,
+        "generate_snapshot",
+        lambda *_args, **_kwargs: FutuPortfolioRepository(adapter).read(trd_env="REAL"),
+    )
+
+    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "SOURCE_UNAVAILABLE"
+    assert "90000001" not in json.dumps(payload)
 
 
 def test_unexpected_snapshot_failure_is_generic_and_does_not_leak_source_data(
