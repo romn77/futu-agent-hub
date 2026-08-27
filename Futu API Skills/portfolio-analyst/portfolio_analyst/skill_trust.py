@@ -1,17 +1,66 @@
-"""Central compatibility validation for a futuapi Skill source."""
+"""Immutable content manifest and compatibility validation for futuapi."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
-READ_ONLY_SCRIPTS = {
-    "get_accounts": Path("scripts/trade/get_accounts.py"),
-    "get_portfolio": Path("scripts/trade/get_portfolio.py"),
-    "get_all_portfolios": Path("scripts/trade/get_all_portfolios.py"),
-}
+@dataclass(frozen=True)
+class AuditedFile:
+    relative_path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
+class AuditedCommand:
+    name: str
+    script_path: Path
+
+
+# Audited against the repository's current official Skill. The three commands import only
+# scripts/common.py locally; all other imports are Python stdlib or the external futu SDK.
+_AUDITED_FILES = (
+    AuditedFile(
+        Path("SKILL.md"), "37a6b7e103c07ae543a1e33547bdcc5a20a7f92bc6cd6d94fad298e4f04833d5"
+    ),
+    AuditedFile(
+        Path("scripts/common.py"),
+        "5a8e160e09d79e98e383b17ef28479dd44ab0ee4d8ba1781febefbf09bdae6fa",
+    ),
+    AuditedFile(
+        Path("scripts/trade/get_accounts.py"),
+        "dd76b1816b9c385ae8e8ef79a40c6490a78b883ca793b0415cd00961acf162c6",
+    ),
+    AuditedFile(
+        Path("scripts/trade/get_portfolio.py"),
+        "0286bc8d0a0c0aef727e0b4c4f54c2791f6cc48e707ff0f5f1a55be04e2166be",
+    ),
+    AuditedFile(
+        Path("scripts/trade/get_all_portfolios.py"),
+        "dd28df76f3778d61551f04fb754322208b2fdb27f6729a5e3ebc787804238048",
+    ),
+)
+_AUDITED_COMMANDS = (
+    AuditedCommand("get_accounts", Path("scripts/trade/get_accounts.py")),
+    AuditedCommand("get_portfolio", Path("scripts/trade/get_portfolio.py")),
+    AuditedCommand("get_all_portfolios", Path("scripts/trade/get_all_portfolios.py")),
+)
+_AUDITED_COMMAND_NAMES = frozenset(command.name for command in _AUDITED_COMMANDS)
+
+
+@dataclass(frozen=True)
+class AuditedSkill:
+    root: Path
+    files: tuple[tuple[AuditedFile, bytes], ...]
+
+    def content(self, relative_path: Path) -> bytes:
+        for record, content in self.files:
+            if record.relative_path == relative_path:
+                return content
+        raise KeyError(relative_path)
 
 
 @dataclass(frozen=True)
@@ -24,10 +73,35 @@ class SkillValidation:
         return self.root is not None
 
 
-def _frontmatter_name(skill_file: Path) -> str | None:
+def audited_files() -> tuple[AuditedFile, ...]:
+    return _AUDITED_FILES
+
+
+def audited_commands() -> tuple[AuditedCommand, ...]:
+    return _AUDITED_COMMANDS
+
+
+def audited_command_names() -> frozenset[str]:
+    return _AUDITED_COMMAND_NAMES
+
+
+def audited_command(name: str) -> AuditedCommand | None:
+    for command in _AUDITED_COMMANDS:
+        if command.name == name:
+            return command
+    return None
+
+
+def canonicalize_bytes(content: bytes) -> bytes:
+    """Normalize line endings so pinned identity is stable across supported platforms."""
+
+    return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _frontmatter_name(content: bytes) -> str | None:
     try:
-        lines = skill_file.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeError:
         return None
     if not lines or lines[0].strip() != "---":
         return None
@@ -42,37 +116,47 @@ def _frontmatter_name(skill_file: Path) -> str | None:
     return None
 
 
-def validate_futuapi_skill(candidate: Path) -> SkillValidation:
-    """Validate identity, layout, and containment of a futuapi Skill candidate."""
+def load_audited_skill(candidate: Path) -> tuple[AuditedSkill | None, str]:
+    """Open each pinned file once and retain only digest-verified canonical bytes."""
 
     try:
         root = candidate.expanduser().resolve(strict=True)
     except (OSError, RuntimeError):
-        return SkillValidation(None, "candidate directory does not exist")
+        return None, "candidate directory does not exist"
     if not root.is_dir():
-        return SkillValidation(None, "candidate is not a directory")
+        return None, "candidate is not a directory"
 
-    skill_file = root / "SKILL.md"
-    try:
-        resolved_skill_file = skill_file.resolve(strict=True)
-    except (OSError, RuntimeError):
-        return SkillValidation(None, "SKILL.md is missing")
-    if not resolved_skill_file.is_relative_to(root) or not resolved_skill_file.is_file():
-        return SkillValidation(None, "SKILL.md escapes Skill directory")
-    if _frontmatter_name(resolved_skill_file) != "futuapi":
-        return SkillValidation(None, "SKILL.md frontmatter must declare name: futuapi")
-
-    for relative_script in READ_ONLY_SCRIPTS.values():
-        script = root / relative_script
+    loaded: list[tuple[AuditedFile, bytes]] = []
+    for record in _AUDITED_FILES:
+        source = root / record.relative_path
         try:
-            resolved_script = script.resolve(strict=True)
+            resolved = source.resolve(strict=True)
         except (OSError, RuntimeError):
-            return SkillValidation(None, f"required script is missing: {relative_script}")
-        if not resolved_script.is_relative_to(root):
-            return SkillValidation(
-                None, f"required script escapes Skill directory: {relative_script}"
-            )
-        if not resolved_script.is_file():
-            return SkillValidation(None, f"required script is not a file: {relative_script}")
+            return None, f"required audited file is missing: {record.relative_path}"
+        if not resolved.is_relative_to(root):
+            return None, f"required audited file escapes Skill directory: {record.relative_path}"
+        if not resolved.is_file():
+            return None, f"required audited file is not a file: {record.relative_path}"
+        try:
+            with resolved.open("rb") as handle:
+                content = canonicalize_bytes(handle.read())
+        except OSError as exc:
+            return None, f"required audited file could not be read: {type(exc).__name__}"
+        digest = hashlib.sha256(content).hexdigest()
+        if digest != record.sha256:
+            return None, f"audited content digest mismatch: {record.relative_path}"
+        loaded.append((record, content))
 
-    return SkillValidation(root, "compatible futuapi Skill identity and read-only script layout")
+    skill_content = next(
+        content for record, content in loaded if record.relative_path == Path("SKILL.md")
+    )
+    if _frontmatter_name(skill_content) != "futuapi":
+        return None, "SKILL.md frontmatter must declare name: futuapi"
+    return AuditedSkill(root, tuple(loaded)), "audited futuapi content identity matched"
+
+
+def validate_futuapi_skill(candidate: Path) -> SkillValidation:
+    """Validate containment and pinned identity for every trust-relevant file."""
+
+    audited, detail = load_audited_skill(candidate)
+    return SkillValidation(audited.root if audited is not None else None, detail)

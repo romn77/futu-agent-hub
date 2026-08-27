@@ -2,7 +2,7 @@ import ast
 import subprocess
 from pathlib import Path
 
-from portfolio_analyst.futu_adapter import FutuAdapter
+from portfolio_analyst.skill_trust import audited_command_names, audited_commands, audited_files
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -51,17 +51,20 @@ def test_production_code_contains_no_order_entry_calls_or_shell_true():
 
 def test_every_resolved_allowlisted_official_script_is_read_only():
     skill_dir = REPOSITORY_ROOT / "Futu API Skills" / "futuapi"
-    adapter = FutuAdapter(skill_dir)
-    resolved_scripts = [Path(adapter.command(name, [])[1]) for name in adapter.READ_ONLY_SCRIPTS]
+    audited_python = [
+        skill_dir / record.relative_path
+        for record in audited_files()
+        if record.relative_path.suffix == ".py"
+    ]
 
-    assert len(resolved_scripts) == len(adapter.READ_ONLY_SCRIPTS)
-    assert all(path.is_file() and path.is_relative_to(skill_dir) for path in resolved_scripts)
-    assert _scan_python_files(resolved_scripts) == []
+    assert all(path.is_file() and path.is_relative_to(skill_dir) for path in audited_python)
+    assert _scan_python_files(audited_python) == []
 
 
 def test_adapter_allowlist_has_no_dangerous_terms():
-    for command, relative_path in FutuAdapter.READ_ONLY_SCRIPTS.items():
-        combined = f"{command} {relative_path}".lower()
+    assert frozenset(command.name for command in audited_commands()) == audited_command_names()
+    for command in audited_commands():
+        combined = f"{command.name} {command.script_path}".lower()
         assert all(term not in combined for term in DANGEROUS_CALLS)
 
 

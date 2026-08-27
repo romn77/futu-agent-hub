@@ -1,18 +1,25 @@
 import json
 import socket
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from portfolio_analyst import doctor, opend_probe_worker, settings
 from portfolio_analyst.doctor import probe_environment, run_doctor
+from portfolio_analyst.skill_trust import audited_files
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OFFICIAL_SKILL = PROJECT_ROOT.parent / "futuapi"
 
 
 def _trusted_skill(path):
-    (path / "scripts" / "trade").mkdir(parents=True)
-    (path / "SKILL.md").write_text("---\nname: futuapi\n---\n", encoding="utf-8")
-    for name in ("get_accounts.py", "get_portfolio.py", "get_all_portfolios.py"):
-        (path / "scripts" / "trade" / name).write_text("print('{}')\n", encoding="utf-8")
+    for record in audited_files():
+        destination = path / record.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(OFFICIAL_SKILL / record.relative_path, destination)
     return path
 
 

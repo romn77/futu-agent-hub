@@ -86,7 +86,7 @@ def discover_futuapi_skill_source(
             (
                 Path(explicit),
                 "explicit",
-                "compatible futuapi Skill from user-configured FUTUAPI_SKILL_DIR",
+                "audited-compatible futuapi Skill from user-configured FUTUAPI_SKILL_DIR",
             )
         )
     candidates.extend(
@@ -94,20 +94,28 @@ def discover_futuapi_skill_source(
             (
                 root / "Futu API Skills" / "futuapi",
                 "repository",
-                "compatible futuapi Skill from repository layout",
+                "audited-compatible futuapi Skill from repository layout",
             ),
-            (root / "futuapi", "repository", "compatible futuapi Skill from repository layout"),
+            (
+                root / "futuapi",
+                "repository",
+                "audited-compatible futuapi Skill from repository layout",
+            ),
         ]
     )
     candidates.extend(
-        (global_root / "futuapi", "global", "compatible futuapi Skill from known global root")
+        (
+            global_root / "futuapi",
+            "global",
+            "audited-compatible futuapi Skill from known global root",
+        )
         for global_root in roots
     )
     for candidate, kind, detail in candidates:
         validation = validate_futuapi_skill(candidate)
         if validation.valid:
             return FutuSkillSource(validation.root, kind, detail)
-    return FutuSkillSource(None, "missing", "compatible futuapi Skill not found")
+    return FutuSkillSource(None, "missing", "audited-compatible futuapi Skill not found")
 
 
 def discover_futuapi_skill(

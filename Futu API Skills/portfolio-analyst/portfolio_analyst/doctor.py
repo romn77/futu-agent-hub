@@ -91,7 +91,7 @@ def run_doctor(
         validation = validate_futuapi_skill(skill_dir)
         discovered = validation.root
         skill_detail = (
-            "compatible futuapi Skill supplied directly by caller"
+            "audited-compatible futuapi Skill supplied directly by caller"
             if validation.valid
             else validation.detail
         )

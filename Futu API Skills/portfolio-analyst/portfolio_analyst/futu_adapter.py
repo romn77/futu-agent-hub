@@ -1,4 +1,4 @@
-"""Narrow subprocess boundary around compatible read-only Skill scripts."""
+"""Narrow subprocess boundary around audited read-only Skill scripts."""
 
 from __future__ import annotations
 
@@ -6,21 +6,28 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from .skill_trust import READ_ONLY_SCRIPTS as ALLOWED_READ_ONLY_SCRIPTS
-from .skill_trust import validate_futuapi_skill
+from .skill_trust import audited_command, audited_command_names, load_audited_skill
 
 
 class UnsafeFutuCommand(ValueError):
     """Raised when a command falls outside the fixed read-only boundary."""
 
 
-class FutuAdapter:
-    """Execute only fixed read-only scripts from a compatible futuapi Skill."""
+@dataclass(frozen=True)
+class FutuRequest:
+    command: str
+    arguments: tuple[str, ...]
 
-    READ_ONLY_SCRIPTS = ALLOWED_READ_ONLY_SCRIPTS
+
+class FutuAdapter:
+    """Execute only fixed read-only scripts from an audited futuapi Skill."""
+
+    READ_ONLY_COMMANDS = audited_command_names()
     DENY_TERMS = frozenset(
         {
             "place_order",
@@ -72,58 +79,65 @@ class FutuAdapter:
     )
 
     def __init__(self, skill_dir: Path, *, python_executable: str | None = None) -> None:
-        validation = validate_futuapi_skill(skill_dir)
-        if not validation.valid:
-            raise ValueError(f"compatible futuapi Skill required: {validation.detail}")
-        assert validation.root is not None
-        self.skill_dir = validation.root
+        audited, detail = load_audited_skill(skill_dir)
+        if audited is None:
+            raise ValueError(f"audited futuapi Skill required: {detail}")
+        self.skill_dir = audited.root
         self.python_executable = python_executable or sys.executable
 
-    def command(self, name: str, arguments: Sequence[str]) -> list[str]:
-        """Build an argument-array command for an approved script."""
-
-        validation = validate_futuapi_skill(self.skill_dir)
-        if not validation.valid:
-            raise ValueError(f"compatible futuapi Skill required: {validation.detail}")
+    def validate_request(self, name: str, arguments: Sequence[str]) -> FutuRequest:
+        """Validate a request without exposing an executable source path."""
 
         normalized = name.lower()
         if any(term in normalized for term in self.DENY_TERMS):
             raise UnsafeFutuCommand(f"write-capable Futu command is forbidden: {name}")
-        relative_script = self.READ_ONLY_SCRIPTS.get(name)
-        if relative_script is None:
+        if audited_command(name) is None:
             raise UnsafeFutuCommand(f"Futu command is not in the read-only allowlist: {name}")
         option_names = (
             str(argument).lower() for argument in arguments if str(argument).startswith("-")
         )
         if any(term in option for option in option_names for term in self.CREDENTIAL_FLAG_TERMS):
             raise UnsafeFutuCommand("credential and unlock arguments are forbidden")
-        script = (self.skill_dir / relative_script).resolve()
-        if not script.is_relative_to(self.skill_dir) or not script.is_file():
-            raise FileNotFoundError(f"approved futuapi script not found: {relative_script}")
-        return [self.python_executable, str(script), *map(str, arguments)]
+        return FutuRequest(name, tuple(map(str, arguments)))
 
     def run(
         self, name: str, arguments: Sequence[str], *, timeout: float = 30
     ) -> subprocess.CompletedProcess[str]:
         """Run an approved read-only command without a shell."""
 
-        command = self.command(name, arguments)
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise subprocess.TimeoutExpired(
-                cmd=self._sanitize_args(exc.cmd),
-                timeout=exc.timeout,
-                output=self.sanitize_output(exc.output),
-                stderr=self.sanitize_output(exc.stderr),
-            ) from None
+        request = self.validate_request(name, arguments)
+        audited, detail = load_audited_skill(self.skill_dir)
+        if audited is None:
+            raise ValueError(f"audited futuapi Skill required: {detail}")
+        command_record = audited_command(request.command)
+        assert command_record is not None
+        with tempfile.TemporaryDirectory(prefix="portfolio-futu-") as temporary:
+            snapshot_root = Path(temporary) / "futuapi"
+            for record, content in audited.files:
+                destination = snapshot_root / record.relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+            command = [
+                self.python_executable,
+                str(snapshot_root / command_record.script_path),
+                *request.arguments,
+            ]
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    check=False,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise subprocess.TimeoutExpired(
+                    cmd=self._sanitize_args(exc.cmd),
+                    timeout=exc.timeout,
+                    output=self.sanitize_output(exc.output),
+                    stderr=self.sanitize_output(exc.stderr),
+                ) from None
         return subprocess.CompletedProcess(
             args=self._sanitize_args(completed.args),
             returncode=completed.returncode,

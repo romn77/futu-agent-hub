@@ -1,52 +1,55 @@
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
 
 from portfolio_analyst.futu_adapter import FutuAdapter, UnsafeFutuCommand
+from portfolio_analyst.skill_trust import audited_files
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OFFICIAL_SKILL = PROJECT_ROOT.parent / "futuapi"
 
 
 def _skill(tmp_path: Path) -> Path:
     skill = tmp_path / "futuapi"
-    (skill / "scripts" / "trade").mkdir(parents=True)
-    (skill / "SKILL.md").write_text("---\nname: futuapi\n---\n", encoding="utf-8")
-    for name in (
-        "get_accounts.py",
-        "get_portfolio.py",
-        "get_all_portfolios.py",
-        "place_order.py",
-    ):
-        (skill / "scripts" / "trade" / name).write_text("print('{}')\n", encoding="utf-8")
+    for record in audited_files():
+        destination = skill / record.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(OFFICIAL_SKILL / record.relative_path, destination)
     return skill
 
 
 def test_adapter_exposes_only_hard_coded_read_only_scripts(tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
 
-    assert adapter.command("get_accounts", ["--json"]) == [
-        adapter.python_executable,
-        str(adapter.skill_dir / "scripts" / "trade" / "get_accounts.py"),
-        "--json",
-    ]
+    request = adapter.validate_request("get_accounts", ["--json"])
+
+    assert request.command == "get_accounts"
+    assert request.arguments == ("--json",)
+    assert not hasattr(adapter, "command")
 
     with pytest.raises(UnsafeFutuCommand):
-        adapter.command("place_order", [])
+        adapter.validate_request("place_order", [])
 
     with pytest.raises(UnsafeFutuCommand):
-        adapter.command("../../tmp/custom", [])
+        adapter.validate_request("../../tmp/custom", [])
 
 
 def test_read_only_real_query_never_accepts_a_password(tmp_path):
     adapter = FutuAdapter(_skill(tmp_path))
 
-    command = adapter.command("get_portfolio", ["--trd-env", "REAL", "--json"])
+    request = adapter.validate_request("get_portfolio", ["--trd-env", "REAL", "--json"])
 
-    assert "REAL" in command
-    assert all("password" not in item.lower() and "pwd" not in item.lower() for item in command)
+    assert "REAL" in request.arguments
+    assert all(
+        "password" not in item.lower() and "pwd" not in item.lower() for item in request.arguments
+    )
 
     with pytest.raises(UnsafeFutuCommand, match="credential"):
-        adapter.command("get_portfolio", ["--trd-env", "REAL", "--password", "secret"])
+        adapter.validate_request("get_portfolio", ["--trd-env", "REAL", "--password", "secret"])
 
 
 def test_run_masks_sensitive_json_fields_in_stdout_and_stderr(monkeypatch, tmp_path):
@@ -245,11 +248,11 @@ def test_timeout_exception_is_rebuilt_with_sanitized_metadata(monkeypatch, tmp_p
 def test_adapter_revalidates_skill_before_each_command(tmp_path):
     skill = _skill(tmp_path)
     adapter = FutuAdapter(skill)
-    script = skill / adapter.READ_ONLY_SCRIPTS["get_accounts"]
+    script = skill / "scripts/trade/get_accounts.py"
     script.unlink()
     outside = tmp_path / "swapped.py"
     outside.write_text("print('swapped')\n", encoding="utf-8")
     script.symlink_to(outside)
 
     with pytest.raises(ValueError, match="escapes Skill directory"):
-        adapter.command("get_accounts", ["--json"])
+        adapter.run("get_accounts", ["--json"])
