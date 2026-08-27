@@ -66,7 +66,6 @@ class UnsupportedRiskError(RiskInputError):
 
 @dataclass(frozen=True)
 class RiskBudget:
-    max_positions: int = 200
     max_history_symbols: int = 100
     max_pair_operations: int = 4950
     max_wall_seconds: Decimal = Decimal("30")
@@ -75,7 +74,6 @@ class RiskBudget:
 
     def __post_init__(self) -> None:
         integer_bounds = (
-            ("max_positions", self.max_positions, 1, 1000),
             ("max_history_symbols", self.max_history_symbols, 1, 200),
             ("max_pair_operations", self.max_pair_operations, 0, 19900),
         )
@@ -558,6 +556,9 @@ def _bounded_history_call(
     return value
 
 
+MARKET_CLOSE_SCHEDULE_VERSION = "REGULAR_SESSIONS_V1"
+
+
 _MARKET_CLOSE = {
     "US": ("America/New_York", datetime_time(16, 0)),
     "CA": ("America/Toronto", datetime_time(16, 0)),
@@ -565,7 +566,7 @@ _MARKET_CLOSE = {
     "CN": ("Asia/Shanghai", datetime_time(15, 0)),
     "SG": ("Asia/Singapore", datetime_time(17, 0)),
     "MY": ("Asia/Kuala_Lumpur", datetime_time(17, 0)),
-    "JP": ("Asia/Tokyo", datetime_time(15, 0)),
+    "JP": ("Asia/Tokyo", datetime_time(15, 30)),
     "AU": ("Australia/Sydney", datetime_time(16, 0)),
 }
 

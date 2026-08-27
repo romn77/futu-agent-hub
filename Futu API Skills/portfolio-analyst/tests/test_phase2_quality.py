@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import os
@@ -24,6 +24,23 @@ from portfolio_analyst.settings import Settings
 from portfolio_analyst.snapshot_io import InvalidSnapshot, load_snapshot
 
 from test_risk_analysis import snapshot
+
+
+@pytest.mark.parametrize(
+    ("instant", "expected"),
+    [
+        (datetime(2026, 8, 27, 6, 29, 59, tzinfo=timezone.utc), date(2026, 8, 26)),
+        (datetime(2026, 8, 27, 6, 30, 0, tzinfo=timezone.utc), date(2026, 8, 27)),
+        (datetime(2026, 8, 27, 6, 30, 1, tzinfo=timezone.utc), date(2026, 8, 27)),
+    ],
+)
+def test_jp_regular_close_cutoff_uses_1530_jst_boundary(instant, expected):
+    assert risk._latest_complete_market_close_date(instant, "JP") == expected
+
+
+def test_removed_max_positions_budget_argument_is_rejected():
+    with pytest.raises(TypeError, match="max_positions"):
+        risk.RiskBudget(max_positions=3)
 
 
 def test_pair_returns_are_computed_after_common_close_date_alignment():
@@ -401,7 +418,7 @@ def test_large_portfolio_caps_only_history_and_keeps_full_structural_population(
     report = analyze_risk(
         replace(source, positions=positions),
         price_provider=provider,
-        budget=risk.RiskBudget(max_positions=3, max_history_symbols=2, max_pair_operations=1),
+        budget=risk.RiskBudget(max_history_symbols=2, max_pair_operations=1),
     )
 
     assert report.coverage["total_positions"] == 10
@@ -511,7 +528,6 @@ def test_price_provider_timeout_trips_circuit_breaker_without_waiting_for_all_sy
         source,
         price_provider=SlowPrices(),
         budget=risk.RiskBudget(
-            max_positions=10,
             max_history_symbols=10,
             max_pair_operations=45,
             max_wall_seconds=Decimal("0.05"),

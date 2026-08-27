@@ -75,17 +75,21 @@ both report entry points checks coverage/status consistency, threshold ordering,
 matrix identity and diagonal rules, pair uniqueness/count/band agreement, and exact connected
 components for high-correlation clusters. Structurally valid but semantically inconsistent reports
 are rejected with a domain validation error.
-The upper date bound is computed separately for every market-qualified identity from the snapshot
-instant, its IANA market timezone, and regular close time. Before that local close, the preceding
-weekday is used; weekends roll back to Friday. This prevents a US close later on the snapshot's UTC
-calendar date from entering evidence. The requested interval starts
+The versioned `REGULAR_SESSIONS_V1` approximation computes the upper date bound separately for
+every market-qualified identity from the snapshot instant, its IANA market timezone, and regular
+close time (including Japan at 15:30 JST). Before that local close, the preceding weekday is used;
+weekends roll back to Friday. This prevents a US close later on the snapshot's UTC calendar date
+from entering evidence. This is deliberately not a complete exchange calendar: holidays,
+unscheduled halts, and exceptional or early closes are not inferred. Missing or inconsistent bars
+remain fail-closed and produce `PARTIAL`/`UNAVAILABLE` evidence rather than a fabricated session.
+The requested interval starts
 `max(2 * lookback, 180) days` before that cutoff, and every cutoff is serialized in `date_cutoffs`.
 Rows outside the interval are rejected as lookahead/out-of-request evidence. Exchange holidays
 produce no row and therefore cannot be fabricated as a return observation.
 
 All O(N) structure metrics, exposures, policies, and findings always use the complete canonical
-current-position population; `max_positions` is retained only as a compatibility setting and never
-truncates those calculations. Only adjusted-history requests and O(N²) pair work are bounded.
+current-position population. The misleading `max_positions` setting has been removed. Only
+adjusted-history requests and O(N²) pair work are bounded.
 Defaults cap history symbols and requests at 100, pair operations at 4,950, wall time at 30 seconds,
 each provider call at 5 seconds, and lookback at 5,000. Top NAV-weight history symbols are selected
 deterministically; history omissions set `BUDGET_LIMIT`, a reason, and partial quality without

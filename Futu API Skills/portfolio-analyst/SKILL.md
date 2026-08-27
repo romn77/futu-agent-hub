@@ -127,4 +127,6 @@ base P&L are finite and complete for the full analyzed current population; other
 PARTIAL and no P&L finding is emitted.
 O(N) structure, exposure, policy, and finding calculations always use every canonical current
 position; only history requests and correlation pairs are budgeted. Correlation uses serialized
-market-local completed-close cutoffs, so a later close on the same UTC date is excluded.
+market-local completed-close cutoffs under the versioned `REGULAR_SESSIONS_V1` approximation, so a
+later close on the same UTC date is excluded. It is not a full exchange calendar; exceptional
+sessions remain fail-closed/partial when bars are absent or inconsistent.
