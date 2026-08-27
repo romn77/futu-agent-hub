@@ -137,7 +137,11 @@ def test_cross_account_offsetting_legs_fail_closed_instead_of_being_netted_long_
         market_value_base=Decimal("-360"),
         weight=Decimal("-0.36"),
     )
-    offsetting = replace(source, positions=(long_leg, short_leg, *source.positions[1:]))
+    offsetting = replace(
+        source,
+        accounts=(*source.accounts, replace(source.accounts[0], account_ref="acct-short")),
+        positions=(long_leg, short_leg, *source.positions[1:]),
+    )
 
     with pytest.raises(RebalanceError, match="UNSUPPORTED_OFFSETTING_LEGS"):
         simulate_rebalance(
@@ -159,6 +163,7 @@ def test_same_direction_cross_account_change_has_deterministic_leg_allocation():
     )
     multi_account = replace(
         source,
+        accounts=(*source.accounts, replace(source.accounts[0], account_ref="acct-second")),
         positions=(source.positions[0], second_leg, *source.positions[1:]),
         nav_base=Decimal("1200"),
     )

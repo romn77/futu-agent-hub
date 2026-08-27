@@ -371,15 +371,26 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
     quantities: dict[str, Decimal] = {}
     leg_signs: dict[str, set[int]] = {}
     source_legs: dict[str, list[dict[str, Any]]] = {}
+    account_refs = {account.account_ref for account in snapshot.accounts}
+    if len(account_refs) != len(snapshot.accounts):
+        raise RebalanceError("source snapshot account aliases must be unique")
     for position in snapshot.positions:
         identity = _identity(position)
+        if position.account_ref not in account_refs:
+            raise RebalanceError("source position account alias is absent from snapshot accounts")
         if any(leg["account_ref"] == position.account_ref for leg in source_legs.get(identity, [])):
             raise RebalanceError("duplicate account/identity source legs are unsupported")
         source_legs.setdefault(identity, []).append(
             {
                 "account_ref": position.account_ref,
+                "identity": identity,
                 "quantity": position.quantity,
                 "market_value_base": position.market_value_base,
+                "currency": position.currency,
+                "fx_to_base": position.fx_to_base,
+                "sector": position.sector,
+                "region": position.region,
+                "themes": list(position.themes),
             }
         )
         if position.quantity != 0 or position.market_value_base != 0:

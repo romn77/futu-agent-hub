@@ -191,3 +191,6 @@ Same-direction multi-account changes are allocated deterministically and proport
 cross-account legs fail closed as `UNSUPPORTED_OFFSETTING_LEGS` rather than being netted away.
 The complete content-addressed source snapshot is embedded and revalidated to prevent classification
 evidence from being rewritten by recomputing only the simulation hash.
+Runtime semantics rebuild stable account-level legs from the embedded positions and account aliases,
+require exact one-to-one evidence equality, and recompute allocation weights from those authoritative
+legs; equal-total leg redistribution plus a new simulation hash remains invalid.

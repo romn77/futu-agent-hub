@@ -39,6 +39,12 @@ closed as `UNSUPPORTED_OFFSETTING_LEGS`, so +400/-360 can never be netted into a
 and report rehash tampering invalid.
 The complete content-addressed source snapshot is embedded and revalidated, so changing TECH to
 ENERGY and merely recomputing the simulation hash cannot redefine the source classification.
+Runtime semantics rebuild every source leg directly from embedded snapshot positions, including its
+masked account alias, canonical identity, quantity, base market value, currency/FX, and
+sector/region/themes. Position aliases must exist in the embedded snapshot account set; rebuilt legs
+must exactly equal evidence in stable account-alias order. Operation allocations are recalculated
+from those rebuilt legs, never from caller-editable evidence totals. Thus redistributing 400/200 to
+300/300 and synchronously editing allocation plus simulation hash is rejected.
 
 Without `allow_margin`, negative hypothetical cash is infeasible. Without `allow_short`, negative
 hypothetical quantity/value is rejected. Sell-only rejects positive deltas. New-cash-only rejects

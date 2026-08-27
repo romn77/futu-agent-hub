@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -1556,14 +1557,42 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 raise ValueError("account-level source legs do not rebuild source state")
             if before_quantities[identity] * unit_price * fx != before_values[identity]:
                 raise ValueError("source value does not reconcile with immutable price/FX evidence")
+        snapshot_account_refs = {
+            account["account_ref"] for account in payload["source_snapshot"]["accounts"]
+        }
+        if len(snapshot_account_refs) != len(payload["source_snapshot"]["accounts"]):
+            raise ValueError("embedded snapshot account aliases must be unique")
+        authoritative_legs: dict[str, list[dict[str, Any]]] = {}
         snapshot_positions: dict[str, list[dict[str, Any]]] = {}
         for position in payload["source_snapshot"]["positions"]:
             identity = f"{position['market']}.{position['symbol']}"
+            if (
+                re.fullmatch(r"[A-Z]{2,4}\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*", identity) is None
+                or position["account_ref"] not in snapshot_account_refs
+            ):
+                raise ValueError("embedded snapshot position identity/account alias is invalid")
             snapshot_positions.setdefault(identity, []).append(position)
+            authoritative_legs.setdefault(identity, []).append(
+                {
+                    "account_ref": position["account_ref"],
+                    "identity": identity,
+                    "quantity": position["quantity"],
+                    "market_value_base": position["market_value_base"],
+                    "currency": position["currency"],
+                    "fx_to_base": position["fx_to_base"],
+                    "sector": position["sector"],
+                    "region": position["region"],
+                    "themes": position["themes"],
+                }
+            )
+        for legs in authoritative_legs.values():
+            legs.sort(key=lambda item: item["account_ref"])
         if set(snapshot_positions) != set(payload["evidence"]):
             raise ValueError("embedded source positions do not match rebalance evidence")
         for identity, positions in snapshot_positions.items():
             evidence = payload["evidence"][identity]
+            if evidence["source_legs"] != authoritative_legs[identity]:
+                raise ValueError("source legs differ from embedded snapshot positions")
             reference = positions[0]
             if any(
                 position[name] != reference[name]
@@ -1665,7 +1694,7 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
             ):
                 raise ValueError("change amount/quantity formula does not reconcile")
             allocations = change["leg_allocations"]
-            legs = payload["evidence"][symbol]["source_legs"]
+            legs = authoritative_legs[symbol]
             if [item["account_ref"] for item in allocations] != [
                 item["account_ref"] for item in legs
             ]:

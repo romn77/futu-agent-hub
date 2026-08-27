@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -9,6 +10,7 @@ import json
 import pytest
 
 from portfolio_analyst.rebalance import RebalanceChange, RebalanceRequest, simulate_rebalance
+from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.schema import (
     validate_rebalance_result_document,
     validate_trade_review_document,
@@ -493,6 +495,48 @@ def test_rebalance_classification_evidence_is_authoritative_and_tamper_evident()
     _rehash_simulation(result)
     with pytest.raises(Exception):
         validate_rebalance_result_document(result)
+
+
+def test_rebalance_rejects_rehashed_leg_and_allocation_redistribution_with_same_totals():
+    source = snapshot()
+    second_account = replace(source.accounts[0], account_ref="acct-second")
+    second_leg = replace(
+        source.positions[0],
+        account_ref="acct-second",
+        quantity=Decimal("0.5"),
+        can_sell_quantity=Decimal("0.5"),
+        market_value_local=Decimal("200"),
+        market_value_base=Decimal("200"),
+    )
+    source = replace(
+        source,
+        accounts=(*source.accounts, second_account),
+        positions=(source.positions[0], second_leg, *source.positions[1:]),
+        nav_base=Decimal("1200"),
+    )
+    source = replace(source, snapshot_id=snapshot_identity(source))
+    payload = simulate_rebalance(
+        source,
+        RebalanceRequest(
+            source.snapshot_id,
+            "USD",
+            changes=(RebalanceChange("US.AAA", "AMOUNT_DELTA", Decimal("60")),),
+        ),
+    ).to_dict()
+
+    legs = payload["evidence"]["US.AAA"]["source_legs"]
+    legs[0]["quantity"] = "0.75"
+    legs[0]["market_value_base"] = "300"
+    legs[1]["quantity"] = "0.75"
+    legs[1]["market_value_base"] = "300"
+    allocations = payload["changes"][0]["leg_allocations"]
+    for allocation in allocations:
+        allocation["amount_delta_base"] = "30"
+        allocation["quantity_delta"] = "0.075"
+    _rehash_simulation(payload)
+
+    with pytest.raises(Exception, match="source legs"):
+        validate_rebalance_result_document(payload)
 
 
 @pytest.mark.parametrize(
