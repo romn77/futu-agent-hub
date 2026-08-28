@@ -325,6 +325,62 @@ def test_alias_key_is_persisted_0600_and_symlink_is_refused(tmp_path):
         store.load_or_create()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX anchored private-key contract")
+def test_alias_store_rejects_unsafe_home_config_hardlink_and_anchor_swap(tmp_path, monkeypatch):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    store = AccountAliasStore(home)
+    store.load_or_create()
+    key = home / "config" / "account_alias.key"
+
+    (home / "config").chmod(0o755)
+    with pytest.raises(AccountAliasError):
+        store.load_or_create()
+    (home / "config").chmod(0o700)
+
+    linked = tmp_path / "linked-key"
+    os.link(key, linked)
+    with pytest.raises(AccountAliasError, match="non-linked"):
+        store.load_or_create()
+    linked.unlink()
+
+    monkeypatch.setattr(store, "_home_anchor_matches", lambda *_args: False)
+    with pytest.raises(AccountAliasError, match="changed"):
+        store.load_or_create()
+
+    home.chmod(0o755)
+    with pytest.raises(AccountAliasError, match="0700"):
+        AccountAliasStore(home).load_or_create()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory durability contract")
+def test_new_private_child_directories_fsync_each_parent(monkeypatch, tmp_path):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    created_parent_inodes: list[int] = []
+    fsynced_directory_inodes: list[int] = []
+    real_mkdir = os.mkdir
+    real_fsync = os.fsync
+
+    def observe_mkdir(path, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None:
+            created_parent_inodes.append(os.fstat(dir_fd).st_ino)
+        return real_mkdir(path, mode, dir_fd=dir_fd)
+
+    def observe_fsync(fd):
+        metadata = os.fstat(fd)
+        if stat.S_ISDIR(metadata.st_mode):
+            fsynced_directory_inodes.append(metadata.st_ino)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "mkdir", observe_mkdir)
+    monkeypatch.setattr(os, "fsync", observe_fsync)
+    SnapshotStore(home).save("reports/year/month/result.json", "{}\n")
+
+    assert created_parent_inodes
+    assert set(created_parent_inodes) <= set(fsynced_directory_inodes)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX dir-fd adversarial contract")
 def test_snapshot_store_rejects_symlink_component_and_concurrent_component_swap(
     tmp_path, monkeypatch

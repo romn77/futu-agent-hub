@@ -14,8 +14,10 @@ import stat
 from typing import Any, Mapping
 
 from .futu_adapter import FutuAdapter
+from .identity import InvalidSnapshotIdentity, parse_snapshot_identity
 from .models import _deep_freeze, _json_value
 from .private_home import PrivateHomeError, ensure_private_home
+from .persistence import open_or_create_private_directory
 from .rendering import terminal_text
 
 
@@ -23,7 +25,6 @@ MAX_RECORD_BYTES = 64 * 1024
 MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 MAX_METADATA_ITEMS = 64
 _ZERO_HASH = "0" * 64
-_SNAPSHOT_ID = re.compile(r"^ps-\d{8}T\d{6}Z-(?:real|simulate)-[a-z]{3}-[0-9a-f]{16}$")
 
 
 class JournalError(ValueError):
@@ -100,6 +101,10 @@ class JournalRecord:
     metadata: Mapping[str, Any]
 
     def __post_init__(self) -> None:
+        try:
+            parse_snapshot_identity(self.source_snapshot_id)
+        except InvalidSnapshotIdentity as exc:
+            raise JournalError("source_snapshot_id is not canonical") from exc
         object.__setattr__(self, "metadata", _deep_freeze(dict(self.metadata)))
 
     def to_dict(self) -> dict[str, Any]:
@@ -177,8 +182,10 @@ class JournalRepository:
     def _append(self, filename: str, **fields: Any) -> JournalRecord:
         if os.name != "posix":
             raise JournalError("UNSUPPORTED_PLATFORM_SECURITY: journal append disabled")
-        if _SNAPSHOT_ID.fullmatch(str(fields["source_snapshot_id"])) is None:
-            raise JournalError("source_snapshot_id is not canonical")
+        try:
+            parse_snapshot_identity(fields["source_snapshot_id"])
+        except InvalidSnapshotIdentity as exc:
+            raise JournalError("source_snapshot_id is not canonical") from exc
         try:
             self.data_home = ensure_private_home(self.data_home, create=True)
         except PrivateHomeError as exc:
@@ -257,15 +264,16 @@ class JournalRepository:
                 raise JournalError("PORTFOLIO_AGENT_HOME must have mode 0700")
             if create:
                 try:
-                    os.mkdir("journal", 0o700, dir_fd=root_fd)
-                except FileExistsError:
-                    pass
-            try:
-                directory_fd = os.open("journal", flags, dir_fd=root_fd)
-            except FileNotFoundError:
-                raise
-            except OSError as exc:
-                raise JournalError("journal directory is unavailable or unsafe") from exc
+                    directory_fd = open_or_create_private_directory(root_fd, "journal", flags)
+                except (OSError, ValueError) as exc:
+                    raise JournalError("journal directory is unavailable or unsafe") from exc
+            else:
+                try:
+                    directory_fd = os.open("journal", flags, dir_fd=root_fd)
+                except FileNotFoundError:
+                    raise
+                except OSError as exc:
+                    raise JournalError("journal directory is unavailable or unsafe") from exc
             directory_metadata = os.fstat(directory_fd)
             if (
                 not stat.S_ISDIR(directory_metadata.st_mode)

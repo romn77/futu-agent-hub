@@ -18,8 +18,10 @@ from .snapshot_io import InvalidSnapshot, snapshot_from_document
 
 
 MAX_SNAPSHOT_ENTRIES = 10_000
+MAX_LATEST_SNAPSHOTS = 1_000
 MAX_SNAPSHOT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
+MAX_HISTORY_TOTAL_BYTES = 256 * 1024 * 1024
 
 
 class SnapshotRepositoryError(ValueError):
@@ -91,19 +93,44 @@ class SnapshotRepository:
             return self.data_home / relative
 
     def read(self, snapshot_id: str) -> PortfolioSnapshot:
-        if os.name != "posix":
-            raise SnapshotRepositoryError("UNSUPPORTED_PLATFORM_SECURITY: snapshot reads disabled")
-        self._revalidate_home()
         relative = self._relative(snapshot_id)
-        try:
-            raw = self._read_anchored(relative)
-            payload = json.loads(raw, object_pairs_hook=self._unique_object)
-            loaded = snapshot_from_document(payload)
-        except (InvalidSnapshot, json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
-            raise SnapshotRepositoryError("snapshot body is invalid") from exc
+        loaded = self.read_path(relative)
         if loaded.snapshot_id != snapshot_id:
             raise SnapshotRepositoryError("snapshot path and body identity disagree")
         return loaded
+
+    def read_path(self, relative_path: str | Path) -> PortfolioSnapshot:
+        """Read a private explicit import path, or a canonical repository path, securely."""
+
+        relative, raw = self.read_private_bytes(relative_path)
+        try:
+            payload = json.loads(raw, object_pairs_hook=self._unique_object)
+            loaded = snapshot_from_document(payload)
+        except InvalidSnapshot as exc:
+            raise SnapshotRepositoryError(str(exc)) from exc
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+            raise SnapshotRepositoryError("snapshot body is invalid") from exc
+        canonical = self._relative(loaded.snapshot_id)
+        if len(relative.parts) == 4 and relative.parts[0] == "snapshots" and relative != canonical:
+            raise SnapshotRepositoryError("canonical snapshot repository path and body disagree")
+        return loaded
+
+    def read_private_bytes(self, relative_path: str | Path) -> tuple[Path, bytes]:
+        """Read one bounded private file for explicit import consumers."""
+
+        if os.name != "posix":
+            raise SnapshotRepositoryError("UNSUPPORTED_PLATFORM_SECURITY: snapshot reads disabled")
+        self._revalidate_home()
+        relative = Path(relative_path)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise SnapshotRepositoryError(
+                "snapshot import path must remain inside the private home"
+            )
+        return relative, self._read_anchored(relative)
 
     @staticmethod
     def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -176,8 +203,9 @@ class SnapshotRepository:
                     total += len(chunk)
                     if total > MAX_SNAPSHOT_BYTES:
                         raise SnapshotRepositoryError("snapshot file size budget exceeded")
-                current = os.stat(relative.name, dir_fd=current_fd, follow_symlinks=False)
-                if (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino):
+                if not self._leaf_anchor_matches(
+                    current_fd, relative.name, file_fd, metadata
+                ) or not self._parent_anchor_matches(relative.parts[:-1], current_fd, dflags):
                     raise SnapshotRepositoryError("snapshot changed during anchored read")
                 return b"".join(chunks)
             finally:
@@ -187,6 +215,43 @@ class SnapshotRepository:
         finally:
             os.close(current_fd)
             os.close(root_fd)
+
+    @staticmethod
+    def _leaf_anchor_matches(
+        parent_fd: int, name: str, file_fd: int, before: os.stat_result
+    ) -> bool:
+        try:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            after = os.fstat(file_fd)
+        except OSError:
+            return False
+        identity = (before.st_dev, before.st_ino, before.st_size)
+        return identity == (current.st_dev, current.st_ino, current.st_size) and identity == (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+        )
+
+    def _parent_anchor_matches(
+        self, components: tuple[str, ...], anchored_fd: int, directory_flags: int
+    ) -> bool:
+        try:
+            check_fd = os.open(self.data_home, directory_flags)
+        except OSError:
+            return False
+        try:
+            for component in components:
+                try:
+                    next_fd = os.open(component, directory_flags, dir_fd=check_fd)
+                except OSError:
+                    return False
+                os.close(check_fd)
+                check_fd = next_fd
+            anchored = os.fstat(anchored_fd)
+            current = os.fstat(check_fd)
+            return (anchored.st_dev, anchored.st_ino) == (current.st_dev, current.st_ino)
+        finally:
+            os.close(check_fd)
 
     def _validate_private_parents(self, relative: Path) -> None:
         current = self.data_home
@@ -313,8 +378,13 @@ class SnapshotRepository:
             results.append(item)
         return tuple(sorted(results, key=lambda item: (item.as_of, item.snapshot_id)))
 
-    def latest(self) -> PortfolioSnapshot:
-        items = self.list()
+    def latest(
+        self,
+        *,
+        limit: int = MAX_LATEST_SNAPSHOTS,
+        max_total_bytes: int = MAX_HISTORY_TOTAL_BYTES,
+    ) -> PortfolioSnapshot:
+        items = self.list(limit=limit, max_total_bytes=max_total_bytes)
         if not items:
             raise SnapshotRepositoryError("no valid immutable snapshots are available")
         return items[-1]

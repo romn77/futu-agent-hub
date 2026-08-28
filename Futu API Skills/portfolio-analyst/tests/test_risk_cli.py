@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 import re
 
@@ -8,6 +10,8 @@ import pytest
 
 from portfolio_analyst import cli
 from portfolio_analyst.persistence import SnapshotStore
+from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.snapshot_repository import SnapshotRepository
 from portfolio_analyst.settings import Settings
 
 from test_risk_analysis import snapshot
@@ -93,6 +97,48 @@ def test_duplicate_snapshot_json_keys_are_rejected_even_when_values_match(
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_SNAPSHOT"
 
 
+def test_cli_explicit_snapshot_requires_private_file_and_directory_modes(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    path = _saved_snapshot(home)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+
+    path.chmod(0o644)
+    assert cli.main(["risk", "--snapshot", "snapshots/source.json", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_SNAPSHOT"
+    path.chmod(0o600)
+    (home / "snapshots").chmod(0o755)
+    assert cli.main(["risk", "--snapshot", "snapshots/source.json", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_SNAPSHOT"
+
+
+def test_cli_latest_is_bounded_and_fails_closed_on_corrupt_repository(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    repository = SnapshotRepository(home)
+    path = repository.save(snapshot())
+    observed: dict[str, object] = {}
+    original = SnapshotRepository.list
+
+    def observe_list(self, **kwargs):
+        observed.update(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SnapshotRepository, "list", observe_list)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    assert cli.main(["risk", "--latest", "--json", "--no-save"]) == 0
+    capsys.readouterr()
+    assert observed["limit"] == 1000
+
+    path.write_text("{}\n", encoding="utf-8")
+    path.chmod(0o600)
+    assert cli.main(["risk", "--latest", "--json", "--no-save"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_SNAPSHOT"
+
+
 def test_risk_input_is_exactly_one_of_latest_or_snapshot(capsys):
     assert cli.main(["risk", "--json", "--no-save"]) == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "CLI_USAGE"
@@ -114,14 +160,17 @@ def test_risk_input_is_exactly_one_of_latest_or_snapshot(capsys):
 
 def test_latest_selects_highest_valid_as_of_not_filesystem_mtime(monkeypatch, tmp_path, capsys):
     home = tmp_path / "private"
-    _saved_snapshot(home, "snapshots/z-old.json")
-    newer = snapshot().to_dict()
-    # Same immutable snapshot is sufficient to prove latest discovery is validated and deterministic.
-    SnapshotStore(home).save("snapshots/a-new.json", json.dumps(newer))
+    home.mkdir(mode=0o700)
+    repository = SnapshotRepository(home)
+    old = snapshot()
+    newer_body = replace(old, as_of=old.as_of + timedelta(seconds=1), snapshot_id="pending")
+    newer = replace(newer_body, snapshot_id=snapshot_identity(newer_body))
+    repository.save(newer)
+    repository.save(old)
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
 
     assert cli.main(["risk", "--latest", "--json", "--no-save"]) == 0
-    assert json.loads(capsys.readouterr().out)["source_snapshot_id"] == snapshot().snapshot_id
+    assert json.loads(capsys.readouterr().out)["source_snapshot_id"] == newer.snapshot_id
 
 
 def test_analyze_explicit_output_saves_json_and_markdown_immutably(monkeypatch, tmp_path, capsys):

@@ -9,6 +9,10 @@ than falling back to path checks. After schema and full-body
 identity checks, a dedicated Phase 1 validator recomputes FX, valuation, weight, NAV, exposure,
 alias, and quality invariants before analysis trusts the document.
 
+The snapshot ID timestamp is the UTC `as_of` floored to a whole second. A precise microsecond
+`as_of` remains in the body and therefore in its full-body digest; validators compare the readable
+ID timestamp at whole-second precision but reject a mismatch crossing a second boundary.
+
 ## Metrics and bases
 
 Concentration uses nonnegative position weights divided by NAV; cash is excluded. Top 1, Top 3,

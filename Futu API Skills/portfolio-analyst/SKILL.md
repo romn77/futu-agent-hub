@@ -38,6 +38,11 @@ python scripts/portfolio.py snapshot --trd-env REAL --base-currency USD --json -
 conflicting or invalid bodies fail closed and existing files are never replaced. Custom snapshot
 `--output` paths are rejected so CLI-created history cannot become invisible to repository listing.
 
+Snapshot `as_of` preserves the acquisition timestamp, including microseconds when present. The
+readable timestamp segment in `snapshot_id` encodes the UTC whole second (floor, never round), while
+its digest still binds the complete body including precise `as_of`. Risk, lifecycle, journal,
+repository, and bundle checks compare ID time at that precision and reject cross-second mismatch.
+
 Currency rates are manual facts loaded from `config/fx_rates.json` under the data home:
 
 ```json
@@ -109,7 +114,11 @@ python scripts/portfolio.py analyze --latest --json --no-save
 
 Exactly one of `--latest` and `--snapshot` is required. The selected document is schema-validated
 and its full-body identity plus Phase 1 financial semantics are recomputed after an anchored
-no-follow read. `risk --output FILE` saves immutable JSON; `analyze --output DIRECTORY`
+no-follow read through `SnapshotRepository`. `--latest` enumerates only bounded canonical
+`snapshots/YYYY/MM` history and fails closed on corruption. An explicit non-canonical import path
+must still be beneath the private home with every directory `0700` and a bounded, single-link
+regular file at `0600`; it is never silently added to history. `risk --output FILE` saves immutable
+JSON; `analyze --output DIRECTORY`
 transactionally saves `portfolio_report.json` and `portfolio_report.md` together.
 `--no-save` always wins and the default remains side-effect free. Reports preserve one
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
@@ -276,6 +285,9 @@ only stale private `.tmp` leaves. Journal JSON is canonical and duplicate-key-sa
 checked inside the interprocess lock. POSIX persistence revalidates `0700` directories and `0600`,
 single-link regular files on opened descriptors. Platforms without equivalent handle-level
 no-follow/reparse and interprocess locking fail closed with `UNSUPPORTED_PLATFORM_SECURITY`.
+New private state directories are durably published by fsyncing the child and its parent; the
+account-alias key additionally requires an anchored `0700` home/config, a single-link 32-byte
+`0600` regular file, bounded descriptor reads, and leaf/config/home inode revalidation.
 Every CLI multi-file bundle records its canonical source snapshot time/ID, report ID, and each
 artifact's byte size and SHA-256. Artifacts are linked and directory-fsynced before
 `manifest.json` is linked and directory-fsynced; missing manifests, unsafe descriptor metadata,

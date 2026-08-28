@@ -18,7 +18,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from .models import _json_value
-from .identity import InvalidSnapshotIdentity, parse_snapshot_identity
+from .identity import InvalidSnapshotIdentity, parse_snapshot_identity, utc_floor_second
 from .normalization import canonical_unknown
 from .risk import _latest_complete_market_close_date
 from .trade_quality import canonical_external_source_evidence, canonical_quality_issues
@@ -474,7 +474,7 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         payload["source_snapshot_id"], label="risk source"
     )
     report_timestamp = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
-    if encoded_source_timestamp != report_timestamp.astimezone(timezone.utc):
+    if encoded_source_timestamp != utc_floor_second(report_timestamp):
         raise ReportSemanticError("risk source snapshot identity timestamp is inconsistent")
     correlation = payload["correlation"]
     _validate_correlation_semantics(correlation, payload["as_of"])
@@ -798,7 +798,7 @@ def validate_lifecycle_document(
         payload["source_snapshot_id"], label="lifecycle source"
     )
     report_timestamp = datetime.fromisoformat(payload["as_of"].replace("Z", "+00:00"))
-    if report_timestamp.astimezone(timezone.utc) != encoded_source_timestamp:
+    if utc_floor_second(report_timestamp) != encoded_source_timestamp:
         raise ReportSemanticError("lifecycle source snapshot identity timestamp is inconsistent")
     positions = payload["positions"]
     if payload["status"] == "UNAVAILABLE":
@@ -839,7 +839,7 @@ def validate_lifecycle_document(
         catalog_timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
         if (
             _snapshot_id_timestamp(entry["snapshot_id"], label="lifecycle accepted history")
-            != catalog_timestamp.astimezone(timezone.utc)
+            != utc_floor_second(catalog_timestamp)
             or catalog_timestamp > report_timestamp
         ):
             raise ReportSemanticError("lifecycle accepted history catalog identity is inconsistent")
@@ -1023,7 +1023,7 @@ def validate_lifecycle_document(
         for entry in history:
             timestamp = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
             encoded = _snapshot_id_timestamp(entry["snapshot_id"], label="lifecycle history")
-            if timestamp.astimezone(timezone.utc) != encoded:
+            if utc_floor_second(timestamp) != encoded:
                 raise ReportSemanticError("lifecycle history identity timestamp is inconsistent")
         if item["history_excluded_pre_open"] and not any(
             "pre-open" in note for note in item["data_quality_notes"]
@@ -1335,6 +1335,7 @@ def validate_lifecycle_record_document(payload: dict[str, Any]) -> None:
 
 def validate_journal_document(payload: dict[str, Any]) -> None:
     _validate(payload, "journal_event.schema.json")
+    _snapshot_id_timestamp(payload["source_snapshot_id"], label="journal source")
     if (payload["event_type"] == "USER_DECISION") != (payload["decision"] is not None):
         raise ReportSemanticError("journal decision semantics are inconsistent")
     if (payload["event_type"] == "PORTFOLIO_ANALYSIS") != (payload["artifact_path"] is not None):

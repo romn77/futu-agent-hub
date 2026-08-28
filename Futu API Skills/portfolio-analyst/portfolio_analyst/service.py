@@ -178,6 +178,8 @@ def generate_snapshot(
     persist_aliases: bool = False,
     account_currency_loader: Callable[[Path], Mapping[str, str]] | None = None,
 ) -> PortfolioSnapshot:
+    """Acquire one snapshot; preserve precise as_of while IDs encode its UTC whole second."""
+
     reader = adapter
     if reader is None:
         skill_dir = discover_futuapi_skill()

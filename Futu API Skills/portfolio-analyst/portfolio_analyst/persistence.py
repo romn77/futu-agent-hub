@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from .identity import parse_snapshot_identity
+from .identity import parse_snapshot_identity, utc_floor_second
 
 
 MAX_BUNDLE_ENTRIES = 128
@@ -27,14 +27,50 @@ class IncompleteBundle(ValueError):
     pass
 
 
+def open_or_create_private_directory(parent_fd: int, name: str, directory_flags: int) -> int:
+    """Open one no-follow 0700 child and durably publish it when newly created."""
+
+    created = False
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
+    try:
+        child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
+    except OSError:
+        if created:
+            try:
+                os.rmdir(name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        raise
+    try:
+        metadata = os.fstat(child_fd)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise ValueError("state directory must be a private directory with mode 0700")
+        if created:
+            os.fsync(child_fd)
+            os.fsync(parent_fd)
+        return child_fd
+    except BaseException:
+        os.close(child_fd)
+        if created:
+            try:
+                os.rmdir(name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        raise
+
+
 def bundle_manifest(
     *, source_snapshot_id: str, as_of: str, report_id: str, files: Mapping[str, str]
 ) -> str:
     identity = parse_snapshot_identity(source_snapshot_id)
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     timestamp = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
-    if timestamp.tzinfo is None or timestamp.astimezone(timezone.utc) != identity.timestamp:
+    if timestamp.tzinfo is None or utc_floor_second(timestamp) != identity.timestamp:
         raise ValueError("bundle as_of must match source snapshot identity")
     if not report_id or len(report_id) > 256:
         raise ValueError("bundle report_id is invalid")
@@ -79,14 +115,11 @@ class SnapshotStore:
             self._require_private_directory(current_fd, "PORTFOLIO_AGENT_HOME")
             for component in parts[:-1]:
                 try:
-                    os.mkdir(component, 0o700, dir_fd=current_fd)
-                except FileExistsError:
-                    pass
-                try:
-                    next_fd = os.open(component, directory_flags, dir_fd=current_fd)
+                    next_fd = open_or_create_private_directory(
+                        current_fd, component, directory_flags
+                    )
                 except OSError as exc:
                     raise ValueError("output path contains a symlink or non-directory") from exc
-                self._require_private_directory(next_fd, "output directory")
                 os.close(current_fd)
                 current_fd = next_fd
             leaf = parts[-1]
@@ -166,14 +199,11 @@ class SnapshotStore:
             self._require_private_directory(root_fd, "PORTFOLIO_AGENT_HOME")
             for component in directory_parts:
                 try:
-                    os.mkdir(component, 0o700, dir_fd=current_fd)
-                except FileExistsError:
-                    pass
-                try:
-                    next_fd = os.open(component, directory_flags, dir_fd=current_fd)
+                    next_fd = open_or_create_private_directory(
+                        current_fd, component, directory_flags
+                    )
                 except OSError as exc:
                     raise ValueError("output path contains a symlink or non-directory") from exc
-                self._require_private_directory(next_fd, "output directory")
                 os.close(current_fd)
                 current_fd = next_fd
             for name, _content in ordered:
@@ -308,10 +338,10 @@ class SnapshotStore:
                 if manifest["schema_version"] != "1.0":
                     raise ValueError
                 identity = parse_snapshot_identity(manifest["source_snapshot_id"])
-                from datetime import datetime, timezone
+                from datetime import datetime
 
                 as_of = datetime.fromisoformat(str(manifest["as_of"]).replace("Z", "+00:00"))
-                if as_of.tzinfo is None or as_of.astimezone(timezone.utc) != identity.timestamp:
+                if as_of.tzinfo is None or utc_floor_second(as_of) != identity.timestamp:
                     raise ValueError
                 report_id = manifest["report_id"]
                 if not isinstance(report_id, str) or not report_id or len(report_id) > 256:

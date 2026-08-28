@@ -26,6 +26,12 @@ class SnapshotIdentityParts:
     digest: str
 
 
+def utc_floor_second(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise InvalidSnapshotIdentity("snapshot timestamp must be timezone-aware")
+    return value.astimezone(timezone.utc).replace(microsecond=0)
+
+
 def parse_snapshot_identity(value: object) -> SnapshotIdentityParts:
     """Parse one canonical snapshot identity, including its real UTC calendar time."""
 
@@ -51,5 +57,5 @@ def canonical_snapshot_body(snapshot: PortfolioSnapshot) -> bytes:
 
 def snapshot_identity(snapshot: PortfolioSnapshot) -> str:
     digest = hashlib.sha256(canonical_snapshot_body(snapshot)).hexdigest()[:16]
-    timestamp = snapshot.as_of.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = utc_floor_second(snapshot.as_of).strftime("%Y%m%dT%H%M%SZ")
     return f"ps-{timestamp}-{snapshot.trd_env.lower()}-{snapshot.base_currency.lower()}-{digest}"

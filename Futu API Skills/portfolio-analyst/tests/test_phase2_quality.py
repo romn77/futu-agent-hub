@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from portfolio_analyst import cli, risk, snapshot_io
+from portfolio_analyst import cli, risk
 from portfolio_analyst.persistence import SnapshotAlreadyExists, SnapshotStore
 from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.models import DataQuality
@@ -22,6 +22,7 @@ from portfolio_analyst.risk import (
 )
 from portfolio_analyst.settings import Settings
 from portfolio_analyst.snapshot_io import InvalidSnapshot, load_snapshot
+from portfolio_analyst.snapshot_repository import SnapshotRepository
 
 from test_risk_analysis import snapshot
 
@@ -131,14 +132,40 @@ def test_signed_cli_error_is_structured_as_unsupported_not_invalid_snapshot(
     short = replace(
         source.positions[0],
         quantity=Decimal("-1"),
+        can_sell_quantity=Decimal("0"),
+        average_cost_local=Decimal("100"),
+        last_price_local=Decimal("100"),
+        market_value_local=Decimal("-100"),
         market_value_base=Decimal("-100"),
-        weight=Decimal("-0.1"),
+        weight=Decimal("-0.2"),
     )
-    signed = replace(source, positions=(short,), short_exposure_base=Decimal("100"))
+    positions = (
+        short,
+        replace(source.positions[1], weight=Decimal("0.6")),
+        replace(source.positions[2], weight=Decimal("0.4")),
+    )
+    signed_body = replace(
+        source,
+        positions=positions,
+        cash_balances=(replace(source.cash_balances[0], weight=Decimal("0.2")),),
+        nav_base=Decimal("500"),
+        cash_weight=Decimal("0.2"),
+        long_exposure_base=Decimal("500"),
+        short_exposure_base=Decimal("100"),
+        gross_exposure_base=Decimal("600"),
+        net_exposure_base=Decimal("400"),
+        exposures={
+            "sector": {"TECH": Decimal("0.4"), "HEALTH": Decimal("0.4")},
+            "region": {"US": Decimal("0.4"), "EU": Decimal("0.4")},
+            "theme": {"AI": Decimal("0.4"), "CLOUD": Decimal("-0.2")},
+            "asset_class": {"EQUITY": Decimal("0.8")},
+        },
+    )
+    signed = replace(signed_body, snapshot_id=snapshot_identity(signed_body))
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
+    SnapshotStore(home).save("snapshots/signed.json", json.dumps(signed.to_dict()))
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
-    monkeypatch.setattr(cli, "load_snapshot", lambda *_args: signed)
 
     assert cli.main(["risk", "--snapshot", "snapshots/signed.json", "--json"]) == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "UNSUPPORTED_PORTFOLIO"
@@ -268,7 +295,7 @@ def test_snapshot_read_rejects_leaf_anchor_swap(monkeypatch, tmp_path):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
-    monkeypatch.setattr(snapshot_io, "_same_file_anchor", lambda *args: False, raising=False)
+    monkeypatch.setattr(SnapshotRepository, "_leaf_anchor_matches", lambda *args: False)
 
     with pytest.raises(InvalidSnapshot, match="changed during anchored read"):
         load_snapshot(home, "snapshots/source.json")
@@ -279,7 +306,7 @@ def test_snapshot_read_rejects_parent_anchor_swap(monkeypatch, tmp_path):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
     SnapshotStore(home).save("snapshots/source.json", json.dumps(snapshot().to_dict()))
-    monkeypatch.setattr(snapshot_io, "_same_parent_anchor", lambda *args: False, raising=False)
+    monkeypatch.setattr(SnapshotRepository, "_parent_anchor_matches", lambda *args: False)
 
     with pytest.raises(InvalidSnapshot, match="changed during anchored read"):
         load_snapshot(home, "snapshots/source.json")
@@ -445,6 +472,8 @@ def test_nonbreaching_region_policy_still_emits_low_candidate():
 def test_bundle_cleans_registered_posix_temp_when_file_fsync_fails(monkeypatch, tmp_path):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
+    (home / "reports").mkdir(mode=0o700)
+    (home / "reports" / "run").mkdir(mode=0o700)
     real_fsync = os.fsync
     calls = 0
 

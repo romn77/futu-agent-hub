@@ -41,17 +41,32 @@ from .lifecycle import (
     unavailable_lifecycle_report,
 )
 from .lifecycle_repository import LifecycleConfigError, LifecycleRepository, record_from_document
-from .snapshot_repository import SnapshotRepository, SnapshotRepositoryError
+from .snapshot_repository import (
+    MAX_HISTORY_TOTAL_BYTES,
+    SnapshotRepository,
+    SnapshotRepositoryError,
+)
 from .service import ConfigError, generate_snapshot
 from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
 from .snapshot import UnsafeAggregationError
-from .snapshot_io import InvalidSnapshot, load_latest_snapshot, load_snapshot
+from .snapshot_io import InvalidSnapshot
 from .trade_history import FutuTradeHistoryService
 from .trade_review import TradePolicyConfigError, TradeReviewInputError, load_trade_policy
 
 
 class _JsonParseError(ValueError):
     pass
+
+
+def _load_selected_snapshot(data_home: Path, *, latest: bool, relative_path: str | Path | None):
+    repository = SnapshotRepository(data_home)
+    if latest:
+        return repository.latest(
+            limit=MAX_HISTORY_SNAPSHOTS, max_total_bytes=MAX_HISTORY_TOTAL_BYTES
+        )
+    if relative_path is None:
+        raise SnapshotRepositoryError("explicit snapshot path is required")
+    return repository.read_path(relative_path)
 
 
 class _RaisingArgumentParser(argparse.ArgumentParser):
@@ -404,14 +419,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     else terminal_text(json.dumps(payload, ensure_ascii=False))
                 )
                 return 0
-            source_snapshot = (
-                load_latest_snapshot(settings.data_home)
-                if args.latest
-                else load_snapshot(settings.data_home, args.snapshot)
+            source_snapshot = _load_selected_snapshot(
+                settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
             try:
                 history = SnapshotRepository(settings.data_home).list(
-                    end=source_snapshot.as_of, limit=MAX_HISTORY_SNAPSHOTS
+                    end=source_snapshot.as_of,
+                    limit=MAX_HISTORY_SNAPSHOTS,
+                    max_total_bytes=MAX_HISTORY_TOTAL_BYTES,
                 )
                 history_issue = None
             except SnapshotRepositoryError as exc:
@@ -460,10 +475,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if report["ok"] else 1
 
         if args.command in {"risk", "analyze"}:
-            source_snapshot = (
-                load_latest_snapshot(settings.data_home)
-                if args.latest
-                else load_snapshot(settings.data_home, args.snapshot)
+            source_snapshot = _load_selected_snapshot(
+                settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
             history_provider = None
             skill_dir = discover_futuapi_skill()
@@ -492,7 +505,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lifecycle_repository = LifecycleRepository(settings.data_home)
                 try:
                     lifecycle_history = SnapshotRepository(settings.data_home).list(
-                        end=source_snapshot.as_of, limit=MAX_HISTORY_SNAPSHOTS
+                        end=source_snapshot.as_of,
+                        limit=MAX_HISTORY_SNAPSHOTS,
+                        max_total_bytes=MAX_HISTORY_TOTAL_BYTES,
                     )
                     lifecycle_history_issue = None
                 except SnapshotRepositoryError as exc:
@@ -557,10 +572,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "simulate":
-            source_snapshot = (
-                load_latest_snapshot(settings.data_home)
-                if args.latest
-                else load_snapshot(settings.data_home, args.snapshot)
+            source_snapshot = _load_selected_snapshot(
+                settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
             request, request_payload = load_rebalance_request(settings.data_home, args.request)
             result = simulate_rebalance(source_snapshot, request)
@@ -616,9 +629,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             nav_snapshot = None
             if args.latest:
-                nav_snapshot = load_latest_snapshot(settings.data_home)
+                nav_snapshot = _load_selected_snapshot(
+                    settings.data_home, latest=True, relative_path=None
+                )
             elif args.snapshot:
-                nav_snapshot = load_snapshot(settings.data_home, args.snapshot)
+                nav_snapshot = _load_selected_snapshot(
+                    settings.data_home, latest=False, relative_path=args.snapshot
+                )
             if should_save and nav_snapshot is None:
                 raise TradeReviewInputError(
                     "saved multi-file trade review requires a source portfolio snapshot"

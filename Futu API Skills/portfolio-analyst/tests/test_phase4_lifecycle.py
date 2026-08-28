@@ -87,6 +87,47 @@ def test_snapshot_repository_is_content_addressed_nested_and_range_sorted(tmp_pa
     assert repo.read(first.snapshot_id) == first
 
 
+def test_microsecond_snapshot_identity_is_second_granular_but_full_body_bound(tmp_path):
+    base = make_snapshot()
+    candidate = replace(base, as_of=base.as_of.replace(microsecond=123456), snapshot_id="pending")
+    snapshot = replace(candidate, snapshot_id=snapshot_identity(candidate))
+    assert snapshot.snapshot_id.startswith("ps-20260827T100000Z-")
+    changed = replace(candidate, as_of=candidate.as_of.replace(microsecond=654321))
+    assert snapshot_identity(changed) != snapshot.snapshot_id
+
+    risk = analyze_risk(snapshot)
+    from portfolio_analyst.schema import validate_risk_document
+
+    validate_risk_document(risk.to_dict())
+    lifecycle = analyze_lifecycle(snapshot, LifecycleRepository(_home(tmp_path)))
+    validate_lifecycle_document(lifecycle.to_dict())
+
+    from portfolio_analyst.persistence import bundle_manifest
+
+    manifest = json.loads(
+        bundle_manifest(
+            source_snapshot_id=snapshot.snapshot_id,
+            as_of=snapshot.to_dict()["as_of"],
+            report_id=lifecycle.lifecycle_report_id,
+            files={"report.json": "{}\n"},
+        )
+    )
+    assert manifest["as_of"] == "2026-08-27T10:00:00.123456Z"
+    forged_risk = risk.to_dict()
+    forged_risk["as_of"] = (
+        (snapshot.as_of + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    )
+    with pytest.raises(ReportSemanticError, match="timestamp"):
+        validate_risk_document(forged_risk)
+    with pytest.raises(ValueError, match="as_of"):
+        bundle_manifest(
+            source_snapshot_id=snapshot.snapshot_id,
+            as_of=forged_risk["as_of"],
+            report_id="forged",
+            files={"report.json": "{}\n"},
+        )
+
+
 def test_snapshot_repository_rejects_conflicting_existing_content(tmp_path):
     home = _home(tmp_path)
     repo = SnapshotRepository(home)
@@ -177,6 +218,36 @@ def test_journal_sanitizes_credentials_and_rejects_oversized_records(tmp_path):
             summary="x" * 70_000,
             metadata={},
         )
+
+
+def test_journal_rejects_impossible_snapshot_calendar_before_creating_state(tmp_path):
+    home = _home(tmp_path)
+    with pytest.raises(JournalError, match="canonical"):
+        JournalRepository(home).append_decision(
+            timestamp=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            source_snapshot_id="ps-20269999T999999Z-real-usd-0123456789abcdef",
+            summary="invalid source",
+            decision="REJECTED",
+            metadata={},
+        )
+    assert not (home / "journal").exists()
+
+    valid = (
+        JournalRepository(home)
+        .append_decision(
+            timestamp=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            source_snapshot_id=make_snapshot().snapshot_id,
+            summary="valid source",
+            decision="ACCEPTED",
+            metadata={},
+        )
+        .to_dict()
+    )
+    valid["source_snapshot_id"] = "ps-20269999T999999Z-real-usd-0123456789abcdef"
+    from portfolio_analyst.schema import validate_journal_document
+
+    with pytest.raises(ReportSemanticError, match="journal source"):
+        validate_journal_document(valid)
 
 
 def test_journal_rejects_duplicate_keys_and_preflights_total_append_size(monkeypatch, tmp_path):
@@ -466,6 +537,23 @@ def test_lifecycle_repository_entry_budget_is_checked_before_yaml_reads(monkeypa
         LifecycleRepository(home).list()
 
 
+def test_lifecycle_repository_rechecks_wall_budget_after_last_record_read(monkeypatch, tmp_path):
+    home = _home(tmp_path)
+    _write_record(home)
+    repository = LifecycleRepository(home)
+    original_read = repository.read
+    elapsed = [0.0]
+
+    def slow_last_read(symbol):
+        result = original_read(symbol)
+        elapsed[0] = 11.0
+        return result
+
+    monkeypatch.setattr(repository, "read", slow_last_read)
+    with pytest.raises(LifecycleConfigError, match="wall-time"):
+        repository.list(max_seconds=10.0, clock=lambda: elapsed[0])
+
+
 def test_repository_consumer_budgets_fail_before_snapshot_or_yaml_parse(monkeypatch, tmp_path):
     home = _home(tmp_path)
     snapshot_repository = SnapshotRepository(home)
@@ -668,6 +756,8 @@ def test_bundle_uses_artifact_barrier_before_manifest_barrier(monkeypatch, tmp_p
     store = SnapshotStore(home)
     snap = make_snapshot()
     files = {"a.json": "a\n", "b.md": "b\n"}
+    (home / "reports").mkdir(mode=0o700)
+    (home / "reports" / "barriers").mkdir(mode=0o700)
     from portfolio_analyst.persistence import bundle_manifest
 
     events: list[str] = []
@@ -712,6 +802,8 @@ def test_bundle_second_directory_fsync_failure_rolls_back_published_manifest(mon
     store = SnapshotStore(home)
     snap = make_snapshot()
     files = {"artifact.json": "{}\n"}
+    (home / "reports").mkdir(mode=0o700)
+    (home / "reports" / "fsync-failure").mkdir(mode=0o700)
     from portfolio_analyst.persistence import bundle_manifest
 
     real_fsync = os.fsync

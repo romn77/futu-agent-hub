@@ -326,8 +326,10 @@ class LifecycleRepository:
         for path in paths:
             consume(2)
             records.append(self.read(path.stem))
+            consume()
         if len({item.symbol for item in records}) != len(records):
             raise LifecycleConfigError("duplicate lifecycle symbols are forbidden")
+        consume()
         return tuple(sorted(records, key=lambda item: item.symbol))
 
     def create(self, value: LifecycleRecord | dict[str, Any]) -> Path:
