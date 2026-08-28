@@ -525,11 +525,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             range_start = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
             range_end = datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc)
-            snapshots = SnapshotRepository(settings.data_home).list(
+            snapshots = SnapshotRepository(settings.data_home).list_range(
                 start=range_start,
                 end=range_end,
                 limit=MAX_ATTRIBUTION_SNAPSHOTS,
-                max_total_bytes=MAX_HISTORY_TOTAL_BYTES,
+                max_bytes=MAX_HISTORY_TOTAL_BYTES,
             )
             price_provider = None
             skill_dir = discover_futuapi_skill()

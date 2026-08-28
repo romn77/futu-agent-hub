@@ -274,8 +274,11 @@ Attribute evidenced P&L over bounded immutable snapshot history:
 python scripts/portfolio.py performance --from 2026-08-01 --to 2026-08-27 --json --no-save
 ```
 
-Dates are inclusive UTC calendar dates. The first and last selected snapshots must fall on the
-requested endpoint dates, and gaps longer than 36 hours prevent `ACCURATE_PNL`. Every snapshot is
+Dates are inclusive UTC calendar dates. One snapshot is sufficient for an explicitly limited
+reconstruction; `ACCURATE_PNL` requires at least two, both requested endpoint dates, and no gap
+longer than 36 hours. The range reader filters canonical timestamp paths before applying its
+consumer row/byte budgets, then descriptor-reads matching bodies and filters exact microsecond
+`as_of` values. Every selected snapshot is
 loaded through `SnapshotRepository`, so schema, full-body identity, and Phase 1 financial semantics
 are revalidated before attribution. Accounts, base currency, classifications, account-level legs,
 and FX source provenance must remain consistent. A missing/opened/closed/transferred leg is
@@ -283,18 +286,24 @@ and FX source provenance must remain consistent. A missing/opened/closed/transfe
 
 Symbol P&L uses only complete cumulative realized/unrealized base-field endpoint deltas. Sector,
 region, theme-full, and additive theme-split totals are Decimal-only and reconcile to the available
-symbol population. Top contributors and detractors are deterministically ranked. The report's
-`ACCURATE_PNL` mode describes P&L-field authority only; it does not imply an account return.
+symbol population. With only a current/end snapshot, common aligned adjusted closes can estimate
+base-currency current holdings as `ending quantity * adjusted-close change`; this LOW-confidence
+gross unrealized reconstruction explicitly excludes realized P&L and exited positions. Missing
+transaction-period FX keeps cross-currency estimates null. Top contributors and detractors are
+deterministically ranked. `ACCURATE_PNL` additionally requires at least two common aligned price
+points for every authoritative contributed symbol and describes P&L-field authority only.
 
 The official cash-flow reader is not in the current digest-pinned adapter allowlist. Therefore the
 CLI truthfully records external-flow evidence as unavailable and leaves `portfolio_return` null.
 Library callers may supply strictly verified deposits, withdrawals, and internal transfers with
 currency, FX, timestamp, coverage, and provenance. Only complete flow coverage plus continuous
-valuations enables the documented end-of-subperiod-adjusted TWR. IRR is always explicitly
+valuations and `ACCURATE_PNL` enables the documented end-of-subperiod-adjusted TWR. Reconstructed
+reports always leave return/TWR null. IRR is always explicitly
 `NOT_CALCULATED`; it is never inferred. Price traceability uses only the audited forward-adjusted
 daily `get_kline` reader, completed market-local close cutoffs, strict date intersection, per-call,
-row, request, failure-circuit, and wall-time budgets. Price failure cannot change snapshot-field P&L
-authority. See [references/performance-attribution.md](references/performance-attribution.md).
+row, request, failure-circuit, and wall-time budgets. Missing or unequal price coverage downgrades
+the accuracy claim and remains explicit. See
+[references/performance-attribution.md](references/performance-attribution.md).
 
 `performance --output DIRECTORY` writes JSON and escaped Markdown as one private manifest-last
 transaction. The default and `--no-save` are side-effect free. Performance never appends a journal

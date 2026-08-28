@@ -2,7 +2,7 @@
 
 ## Scope and interval
 
-`performance --from YYYY-MM-DD --to YYYY-MM-DD` selects at least two validated immutable snapshots
+`performance --from YYYY-MM-DD --to YYYY-MM-DD` selects at least one validated immutable snapshot
 whose precise timezone-aware `as_of` values fall inside the inclusive UTC calendar dates. The
 period is capped at 366 days and 366 snapshots. Both requested dates need a valuation. Adjacent
 valuations more than 36 hours apart are serialized as gaps and prohibit an accurate mode.
@@ -29,11 +29,22 @@ unrealized contribution = ending cumulative unrealized P&L base - beginning valu
 symbol contribution     = realized contribution + unrealized contribution
 ```
 
-`ACCURATE_PNL` requires complete contributions, both endpoint dates, continuous snapshots and
-consistent FX currency-pair source provenance. It claims only exact endpoint-field deltas. It does
+`ACCURATE_PNL` requires at least two snapshots, complete contributions, both endpoint dates,
+continuous snapshots, consistent FX currency-pair source provenance, and at least two adjusted
+closes on one common aligned interval for every authoritative symbol. It claims only exact
+endpoint-field deltas. It does
 not claim transaction-date fee, FX, transfer or corporate-action reconstruction. Otherwise the mode
-is `RECONSTRUCTED` with LOW confidence and explicit unavailable symbols; no missing value is filled
-with a market-value delta.
+is `RECONSTRUCTED` with LOW confidence and explicit unavailable symbols. With one current/end
+snapshot and sufficient common adjusted-close history, current base-currency holdings may carry a
+gross unrealized estimate:
+
+```text
+estimated gross unrealized base = ending quantity * (aligned ending adjusted close - aligned beginning adjusted close) * 1
+```
+
+This estimate excludes realized P&L and exited positions because the CLI has no pinned normalized
+trade source. Cross-currency positions remain unavailable without transaction-period FX. A
+reconstructed report never claims portfolio return or TWR.
 
 When complete external-flow coverage exists, the report also reconciles available attributed P&L
 against `ending NAV - beginning NAV - external flows`. A non-zero residual is serialized as
@@ -67,7 +78,7 @@ records that limitation and returns null. IRR is explicitly not calculated.
 
 ## Price evidence and budgets
 
-Price evidence is independent of snapshot-field P&L. The only provider is the pinned audited
+Price evidence gates `ACCURATE_PNL` and supplies bounded reconstruction inputs. The only provider is the pinned audited
 `get_kline` command using forward-adjusted daily closes. Each series records exact rows, requested
 dates, latest completed market-local close under `REGULAR_SESSIONS_V1`, digest, source and coverage.
 Rows before the requested start or after the completed-close cutoff are rejected. When comparing
@@ -83,7 +94,12 @@ price-only partial coverage as appropriate.
 The strict schema rejects unknown fields and caps every collection. Runtime validation reconstructs
 period gaps, P&L totals and splits, aggregates, rankings, price row digests/cutoffs, flow totals,
 TWR, quality coverage and the complete report ID. Human and Markdown views escape all untrusted
-labels, show coverage, formulas, source evidence, limitations and unavailable modules.
+labels, show raw and aligned price coverage, formulas, source evidence, limitations and unavailable modules.
+
+The CLI range reader first narrows canonical IDs to the requested UTC year/month and whole-second
+envelope, then applies row/byte budgets and descriptor-reads bodies for exact microsecond `as_of`
+filtering. Thus unrelated history and out-of-range corrupt bodies do not exhaust or block a small
+range; matching misplaced, duplicate, or corrupt entries fail closed.
 
 `--output DIR` writes `performance_attribution.json`, `performance_attribution.md`, then
 `manifest.json` as one private no-replace transaction below `PORTFOLIO_AGENT_HOME`. `--no-save`

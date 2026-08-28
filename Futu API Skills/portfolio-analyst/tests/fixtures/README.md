@@ -20,4 +20,6 @@ All persistence and concurrency tests write only below pytest temporary director
 
 `performance_attribution_golden_snippet.json` contains only deterministic synthetic endpoint-P&L
 expectations. It deliberately keeps portfolio return and IRR unavailable because no authoritative
-external cash-flow source is present in the fixture.
+external cash-flow source is present in the fixture. Phase 5 reconstruction tests use synthetic
+common adjusted closes and quantities only; they explicitly exclude realized/exited positions and
+cross-currency estimates without transaction-period FX.

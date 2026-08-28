@@ -1392,7 +1392,7 @@ def validate_performance_document(
 
     verified_fx_changed: bool | None = None
     if source_snapshots is not None:
-        from .performance import _contributions, _snapshot_digest
+        from .performance import _classification, _contributions, _group_positions, _snapshot_digest
         from .snapshot_io import snapshot_from_document
 
         try:
@@ -1432,13 +1432,75 @@ def validate_performance_document(
                 len(item.positions) for item in validated_sources
             ):
                 raise ValueError("source position coverage mismatch")
-            expected_contributions, _unused_reasons = _contributions(
-                validated_sources[0], validated_sources[-1]
-            )
-            if [_json_value(item) for item in expected_contributions] != payload[
-                "symbol_contributions"
-            ]:
-                raise ValueError("source snapshot contribution evidence mismatch")
+            if len(validated_sources) > 1:
+                expected_contributions, _unused_reasons = _contributions(
+                    validated_sources[0], validated_sources[-1]
+                )
+                observed_exact = [
+                    item
+                    for item in payload["symbol_contributions"]
+                    if item["method"] == "SNAPSHOT_CUMULATIVE_PNL_DELTA"
+                ]
+                expected_exact = [
+                    _json_value(item)
+                    for item in expected_contributions
+                    if item.method == "SNAPSHOT_CUMULATIVE_PNL_DELTA"
+                ]
+                if observed_exact != expected_exact:
+                    raise ValueError("source snapshot contribution evidence mismatch")
+                expected_by_identity = {
+                    item.identity: _json_value(item) for item in expected_contributions
+                }
+                observed_by_identity = {
+                    item["identity"]: item for item in payload["symbol_contributions"]
+                }
+                if set(observed_by_identity) != set(expected_by_identity) or any(
+                    observed_by_identity[identity] != expected
+                    for identity, expected in expected_by_identity.items()
+                    if expected["method"] != "SNAPSHOT_CUMULATIVE_PNL_DELTA"
+                ):
+                    raise ValueError("source snapshot unavailable contribution mismatch")
+            else:
+                final_rows = _group_positions(validated_sources[-1])
+                if {item["identity"] for item in payload["symbol_contributions"]} != set(
+                    final_rows
+                ):
+                    raise ValueError("reconstruction identity coverage mismatch")
+                for contribution in payload["symbol_contributions"]:
+                    rows = final_rows.get(contribution["identity"], ())
+                    market, symbol = contribution["identity"].split(".", 1)
+                    classification = _classification(rows) or ("UNKNOWN", "UNKNOWN", ())
+                    evidence = contribution["evidence"]
+                    if (
+                        contribution["market"] != market
+                        or contribution["symbol"] != symbol
+                        or contribution["account_refs"]
+                        != sorted({item.account_ref for item in rows})
+                        or (
+                            contribution["sector"],
+                            contribution["region"],
+                            tuple(contribution["themes"]),
+                        )
+                        != classification
+                        or evidence["start_snapshot_id"] != validated_sources[-1].snapshot_id
+                        or evidence["end_snapshot_id"] != validated_sources[-1].snapshot_id
+                        or evidence["start_present"]
+                        or not evidence["end_present"]
+                        or evidence["start_rows"] != 0
+                        or evidence["end_rows"] != len(rows)
+                    ):
+                        raise ValueError("reconstruction source position evidence mismatch")
+                    cross_currency = bool(rows) and (
+                        {item.currency for item in rows} != {validated_sources[-1].base_currency}
+                        or {item.fx_to_base for item in rows} != {Decimal(1)}
+                    )
+                    observed_reason = contribution["evidence"].get("reconstruction_reason")
+                    if cross_currency != (observed_reason == "TRANSACTION_PERIOD_FX_UNAVAILABLE"):
+                        raise ValueError("reconstruction FX evidence mismatch")
+                    if contribution["status"] == "ESTIMATED" and Decimal(
+                        evidence["ending_quantity"]
+                    ) != sum((item.quantity for item in rows), Decimal(0)):
+                        raise ValueError("reconstruction ending quantity mismatch")
             verified_fx_changed = (
                 len(
                     {
@@ -1541,6 +1603,7 @@ def validate_performance_document(
         ] != len(contributions):
             fail("identity coverage does not reconcile")
         available = []
+        exact = []
         for item in contributions:
             consume(10)
             values = (item["pnl_base"], item["realized_pnl_base"], item["unrealized_pnl_base"])
@@ -1555,14 +1618,49 @@ def validate_performance_document(
                 ):
                     fail("symbol P&L does not reconcile")
                 available.append(item)
-            elif any(value is not None for value in values):
-                fail("unavailable contribution cannot contain P&L")
+                exact.append(item)
+            elif item["status"] == "ESTIMATED":
+                if (
+                    item["method"] != "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE"
+                    or item["pnl_base"] is None
+                    or item["realized_pnl_base"] is not None
+                    or item["unrealized_pnl_base"] is None
+                    or decimal(item["pnl_base"]) != decimal(item["unrealized_pnl_base"])
+                ):
+                    fail("estimated contribution lacks gross price reconstruction evidence")
+                evidence = item["evidence"]
+                expected_estimate = (
+                    decimal(evidence["ending_quantity"])
+                    * (
+                        decimal(evidence["aligned_end_close"])
+                        - decimal(evidence["aligned_start_close"])
+                    )
+                    * decimal(evidence["ending_fx_to_base"])
+                )
+                if (
+                    decimal(evidence["ending_fx_to_base"]) != 1
+                    or decimal(item["pnl_base"]) != expected_estimate
+                ):
+                    fail("estimated contribution formula does not reconstruct")
+                available.append(item)
+            else:
+                if any(value is not None for value in values):
+                    fail("unavailable contribution cannot contain P&L")
+                if item["method"] == "RECONSTRUCTION_EVIDENCE_INCOMPLETE" and item["evidence"].get(
+                    "reconstruction_reason"
+                ) not in {
+                    "TRANSACTION_PERIOD_FX_UNAVAILABLE",
+                    "PRICE_INTERVAL_UNAVAILABLE",
+                }:
+                    fail("unavailable reconstruction lacks a structured reason")
         expected_complete = (
             bool(contributions)
-            and len(available) == len(contributions)
+            and len(exact) == len(contributions)
+            and len(source_ids) >= 2
             and period["continuous"]
             and expected_start_covered
             and expected_end_covered
+            and coverage["price_aligned"] == len(contributions)
             and not any(
                 reason["code"] in {"FX_PROVENANCE_CHANGED", "PNL_NAV_RECONCILIATION_MISMATCH"}
                 for reason in payload["quality_reasons"]
@@ -1575,10 +1673,12 @@ def validate_performance_document(
             "ACCURATE_PNL"
             if expected_complete
             else "RECONSTRUCTED"
-            if contributions
+            if contributions and (len(source_ids) >= 2 or available)
             else "UNAVAILABLE"
         )
-        expected_confidence = "HIGH" if expected_complete else "LOW" if contributions else "NONE"
+        expected_confidence = (
+            "HIGH" if expected_complete else "LOW" if expected_mode == "RECONSTRUCTED" else "NONE"
+        )
         if (payload["contribution_status"], payload["mode"], payload["confidence"]) != (
             expected_status,
             expected_mode,
@@ -1596,12 +1696,12 @@ def validate_performance_document(
         )
         expected_realized = (
             sum((decimal(item["realized_pnl_base"]) for item in available), Decimal(0))
-            if available
+            if available and all(item["realized_pnl_base"] is not None for item in available)
             else None
         )
         expected_unrealized = (
             sum((decimal(item["unrealized_pnl_base"]) for item in available), Decimal(0))
-            if available
+            if available and all(item["unrealized_pnl_base"] is not None for item in available)
             else None
         )
         for field, expected in (
@@ -1658,11 +1758,12 @@ def validate_performance_document(
         ]:
             fail("price evidence must follow the bounded contribution identity prefix")
         for evidence in payload["price_evidence"]:
-            consume(5 + len(evidence["points"]))
+            consume(5 + len(evidence["points"]) + len(evidence["aligned_points"]))
             if evidence["identity"] in price_identities:
                 fail("price evidence identities must be unique")
             price_identities.add(evidence["identity"])
             points = evidence["points"]
+            aligned_points = evidence["aligned_points"]
             point_dates = [date.fromisoformat(item["date"]) for item in points]
             market = evidence["identity"].split(".", 1)[0]
             if (
@@ -1685,6 +1786,8 @@ def validate_performance_document(
                 fail("price evidence contains look-ahead or pre-period rows")
             if evidence["rows"] != len(points):
                 fail("price row coverage does not reconcile")
+            if any(item not in points for item in aligned_points):
+                fail("aligned price points must come from raw price evidence")
             if points:
                 raw = "|".join(f"{item['date']}:{item['adjusted_close']}" for item in points)
                 expected_digest = hashlib.sha256(raw.encode()).hexdigest()
@@ -1705,13 +1808,56 @@ def validate_performance_document(
                 or not evidence["reason"]
             ):
                 fail("unavailable price evidence is inconsistent")
+        available_price_rows = [
+            item for item in payload["price_evidence"] if item["status"] == "AVAILABLE"
+        ]
+        common_dates = (
+            sorted(
+                set.intersection(
+                    *(
+                        set(point["date"] for point in item["points"])
+                        for item in available_price_rows
+                    )
+                )
+            )
+            if available_price_rows
+            else []
+        )
+        for evidence in payload["price_evidence"]:
+            expected_aligned = (
+                [point for point in evidence["points"] if point["date"] in common_dates]
+                if evidence["status"] == "AVAILABLE"
+                else []
+            )
+            if evidence["aligned_points"] != expected_aligned:
+                fail("price common-interval alignment is inconsistent")
         if (
             coverage["price_analyzed"] != len(payload["price_evidence"])
             or coverage["price_omitted"] != coverage["price_requested"] - coverage["price_analyzed"]
             or coverage["price_available"]
             != sum(item["status"] == "AVAILABLE" for item in payload["price_evidence"])
+            or coverage["price_aligned"]
+            != sum(len(item["aligned_points"]) >= 2 for item in payload["price_evidence"])
         ):
             fail("price coverage does not reconcile")
+        price_by_identity = {item["identity"]: item for item in payload["price_evidence"]}
+        for item in contributions:
+            if item["status"] == "ESTIMATED":
+                evidence = price_by_identity.get(item["identity"])
+                if (
+                    evidence is None
+                    or len(evidence["aligned_points"]) < 2
+                    or item["evidence"]["price_digest"] != evidence["digest"]
+                    or item["evidence"]["aligned_start_date"]
+                    != evidence["aligned_points"][0]["date"]
+                    or item["evidence"]["aligned_end_date"]
+                    != evidence["aligned_points"][-1]["date"]
+                    or item["evidence"]["aligned_start_close"]
+                    != evidence["aligned_points"][0]["adjusted_close"]
+                    or item["evidence"]["aligned_end_close"]
+                    != evidence["aligned_points"][-1]["adjusted_close"]
+                ):
+                    fail("estimated contribution price evidence is not traceable")
         if sum(item["rows"] for item in payload["price_evidence"]) > 20_000:
             fail("price aggregate row budget exceeded")
 
@@ -1833,13 +1979,14 @@ def validate_performance_document(
             and datetime.fromisoformat(flow_coverage["coverage_end"].replace("Z", "+00:00"))
             >= timestamps[-1]
         )
-        return_authorized = (
+        valuation_return_inputs_complete = (
             coverage_complete and not gaps and expected_start_covered and expected_end_covered
         )
+        return_authorized = valuation_return_inputs_complete and payload["mode"] == "ACCURATE_PNL"
         reconciliation = payload["pnl_reconciliation"]
         nav_change = decimal(valuations[-1]["nav_base"]) - decimal(valuations[0]["nav_base"])
-        field_population_complete = bool(contributions) and len(available) == len(contributions)
-        if coverage_complete and expected_total is not None:
+        field_population_complete = bool(contributions) and len(exact) == len(contributions)
+        if coverage_complete and expected_total is not None and len(source_ids) >= 2:
             expected_net = nav_change - external
             if field_population_complete:
                 expected_residual = expected_net - expected_total
@@ -1932,6 +2079,38 @@ def validate_performance_document(
                 expected_reasons.append(
                     {"code": reason[0], "scope": item["identity"], "detail": reason[1]}
                 )
+            reconstruction_reason = item["evidence"].get("reconstruction_reason")
+            if reconstruction_reason == "TRANSACTION_PERIOD_FX_UNAVAILABLE":
+                expected_reasons.append(
+                    {
+                        "code": "RECONSTRUCTED_TRANSACTION_PERIOD_FX_UNAVAILABLE",
+                        "scope": item["identity"],
+                        "detail": "historical transaction-period FX is unavailable; cross-currency gross P&L is not estimated",
+                    }
+                )
+            elif reconstruction_reason == "PRICE_INTERVAL_UNAVAILABLE":
+                expected_reasons.append(
+                    {
+                        "code": "RECONSTRUCTED_PRICE_INTERVAL_UNAVAILABLE",
+                        "scope": item["identity"],
+                        "detail": "at least two common adjusted-close points are required for reconstruction",
+                    }
+                )
+        if any(
+            item["method"]
+            in {
+                "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE",
+                "RECONSTRUCTION_EVIDENCE_INCOMPLETE",
+            }
+            for item in contributions
+        ):
+            expected_reasons.append(
+                {
+                    "code": "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE",
+                    "scope": "symbol_contributions",
+                    "detail": "no pinned normalized trade source was supplied; realized P&L and exited positions are excluded",
+                }
+            )
         if gaps:
             expected_reasons.append(
                 {
@@ -1961,7 +2140,7 @@ def validate_performance_document(
             )
         if verified_fx_changed is False and observed_fx_reason:
             fail("FX provenance reason contradicts source snapshots")
-        if not return_authorized:
+        if not valuation_return_inputs_complete:
             if not coverage_complete:
                 expected_reasons.append(
                     {
@@ -1987,6 +2166,14 @@ def validate_performance_document(
                     "detail": "attributed cumulative P&L deltas do not reconcile to NAV change after verified external flows",
                 }
             )
+        if payload["mode"] == "RECONSTRUCTED":
+            expected_reasons.append(
+                {
+                    "code": "RECONSTRUCTED_RETURN_UNAVAILABLE",
+                    "scope": "portfolio_return",
+                    "detail": "reconstructed attribution cannot authorize portfolio return or TWR",
+                }
+            )
         if coverage["price_analyzed"] == 0 and coverage["price_requested"]:
             expected_reasons.append(
                 {
@@ -2009,6 +2196,14 @@ def validate_performance_document(
                     "code": "PRICE_DATA_PARTIAL",
                     "scope": "price_evidence",
                     "detail": "one or more bounded adjusted-close histories are unavailable",
+                }
+            )
+        if contributions and coverage["price_aligned"] < len(exact):
+            expected_reasons.append(
+                {
+                    "code": "PRICE_ALIGNMENT_INCOMPLETE",
+                    "scope": "price_evidence",
+                    "detail": "all authoritative contributed symbols require at least two common adjusted-close points",
                 }
             )
         if payload["quality_reasons"] != expected_reasons:

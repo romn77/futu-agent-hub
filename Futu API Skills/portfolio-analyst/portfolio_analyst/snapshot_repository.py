@@ -6,7 +6,7 @@ import json
 import os
 import re
 import stat
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import PortfolioSnapshot
@@ -366,6 +366,106 @@ class SnapshotRepository:
             if end is not None and item.as_of > end:
                 continue
             results.append(item)
+        return tuple(sorted(results, key=lambda item: (item.as_of, item.snapshot_id)))
+
+    def list_range(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        max_bytes: int,
+    ) -> tuple[PortfolioSnapshot, ...]:
+        """Read a bounded range without charging unrelated history to consumer budgets."""
+
+        if (
+            start.tzinfo is None
+            or start.utcoffset() is None
+            or end.tzinfo is None
+            or end.utcoffset() is None
+            or start > end
+        ):
+            raise SnapshotRepositoryError("snapshot range must be ordered and timezone-aware")
+        if limit < 0 or max_bytes < 0:
+            raise SnapshotRepositoryError("snapshot range budgets must be non-negative")
+        if os.name != "posix":
+            raise SnapshotRepositoryError(
+                "UNSUPPORTED_PLATFORM_SECURITY: snapshot enumeration disabled"
+            )
+        self._revalidate_home()
+        root = self.data_home / "snapshots"
+        if not root.exists():
+            return ()
+        if root.is_symlink() or not root.is_dir():
+            raise SnapshotRepositoryError("snapshot history root is unsafe")
+        self._validate_directory_descriptor(root)
+
+        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        start_second, end_second = start_utc.replace(microsecond=0), end_utc.replace(microsecond=0)
+        months: list[tuple[int, int]] = []
+        year, month = start_utc.year, start_utc.month
+        while (year, month) <= (end_utc.year, end_utc.month):
+            months.append((year, month))
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+        candidates: list[tuple[str, Path, int]] = []
+        seen_ids: set[str] = set()
+        total_bytes = 0
+        enumerated = 0
+        checked_years: set[int] = set()
+        for year_value, month_value in months:
+            year_directory = root / f"{year_value:04d}"
+            if year_value not in checked_years and year_directory.exists():
+                if year_directory.is_symlink() or not year_directory.is_dir():
+                    raise SnapshotRepositoryError("snapshot range year directory is unsafe")
+                self._validate_directory_descriptor(year_directory)
+                checked_years.add(year_value)
+            directory = year_directory / f"{month_value:02d}"
+            if not directory.exists():
+                continue
+            if directory.is_symlink() or not directory.is_dir():
+                raise SnapshotRepositoryError("snapshot range directory is unsafe")
+            self._validate_directory_descriptor(directory)
+            for path in sorted(directory.iterdir()):
+                enumerated += 1
+                if enumerated > MAX_SNAPSHOT_ENTRIES:
+                    raise SnapshotRepositoryError("snapshot enumeration entry budget exceeded")
+                if path.name.startswith(".") and path.name.endswith(".tmp"):
+                    continue
+                if path.suffix != ".json":
+                    raise SnapshotRepositoryError("snapshot history contains an unexpected entry")
+                try:
+                    identity = parse_snapshot_identity(path.stem)
+                except InvalidSnapshotIdentity as exc:
+                    raise SnapshotRepositoryError(
+                        "snapshot history contains a non-canonical ID"
+                    ) from exc
+                instant = identity.timestamp.astimezone(timezone.utc)
+                if instant < start_second or instant > end_second:
+                    continue
+                relative = path.relative_to(self.data_home)
+                if self._relative(path.stem) != relative:
+                    raise SnapshotRepositoryError("matching snapshot history path is not canonical")
+                if path.stem in seen_ids:
+                    raise SnapshotRepositoryError("snapshot range contains a duplicate identity")
+                seen_ids.add(path.stem)
+                metadata = path.lstat()
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise SnapshotRepositoryError("snapshot range entry is not a regular file")
+                candidates.append((path.stem, relative, metadata.st_size))
+                if len(candidates) > limit:
+                    raise SnapshotRepositoryError("snapshot range consumer limit exceeded")
+                total_bytes += metadata.st_size
+                if total_bytes > max_bytes:
+                    raise SnapshotRepositoryError("snapshot range byte budget exceeded")
+
+        results: list[PortfolioSnapshot] = []
+        for expected_id, relative, _size in candidates:
+            item = self.read_path(relative)
+            if item.snapshot_id != expected_id:
+                raise SnapshotRepositoryError("snapshot path and body identity disagree")
+            if start <= item.as_of <= end:
+                results.append(item)
         return tuple(sorted(results, key=lambda item: (item.as_of, item.snapshot_id)))
 
     def latest(

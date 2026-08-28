@@ -227,6 +227,7 @@ class PriceEvidence:
     last_date: date | None
     rows: int
     points: tuple[AttributionPricePoint, ...]
+    aligned_points: tuple[AttributionPricePoint, ...]
     source: str
     adjustment: str
     digest: str | None
@@ -234,6 +235,7 @@ class PriceEvidence:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "points", tuple(self.points))
+        object.__setattr__(self, "aligned_points", tuple(self.aligned_points))
 
 
 @dataclass(frozen=True)
@@ -348,7 +350,7 @@ class PerformanceAttributionReport:
             "Price evidence:",
             *(
                 [
-                    f"- {safe(item.identity)}: {item.status}; cutoff={item.cutoff_date} ({item.cutoff_policy}); rows={item.rows}; digest={safe(item.digest or 'N/A')}; reason={safe(item.reason or 'N/A')}"
+                    f"- {safe(item.identity)}: {item.status}; cutoff={item.cutoff_date} ({item.cutoff_policy}); rows={item.rows}; aligned_rows={len(item.aligned_points)}; digest={safe(item.digest or 'N/A')}; reason={safe(item.reason or 'N/A')}"
                     for item in self.price_evidence
                 ]
                 or ["- None"]
@@ -436,7 +438,7 @@ class PerformanceAttributionReport:
         lines.extend(["", "## Price traceability", ""])
         lines.extend(
             [
-                f"- `{md(item.identity)}`: {item.status}; cutoff={item.cutoff_date} ({item.cutoff_policy}); {item.first_date or 'N/A'} to {item.last_date or 'N/A'}; rows={item.rows}; digest={md(item.digest or 'N/A')}; reason={md(item.reason or 'N/A')}"
+                f"- `{md(item.identity)}`: {item.status}; cutoff={item.cutoff_date} ({item.cutoff_policy}); {item.first_date or 'N/A'} to {item.last_date or 'N/A'}; rows={item.rows}; aligned_rows={len(item.aligned_points)}; aligned_interval={(item.aligned_points[0].date if item.aligned_points else 'N/A')} to {(item.aligned_points[-1].date if item.aligned_points else 'N/A')}; digest={md(item.digest or 'N/A')}; reason={md(item.reason or 'N/A')}"
                 for item in self.price_evidence
             ]
             or ["- No price series used; attribution is based on snapshot P&L fields."]
@@ -520,8 +522,8 @@ def select_snapshot_interval(
     selected = tuple(
         item for item in ordered if start_at <= item.as_of.astimezone(timezone.utc) <= end_at
     )
-    if len(selected) < 2:
-        raise AttributionInputError("performance requires at least two validated snapshots")
+    if not selected:
+        raise AttributionInputError("performance requires at least one validated snapshot")
     if any(len(item.positions) > MAX_ATTRIBUTION_POSITIONS for item in selected):
         raise AttributionInputError("performance position budget exceeded")
     gaps: list[Mapping[str, Any]] = []
@@ -777,6 +779,7 @@ def _price_evidence(
                     None,
                     0,
                     (),
+                    (),
                     "AUDITED_FUTU_GET_KLINE",
                     "FORWARD_ADJUSTED_DAILY_CLOSE",
                     None,
@@ -856,6 +859,7 @@ def _price_evidence(
                         None,
                         0,
                         (),
+                        (),
                         "AUDITED_FUTU_GET_KLINE",
                         "FORWARD_ADJUSTED_DAILY_CLOSE",
                         None,
@@ -880,6 +884,7 @@ def _price_evidence(
                     bounded[-1].date if bounded else None,
                     len(bounded),
                     points,
+                    (),
                     "AUDITED_FUTU_GET_KLINE",
                     "FORWARD_ADJUSTED_DAILY_CLOSE",
                     hashlib.sha256(raw.encode()).hexdigest() if bounded else None,
@@ -902,6 +907,7 @@ def _price_evidence(
                     None,
                     0,
                     (),
+                    (),
                     "AUDITED_FUTU_GET_KLINE",
                     "FORWARD_ADJUSTED_DAILY_CLOSE",
                     None,
@@ -912,6 +918,103 @@ def _price_evidence(
         if consecutive_failures >= MAX_CONSECUTIVE_PRICE_FAILURES:
             circuit_reason = "price source circuit breaker opened after consecutive failures"
     return tuple(output)
+
+
+def _align_price_evidence(
+    evidence: Sequence[PriceEvidence], *, start: date, end: date
+) -> tuple[PriceEvidence, ...]:
+    """Bind every usable series to one common, non-look-ahead interval."""
+
+    usable = {item.identity: item.points for item in evidence if item.status == "AVAILABLE"}
+    if not usable:
+        return tuple(evidence)
+    aligned = align_price_sequences(usable, start=start, end=end)
+    return tuple(replace(item, aligned_points=aligned.get(item.identity, ())) for item in evidence)
+
+
+def _reconstructed_contributions(
+    end_snapshot: PortfolioSnapshot,
+    prices: Sequence[PriceEvidence],
+) -> tuple[tuple[SymbolContribution, ...], list[dict[str, str]]]:
+    """Estimate current gross unrealized P&L; never imply realized/exited coverage."""
+
+    by_price = {item.identity: item for item in prices}
+    output: list[SymbolContribution] = []
+    reasons: list[dict[str, str]] = []
+    for identity, rows in sorted(_group_positions(end_snapshot).items()):
+        market, symbol = identity.split(".", 1)
+        classification = _classification(rows) or ("UNKNOWN", "UNKNOWN", ())
+        price = by_price.get(identity)
+        evidence: dict[str, Any] = {
+            "start_snapshot_id": end_snapshot.snapshot_id,
+            "end_snapshot_id": end_snapshot.snapshot_id,
+            "start_present": False,
+            "end_present": True,
+            "start_rows": 0,
+            "end_rows": len(rows),
+        }
+        method = "RECONSTRUCTION_EVIDENCE_INCOMPLETE"
+        amount: Decimal | None = None
+        currencies = {item.currency for item in rows}
+        fx_values = {item.fx_to_base for item in rows}
+        if currencies != {end_snapshot.base_currency} or fx_values != {Decimal(1)}:
+            evidence["reconstruction_reason"] = "TRANSACTION_PERIOD_FX_UNAVAILABLE"
+            reasons.append(
+                {
+                    "code": "RECONSTRUCTED_TRANSACTION_PERIOD_FX_UNAVAILABLE",
+                    "scope": identity,
+                    "detail": "historical transaction-period FX is unavailable; cross-currency gross P&L is not estimated",
+                }
+            )
+        elif price is None or len(price.aligned_points) < 2:
+            evidence["reconstruction_reason"] = "PRICE_INTERVAL_UNAVAILABLE"
+            reasons.append(
+                {
+                    "code": "RECONSTRUCTED_PRICE_INTERVAL_UNAVAILABLE",
+                    "scope": identity,
+                    "detail": "at least two common adjusted-close points are required for reconstruction",
+                }
+            )
+        else:
+            quantity = sum((item.quantity for item in rows), Decimal(0))
+            first_price, last_price = price.aligned_points[0], price.aligned_points[-1]
+            amount = quantity * (last_price.adjusted_close - first_price.adjusted_close)
+            method = "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE"
+            evidence.update(
+                {
+                    "price_digest": price.digest,
+                    "aligned_start_date": first_price.date,
+                    "aligned_end_date": last_price.date,
+                    "aligned_start_close": first_price.adjusted_close,
+                    "aligned_end_close": last_price.adjusted_close,
+                    "ending_quantity": quantity,
+                    "ending_fx_to_base": Decimal(1),
+                }
+            )
+        output.append(
+            SymbolContribution(
+                identity,
+                market,
+                symbol,
+                tuple(sorted({item.account_ref for item in rows})),
+                "ESTIMATED" if amount is not None else "UNAVAILABLE",
+                method,
+                amount,
+                None,
+                amount,
+                *classification,
+                evidence,
+            )
+        )
+    if output:
+        reasons.append(
+            {
+                "code": "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE",
+                "scope": "symbol_contributions",
+                "detail": "no pinned normalized trade source was supplied; realized P&L and exited positions are excluded",
+            }
+        )
+    return tuple(output), reasons
 
 
 def _twr(
@@ -1016,7 +1119,27 @@ def analyze_performance(
         raise AttributionInputError("snapshot environment changes inside the period")
     if any(tuple(item.accounts) != tuple(first.accounts) for item in selected[1:]):
         raise AttributionInputError("snapshot account identities change inside the period")
-    contributions, reasons = _contributions(first, selected[-1])
+    requested_identities = tuple(
+        sorted(
+            set(_group_positions(selected[-1]))
+            | (set(_group_positions(first)) if len(selected) > 1 else set())
+        )
+    )
+    prices = _align_price_evidence(
+        _price_evidence(
+            requested_identities,
+            provider=price_provider,
+            start=start,
+            end=end,
+            end_instant=selected[-1].as_of,
+        ),
+        start=start,
+        end=end,
+    )
+    if len(selected) == 1:
+        contributions, reasons = _reconstructed_contributions(selected[-1], prices)
+    else:
+        contributions, reasons = _contributions(first, selected[-1])
     if not interval.continuous:
         reasons.append(
             {
@@ -1052,13 +1175,21 @@ def analyze_performance(
             }
         )
     available = tuple(item for item in contributions if item.pnl_base is not None)
+    exact = tuple(item for item in contributions if item.status == "AVAILABLE")
+    aligned_by_identity = {item.identity: item.aligned_points for item in prices}
+    authoritative_identities = {item.identity for item in exact}
+    prices_complete = bool(authoritative_identities) and all(
+        len(aligned_by_identity.get(identity, ())) >= 2 for identity in authoritative_identities
+    )
     all_available = (
-        len(available) == len(contributions)
+        len(exact) == len(contributions)
         and bool(contributions)
+        and len(selected) >= 2
         and interval.continuous
         and interval.start_date_covered
         and interval.end_date_covered
         and fx_consistent
+        and prices_complete
     )
     total = (
         sum((item.pnl_base for item in available if item.pnl_base is not None), Decimal(0))
@@ -1070,7 +1201,7 @@ def analyze_performance(
             (item.realized_pnl_base for item in available if item.realized_pnl_base is not None),
             Decimal(0),
         )
-        if available
+        if available and all(item.realized_pnl_base is not None for item in available)
         else None
     )
     unrealized = (
@@ -1082,7 +1213,7 @@ def analyze_performance(
             ),
             Decimal(0),
         )
-        if available
+        if available and all(item.unrealized_pnl_base is not None for item in available)
         else None
     )
     flow_evidence = flow_evidence or ExternalFlowEvidence.unavailable(
@@ -1109,7 +1240,7 @@ def analyze_performance(
         and flow_evidence.coverage_end >= selected[-1].as_of
     )
     nav_change = selected[-1].nav_base - first.nav_base
-    field_population_complete = len(available) == len(contributions) and bool(contributions)
+    field_population_complete = len(exact) == len(contributions) and bool(contributions)
     if flow_covers_endpoints and total is not None:
         expected_net_pnl = nav_change - (external_flow or Decimal(0))
         if field_population_complete:
@@ -1141,19 +1272,28 @@ def analyze_performance(
         "residual_base": residual,
     }
     mode = (
-        "ACCURATE_PNL" if all_available else ("RECONSTRUCTED" if contributions else "UNAVAILABLE")
+        "ACCURATE_PNL"
+        if all_available
+        else "RECONSTRUCTED"
+        if contributions and (len(selected) >= 2 or available)
+        else "UNAVAILABLE"
     )
-    confidence = "HIGH" if all_available else ("LOW" if contributions else "NONE")
+    confidence = "HIGH" if all_available else ("LOW" if mode == "RECONSTRUCTED" else "NONE")
     contribution_status = (
         "COMPLETE" if all_available else ("PARTIAL" if available else "UNAVAILABLE")
     )
-    prices = _price_evidence(
-        tuple(item.identity for item in contributions),
-        provider=price_provider,
-        start=start,
-        end=end,
-        end_instant=selected[-1].as_of,
-    )
+    if mode != "ACCURATE_PNL":
+        return_status, return_method, portfolio_return = "UNAVAILABLE", None, None
+        if mode == "RECONSTRUCTED" and not any(
+            item["code"] == "RECONSTRUCTED_RETURN_UNAVAILABLE" for item in reasons
+        ):
+            reasons.append(
+                {
+                    "code": "RECONSTRUCTED_RETURN_UNAVAILABLE",
+                    "scope": "portfolio_return",
+                    "detail": "reconstructed attribution cannot authorize portfolio return or TWR",
+                }
+            )
     if price_provider is None and contributions:
         reasons.append(
             {
@@ -1176,6 +1316,14 @@ def analyze_performance(
                 "code": "PRICE_DATA_PARTIAL",
                 "scope": "price_evidence",
                 "detail": "one or more bounded adjusted-close histories are unavailable",
+            }
+        )
+    if authoritative_identities and not prices_complete:
+        reasons.append(
+            {
+                "code": "PRICE_ALIGNMENT_INCOMPLETE",
+                "scope": "price_evidence",
+                "detail": "all authoritative contributed symbols require at least two common adjusted-close points",
             }
         )
     ranked = sorted(available, key=lambda item: (-(item.pnl_base or Decimal(0)), item.identity))
@@ -1236,6 +1384,7 @@ def analyze_performance(
             "price_analyzed": len(prices),
             "price_omitted": len(contributions) - len(prices),
             "price_available": sum(item.status == "AVAILABLE" for item in prices),
+            "price_aligned": sum(len(item.aligned_points) >= 2 for item in prices),
             "flow_rows": len(flow_evidence.flows),
         },
         mode,
@@ -1266,6 +1415,7 @@ def analyze_performance(
         tuple(reasons),
         (
             "symbol_pnl = delta(cumulative_realized_pl_base) + delta(cumulative_unrealized_pl_base)",
+            "reconstructed_gross_unrealized_pnl_base = ending_quantity * (aligned_ending_adjusted_close - aligned_beginning_adjusted_close) * ending_fx_to_base; only base-currency FX=1 is authorized",
             "theme_split_pnl = symbol_pnl / number_of_themes; UNKNOWN receives the full amount when no theme exists",
             "TWR = product((ending_NAV - external_flows_in_subperiod) / beginning_NAV) - 1; flows are adjusted at subperiod end",
         ),

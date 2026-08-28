@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.models import FxRateEvidence
 from portfolio_analyst.performance import (
     AttributionInputError,
     ExternalFlow,
@@ -19,6 +20,7 @@ from portfolio_analyst.performance import (
 )
 from portfolio_analyst.schema import ReportSemanticError, validate_performance_document
 from portfolio_analyst.snapshot_repository import SnapshotRepository
+from portfolio_analyst.snapshot_repository import SnapshotRepositoryError
 from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst import cli
 from test_risk_analysis import reconciled_snapshot, snapshot as make_snapshot
@@ -101,13 +103,14 @@ def test_gap_prevents_accurate_pnl_mode_even_when_endpoint_fields_are_complete()
 
 def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_means_no_return():
     start = _pnl_start()
-    end = _endpoint(start)
+    end = _after_us_close(_endpoint(start))
 
     report = analyze_performance(
         (start, end),
         start=start.as_of.date(),
         end=end.as_of.date(),
         flow_evidence=ExternalFlowEvidence.unavailable("cash-flow adapter not configured"),
+        price_provider=_CompleteAlignedPrices(),
     )
     payload = report.to_dict()
 
@@ -140,9 +143,10 @@ def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_m
         "available_contributions": 3,
         "unavailable_contributions": 0,
         "price_requested": 3,
-        "price_analyzed": 0,
-        "price_omitted": 3,
-        "price_available": 0,
+        "price_analyzed": 3,
+        "price_omitted": 0,
+        "price_available": 3,
+        "price_aligned": 3,
         "flow_rows": 0,
     }
     golden = json.loads((FIXTURES / "performance_attribution_golden_snippet.json").read_text())
@@ -201,9 +205,11 @@ def test_cross_currency_contribution_uses_reconciled_base_pnl_without_mixing_loc
 def test_verified_external_flows_enable_documented_twr_and_internal_transfer_is_excluded():
     start = _pnl_start()
     middle = _endpoint(start, nav="1110", realized="0", unrealized="10")
-    end = _identified(
-        _endpoint(middle, nav="1165", realized="0", unrealized="15"),
-        as_of=start.as_of + timedelta(days=2),
+    end = _after_us_close(
+        _identified(
+            _endpoint(middle, nav="1165", realized="0", unrealized="65"),
+            as_of=start.as_of + timedelta(days=2),
+        )
     )
     evidence = ExternalFlowEvidence.complete(
         source="AUDITED_TEST",
@@ -234,7 +240,11 @@ def test_verified_external_flows_enable_documented_twr_and_internal_transfer_is_
     )
 
     report = analyze_performance(
-        (start, middle, end), start=start.as_of.date(), end=end.as_of.date(), flow_evidence=evidence
+        (start, middle, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        flow_evidence=evidence,
+        price_provider=_CompleteAlignedPrices(),
     )
 
     # (1110 - 100) / 1000 - 1 = 1%; 1165 / 1110 - 1; chain the subperiod factors.
@@ -243,14 +253,14 @@ def test_verified_external_flows_enable_documented_twr_and_internal_transfer_is_
     assert report.return_method == "TWR_END_OF_SUBPERIOD_FLOW_ADJUSTMENT"
     assert report.external_flow_base == Decimal("100")
     assert report.internal_transfer_base == Decimal("999")
-    assert report.pnl_reconciliation["status"] == "MISMATCH"
-    assert report.mode == "RECONSTRUCTED"
+    assert report.pnl_reconciliation["status"] == "MATCHED"
+    assert report.mode == "ACCURATE_PNL"
     validate_performance_document(report.to_dict())
 
 
-def test_explicit_verified_no_flow_evidence_enables_return_without_inference():
+def test_complete_flows_cannot_authorize_twr_after_pnl_reconciliation_downgrade():
     start = _pnl_start()
-    end = _endpoint(start)
+    end = _after_us_close(_endpoint(start, nav="1110", realized="0", unrealized="10"))
     evidence = ExternalFlowEvidence.complete(
         source="AUDITED_TEST",
         coverage_start=start.as_of,
@@ -259,7 +269,37 @@ def test_explicit_verified_no_flow_evidence_enables_return_without_inference():
     )
 
     report = analyze_performance(
-        (start, end), start=start.as_of.date(), end=end.as_of.date(), flow_evidence=evidence
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        flow_evidence=evidence,
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    assert report.mode == "RECONSTRUCTED"
+    assert report.pnl_reconciliation["status"] == "MISMATCH"
+    assert report.return_status == "UNAVAILABLE"
+    assert report.return_method is None
+    assert report.portfolio_return is None
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
+def test_explicit_verified_no_flow_evidence_enables_return_without_inference():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+    evidence = ExternalFlowEvidence.complete(
+        source="AUDITED_TEST",
+        coverage_start=start.as_of,
+        coverage_end=end.as_of,
+        flows=(),
+    )
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        flow_evidence=evidence,
+        price_provider=_CompleteAlignedPrices(),
     )
 
     assert report.return_status == "AVAILABLE"
@@ -410,6 +450,159 @@ class _LookaheadPrices:
         )
 
 
+class _CompleteAlignedPrices:
+    def history(self, symbol, *, market, lookback, as_of, timeout_seconds=5):
+        from portfolio_analyst.risk import PricePoint
+
+        del symbol, market, lookback, timeout_seconds
+        return (
+            PricePoint(as_of - timedelta(days=1), Decimal("100")),
+            PricePoint(as_of, Decimal("110")),
+        )
+
+
+def _after_us_close(snapshot):
+    return _identified(snapshot, as_of=snapshot.as_of.replace(hour=22))
+
+
+def test_one_current_snapshot_with_aligned_prices_reconstructs_gross_unrealized_only():
+    current = _after_us_close(_pnl_start())
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    assert report.mode == "RECONSTRUCTED"
+    assert report.confidence == "LOW"
+    assert report.return_status == "UNAVAILABLE"
+    assert report.portfolio_return is None
+    assert report.total_pnl_base == Decimal("30")
+    assert all(
+        item.method == "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE"
+        for item in report.symbol_contributions
+    )
+    assert all(item.realized_pnl_base is None for item in report.symbol_contributions)
+    assert all(item.unrealized_pnl_base == Decimal("10") for item in report.symbol_contributions)
+    assert all(item.evidence["price_digest"] for item in report.symbol_contributions)
+    assert any(
+        reason["code"] == "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE"
+        for reason in report.quality_reasons
+    )
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_one_snapshot_without_any_usable_price_evidence_is_unavailable_not_an_input_error():
+    current = _after_us_close(_pnl_start())
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+    )
+
+    assert report.mode == "UNAVAILABLE"
+    assert report.confidence == "NONE"
+    assert report.total_pnl_base is None
+    assert report.return_status == "UNAVAILABLE"
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_reconstruction_refuses_cross_currency_without_transaction_period_fx():
+    current = _after_us_close(_pnl_start())
+    positions = tuple(
+        replace(
+            item,
+            currency="CAD",
+            currency_provenance="USER_CONFIG",
+            fx_to_base=Decimal("2"),
+            average_cost_local=item.average_cost_local / Decimal("2"),
+            last_price_local=item.last_price_local / Decimal("2"),
+            market_value_local=item.market_value_local / Decimal("2"),
+            unrealized_pl_local=Decimal("0"),
+            realized_pl_local=Decimal("0"),
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in current.positions
+    )
+    current = _identified(
+        replace(
+            current,
+            positions=positions,
+            fx_evidence=current.fx_evidence
+            + (FxRateEvidence("CAD", "USD", Decimal("2"), "TEST", current.as_of),),
+        )
+    )
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
+    assert aaa.status == "UNAVAILABLE"
+    assert aaa.pnl_base is None
+    assert report.total_pnl_base == Decimal("20")
+    assert any(
+        reason["code"] == "RECONSTRUCTED_TRANSACTION_PERIOD_FX_UNAVAILABLE"
+        and reason["scope"] == "US.AAA"
+        for reason in report.quality_reasons
+    )
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_two_snapshot_exact_pnl_requires_complete_common_price_intervals_for_high_confidence():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+
+    without_prices = analyze_performance(
+        (start, end), start=start.as_of.date(), end=end.as_of.date()
+    )
+    assert without_prices.mode == "RECONSTRUCTED"
+    assert without_prices.confidence == "LOW"
+
+    complete = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+    assert complete.mode == "ACCURATE_PNL"
+    assert complete.confidence == "HIGH"
+    assert complete.coverage["price_aligned"] == 3
+    assert all(len(item.aligned_points) == 2 for item in complete.price_evidence)
+    validate_performance_document(complete.to_dict(), source_snapshots=(start, end))
+
+
+def test_reconstructed_aligned_price_evidence_is_bound_against_tampering():
+    current = _after_us_close(_pnl_start())
+    payload = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    ).to_dict()
+    payload["price_evidence"][0]["aligned_points"][0]["adjusted_close"] = "99"
+    payload["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in payload.items() if key != "attribution_id"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:20]
+    )
+
+    with pytest.raises(ReportSemanticError, match="performance"):
+        validate_performance_document(payload, source_snapshots=(current,))
+
+
 def test_price_evidence_is_bounded_to_requested_dates_and_digest_traceable():
     start = _pnl_start()
     end = _endpoint(start, days=2)
@@ -536,6 +729,71 @@ def test_price_alignment_intersects_closes_before_any_return_interval_is_formed(
     ]
 
 
+def test_snapshot_range_budget_applies_after_canonical_timestamp_prefilter(tmp_path):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    repository = SnapshotRepository(home)
+    base = _pnl_start()
+    items = []
+    for offset in range(370):
+        item = _identified(base, as_of=base.as_of + timedelta(minutes=offset))
+        repository.save(item)
+        items.append(item)
+    target = items[200]
+
+    selected = repository.list_range(
+        start=target.as_of,
+        end=target.as_of.replace(microsecond=999999),
+        limit=1,
+        max_bytes=1024 * 1024,
+    )
+
+    assert selected == (target,)
+
+
+def test_snapshot_range_ignores_outside_corrupt_body_but_fails_inside_and_misplaced(tmp_path):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    repository = SnapshotRepository(home)
+    base = _pnl_start()
+    outside = _identified(base, as_of=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    inside = _identified(base, as_of=datetime(2026, 10, 27, 12, tzinfo=timezone.utc))
+    outside_path = repository.save(outside)
+    inside_path = repository.save(inside)
+    inside_bytes = inside_path.read_bytes()
+    outside_path.write_text("{broken", encoding="utf-8")
+    outside_path.chmod(0o600)
+
+    assert repository.list_range(
+        start=inside.as_of,
+        end=inside.as_of.replace(microsecond=999999),
+        limit=1,
+        max_bytes=1024 * 1024,
+    ) == (inside,)
+
+    misplaced = outside_path.parent / inside_path.name
+    misplaced.write_bytes(inside_bytes)
+    misplaced.chmod(0o600)
+    with pytest.raises(SnapshotRepositoryError, match="matching snapshot history path"):
+        repository.list_range(
+            start=outside.as_of,
+            end=inside.as_of.replace(microsecond=999999),
+            limit=3,
+            max_bytes=1024 * 1024,
+        )
+    misplaced.unlink()
+
+    inside_path.write_text("{broken", encoding="utf-8")
+    inside_path.chmod(0o600)
+    with pytest.raises(SnapshotRepositoryError, match="invalid"):
+        repository.list_range(
+            start=inside.as_of,
+            end=inside.as_of.replace(microsecond=999999),
+            limit=1,
+            max_bytes=1024 * 1024,
+        )
+
+
 def test_performance_cli_no_save_and_transactional_private_bundle(monkeypatch, tmp_path, capsys):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
@@ -580,6 +838,35 @@ def test_performance_cli_no_save_and_transactional_private_bundle(monkeypatch, t
         oct((home / "reports" / "perf" / "performance_attribution.json").stat().st_mode & 0o777)
         == "0o600"
     )
+
+
+def test_performance_cli_accepts_one_snapshot_and_reports_unavailable_without_prices(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    current = _pnl_start()
+    SnapshotRepository(home).save(current)
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: None)
+
+    assert (
+        cli.main(
+            [
+                "performance",
+                "--from",
+                current.as_of.date().isoformat(),
+                "--to",
+                current.as_of.date().isoformat(),
+                "--json",
+                "--no-save",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "UNAVAILABLE"
+    assert payload["source_snapshot_ids"] == [current.snapshot_id]
 
 
 def test_markdown_and_terminal_renderers_escape_untrusted_classification():
