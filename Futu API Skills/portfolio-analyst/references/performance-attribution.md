@@ -42,9 +42,25 @@ gross unrealized estimate:
 estimated gross unrealized base = ending quantity * (aligned ending adjusted close - aligned beginning adjusted close) * 1
 ```
 
-This estimate excludes realized P&L and exited positions because the CLI has no pinned normalized
-trade source. Cross-currency positions remain unavailable without transaction-period FX. A
-reconstructed report never claims portfolio return or TWR.
+The optional authoritative trade path reuses Phase 3 `FutuTradeHistoryService`, its pinned read-only
+orders/fills commands, stable account aliases, context-atomic acquisition, and existing row,
+context, failure-circuit, and wall budgets. The CLI attempts this path only when the stable alias
+key and audited Skill already exist; it never creates alias state during performance analysis.
+The present Phase 3 adapter marks corporate-action evidence as unsupported, so its collected review
+is retained as structured evidence but cannot authorize FIFO contributions until that coverage is
+made authoritative.
+
+Validated normalized fills are FIFO matched by account and canonical identity. Fully in-period
+closed lots contribute gross pre-fee realized P&L, including symbols absent from the ending
+snapshot. Current symbols combine that realized amount with the adjusted-close unrealized estimate.
+Base-currency fills convert exactly 1:1. Non-base FIFO P&L remains visible in local-currency buckets
+but its base contribution is null without transaction-date FX. Unmatched sells/opening inventory,
+transfers, corporate actions, orphan fills, order/fill quantity mismatches, status conflicts, failed
+contexts, and budget omissions fail closed. Snapshot cumulative-P&L and FIFO reconstruction are
+mutually exclusive authority paths, so fills are never added to exact snapshot deltas. Without
+usable trade history, current-holding-only reconstruction remains LOW confidence and explicitly
+excludes realized P&L and exited positions. A reconstructed report never claims portfolio return or
+TWR.
 
 When complete external-flow coverage exists, the report also reconciles available attributed P&L
 against `ending NAV - beginning NAV - external flows`. A non-zero residual is serialized as
@@ -92,7 +108,8 @@ price-only partial coverage as appropriate.
 ## Output and security
 
 The strict schema rejects unknown fields and caps every collection. Runtime validation reconstructs
-period gaps, P&L totals and splits, aggregates, rankings, price row digests/cutoffs, flow totals,
+period gaps, P&L totals and splits, aggregates, rankings, price row digests/cutoffs, embedded Phase 3
+trade-review semantics/digest/FIFO references/local-currency buckets, flow totals,
 TWR, quality coverage and the complete report ID. Human and Markdown views escape all untrusted
 labels, show raw and aligned price coverage, formulas, source evidence, limitations and unavailable modules.
 

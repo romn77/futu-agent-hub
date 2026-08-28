@@ -532,11 +532,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_bytes=MAX_HISTORY_TOTAL_BYTES,
             )
             price_provider = None
+            trade_history = None
+            trade_unavailable_reason = "audited normalized trade history source is unavailable"
             skill_dir = discover_futuapi_skill()
-            if skill_dir is not None:
+            if skill_dir is not None and snapshots:
                 from .price_history import FutuAdjustedPriceProvider
 
-                price_provider = FutuAdjustedPriceProvider(FutuAdapter(skill_dir))
+                adapter = FutuAdapter(skill_dir)
+                price_provider = FutuAdjustedPriceProvider(adapter)
+                try:
+                    aliaser = AccountAliasStore(settings.data_home).load()
+                    trade_history = FutuTradeHistoryService(adapter, aliaser=aliaser).review(
+                        start=start,
+                        end=end,
+                        trd_env=snapshots[-1].trd_env,
+                        portfolio_snapshot=snapshots[-1],
+                    )
+                    trade_unavailable_reason = None
+                except (AccountAliasError, TradeReviewInputError, FutuReadError):
+                    trade_unavailable_reason = (
+                        "bounded pinned trade history acquisition or stable alias authority failed"
+                    )
             report = analyze_performance(
                 snapshots,
                 start=start,
@@ -545,6 +561,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "authoritative deposits, withdrawals and transfers are not configured"
                 ),
                 price_provider=price_provider,
+                trade_history=trade_history,
+                trade_unavailable_reason=trade_unavailable_reason,
             )
             payload = report.to_dict()
             from .schema import validate_performance_document

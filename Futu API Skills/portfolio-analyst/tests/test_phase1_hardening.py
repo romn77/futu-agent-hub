@@ -325,6 +325,20 @@ def test_alias_key_is_persisted_0600_and_symlink_is_refused(tmp_path):
         store.load_or_create()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only alias contract")
+def test_alias_key_read_only_load_never_creates_missing_state(tmp_path):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    store = AccountAliasStore(home)
+
+    with pytest.raises(AccountAliasError, match="config|unavailable"):
+        store.load()
+    assert not (home / "config").exists()
+
+    expected = store.load_or_create().alias("90000001")
+    assert store.load().alias("90000001") == expected
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX anchored private-key contract")
 def test_alias_store_rejects_unsafe_home_config_hardlink_and_anchor_swap(tmp_path, monkeypatch):
     home = tmp_path / "private"

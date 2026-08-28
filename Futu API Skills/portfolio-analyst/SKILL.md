@@ -287,10 +287,18 @@ and FX source provenance must remain consistent. A missing/opened/closed/transfe
 Symbol P&L uses only complete cumulative realized/unrealized base-field endpoint deltas. Sector,
 region, theme-full, and additive theme-split totals are Decimal-only and reconcile to the available
 symbol population. With only a current/end snapshot, common aligned adjusted closes can estimate
-base-currency current holdings as `ending quantity * adjusted-close change`; this LOW-confidence
-gross unrealized reconstruction explicitly excludes realized P&L and exited positions. Missing
-transaction-period FX keeps cross-currency estimates null. Top contributors and detractors are
-deterministically ranked. `ACCURATE_PNL` additionally requires at least two common aligned price
+base-currency current holdings as `ending quantity * adjusted-close change`. When the existing
+stable alias key and pinned audited Skill are available, `performance` also reuses the bounded,
+context-atomic Phase 3 history service. Account-and-symbol FIFO matches can add gross pre-fee
+realized P&L and fully closed symbols; base-currency fills are exact 1:1. Cross-currency FIFO remains
+in local buckets and base P&L stays null without transaction-date FX. Opening inventory, nontrade
+events, context gaps, orphan fills, quantity mismatches, and status conflicts fail closed. The
+snapshot cumulative-field path never adds FIFO results, preventing double counting. Without usable
+trade history the LOW-confidence result explicitly excludes realized P&L and exited positions.
+The current Phase 3 adapter reports corporate-action evidence as unsupported, so live CLI history is
+retained as structured unavailable evidence rather than authorizing FIFO contribution claims.
+Top contributors and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires
+at least two common aligned price
 points for every authoritative contributed symbol and describes P&L-field authority only.
 
 The official cash-flow reader is not in the current digest-pinned adapter allowlist. Therefore the

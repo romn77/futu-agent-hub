@@ -272,6 +272,7 @@ def _validate(payload: dict[str, Any], name: str) -> None:
     lifecycle_schema = json.loads(
         _schema_path("position_lifecycle.schema.json").read_text(encoding="utf-8")
     )
+    trade_schema = json.loads(_schema_path("trade_review.schema.json").read_text(encoding="utf-8"))
     registry = Registry().with_resources(
         [
             (definitions["$id"], Resource.from_contents(definitions)),
@@ -285,6 +286,7 @@ def _validate(payload: dict[str, Any], name: str) -> None:
                 Resource.from_contents(portfolio_snapshot_schema),
             ),
             (lifecycle_schema["$id"], Resource.from_contents(lifecycle_schema)),
+            (trade_schema["$id"], Resource.from_contents(trade_schema)),
         ]
     )
     validator = jsonschema.Draft202012Validator(
@@ -1432,6 +1434,18 @@ def validate_performance_document(
                 len(item.positions) for item in validated_sources
             ):
                 raise ValueError("source position coverage mismatch")
+            trade_review = payload["trade_evidence"]["review"]
+            if trade_review is not None:
+                expected_trade_accounts = {
+                    item.account_ref for item in validated_sources[-1].accounts
+                }
+                observed_trade_accounts = {
+                    item["account_ref"]
+                    for key in ("normalized_orders", "normalized_fills")
+                    for item in trade_review[key]
+                }
+                if not observed_trade_accounts <= expected_trade_accounts:
+                    raise ValueError("trade evidence account aliases do not match source snapshot")
             if len(validated_sources) > 1:
                 expected_contributions, _unused_reasons = _contributions(
                     validated_sources[0], validated_sources[-1]
@@ -1462,20 +1476,36 @@ def validate_performance_document(
                     raise ValueError("source snapshot unavailable contribution mismatch")
             else:
                 final_rows = _group_positions(validated_sources[-1])
-                if {item["identity"] for item in payload["symbol_contributions"]} != set(
-                    final_rows
+                trade_review = payload["trade_evidence"]["review"]
+                trade_identities = (
+                    {item["identity"] for item in trade_review["round_trips"]}
+                    if trade_review is not None
+                    and payload["trade_evidence"]["used_for_contributions"]
+                    else set()
+                )
+                trade_trips_by_identity: dict[str, list[dict[str, Any]]] = {}
+                if trade_review is not None and payload["trade_evidence"]["used_for_contributions"]:
+                    for trip in trade_review["round_trips"]:
+                        trade_trips_by_identity.setdefault(trip["identity"], []).append(trip)
+                if {item["identity"] for item in payload["symbol_contributions"]} != (
+                    set(final_rows) | trade_identities
                 ):
                     raise ValueError("reconstruction identity coverage mismatch")
                 for contribution in payload["symbol_contributions"]:
                     rows = final_rows.get(contribution["identity"], ())
                     market, symbol = contribution["identity"].split(".", 1)
-                    classification = _classification(rows) or ("UNKNOWN", "UNKNOWN", ())
+                    trips = trade_trips_by_identity.get(contribution["identity"], ())
+                    expected_accounts = sorted(
+                        {item.account_ref for item in rows}
+                        | {item["account_ref"] for item in trips}
+                    )
+                    classification = _classification(rows) if rows else None
+                    classification = classification or ("UNKNOWN", "UNKNOWN", ())
                     evidence = contribution["evidence"]
                     if (
                         contribution["market"] != market
                         or contribution["symbol"] != symbol
-                        or contribution["account_refs"]
-                        != sorted({item.account_ref for item in rows})
+                        or contribution["account_refs"] != expected_accounts
                         or (
                             contribution["sector"],
                             contribution["region"],
@@ -1485,7 +1515,7 @@ def validate_performance_document(
                         or evidence["start_snapshot_id"] != validated_sources[-1].snapshot_id
                         or evidence["end_snapshot_id"] != validated_sources[-1].snapshot_id
                         or evidence["start_present"]
-                        or not evidence["end_present"]
+                        or evidence["end_present"] != bool(rows)
                         or evidence["start_rows"] != 0
                         or evidence["end_rows"] != len(rows)
                     ):
@@ -1497,9 +1527,12 @@ def validate_performance_document(
                     observed_reason = contribution["evidence"].get("reconstruction_reason")
                     if cross_currency != (observed_reason == "TRANSACTION_PERIOD_FX_UNAVAILABLE"):
                         raise ValueError("reconstruction FX evidence mismatch")
-                    if contribution["status"] == "ESTIMATED" and Decimal(
-                        evidence["ending_quantity"]
-                    ) != sum((item.quantity for item in rows), Decimal(0)):
+                    if (
+                        contribution["status"] == "ESTIMATED"
+                        and "ending_quantity" in evidence
+                        and Decimal(evidence["ending_quantity"])
+                        != sum((item.quantity for item in rows), Decimal(0))
+                    ):
                         raise ValueError("reconstruction ending quantity mismatch")
             verified_fx_changed = (
                 len(
@@ -1598,9 +1631,12 @@ def validate_performance_document(
         identities = [item["identity"] for item in contributions]
         if identities != sorted(set(identities)):
             fail("symbol contributions must be unique and identity-sorted")
+        price_expected_identities = [
+            item["identity"] for item in contributions if item["evidence"]["end_present"]
+        ]
         if coverage["canonical_identities"] != len(contributions) or coverage[
             "price_requested"
-        ] != len(contributions):
+        ] != len(price_expected_identities):
             fail("identity coverage does not reconcile")
         available = []
         exact = []
@@ -1620,28 +1656,42 @@ def validate_performance_document(
                 available.append(item)
                 exact.append(item)
             elif item["status"] == "ESTIMATED":
-                if (
-                    item["method"] != "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE"
-                    or item["pnl_base"] is None
-                    or item["realized_pnl_base"] is not None
-                    or item["unrealized_pnl_base"] is None
-                    or decimal(item["pnl_base"]) != decimal(item["unrealized_pnl_base"])
-                ):
-                    fail("estimated contribution lacks gross price reconstruction evidence")
                 evidence = item["evidence"]
-                expected_estimate = (
-                    decimal(evidence["ending_quantity"])
-                    * (
-                        decimal(evidence["aligned_end_close"])
-                        - decimal(evidence["aligned_start_close"])
+                if item["method"] == "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE":
+                    if (
+                        item["pnl_base"] is None
+                        or item["realized_pnl_base"] is not None
+                        or item["unrealized_pnl_base"] is None
+                    ):
+                        fail("estimated contribution lacks gross price reconstruction evidence")
+                    expected_estimate = (
+                        decimal(evidence["ending_quantity"])
+                        * (
+                            decimal(evidence["aligned_end_close"])
+                            - decimal(evidence["aligned_start_close"])
+                        )
+                        * decimal(evidence["ending_fx_to_base"])
                     )
-                    * decimal(evidence["ending_fx_to_base"])
-                )
-                if (
-                    decimal(evidence["ending_fx_to_base"]) != 1
-                    or decimal(item["pnl_base"]) != expected_estimate
-                ):
-                    fail("estimated contribution formula does not reconstruct")
+                    if (
+                        decimal(evidence["ending_fx_to_base"]) != 1
+                        or decimal(item["pnl_base"]) != expected_estimate
+                    ):
+                        fail("estimated contribution formula does not reconstruct")
+                elif item["method"] in {
+                    "TRADE_FIFO_REALIZED_PLUS_PRICE_UNREALIZED_ESTIMATE",
+                    "TRADE_FIFO_REALIZED_GROSS_PRE_FEE",
+                }:
+                    if item["pnl_base"] is None or item["realized_pnl_base"] is None:
+                        fail("FIFO contribution lacks realized gross P&L")
+                    expected_pnl = decimal(item["realized_pnl_base"]) + (
+                        decimal(item["unrealized_pnl_base"])
+                        if item["unrealized_pnl_base"] is not None
+                        else Decimal(0)
+                    )
+                    if decimal(item["pnl_base"]) != expected_pnl:
+                        fail("FIFO contribution split does not reconcile")
+                else:
+                    fail("estimated contribution method is invalid")
                 available.append(item)
             else:
                 if any(value is not None for value in values):
@@ -1696,7 +1746,11 @@ def validate_performance_document(
         )
         expected_realized = (
             sum((decimal(item["realized_pnl_base"]) for item in available), Decimal(0))
-            if available and all(item["realized_pnl_base"] is not None for item in available)
+            if available
+            and all(item["realized_pnl_base"] is not None for item in available)
+            and not any(
+                item["method"] == "TRADE_FIFO_BASE_FX_UNAVAILABLE" for item in contributions
+            )
             else None
         )
         expected_unrealized = (
@@ -1753,7 +1807,7 @@ def validate_performance_document(
             fail("top contribution rankings are inconsistent")
 
         price_identities: set[str] = set()
-        if [item["identity"] for item in payload["price_evidence"]] != identities[
+        if [item["identity"] for item in payload["price_evidence"]] != price_expected_identities[
             : len(payload["price_evidence"])
         ]:
             fail("price evidence must follow the bounded contribution identity prefix")
@@ -1842,7 +1896,10 @@ def validate_performance_document(
             fail("price coverage does not reconcile")
         price_by_identity = {item["identity"]: item for item in payload["price_evidence"]}
         for item in contributions:
-            if item["status"] == "ESTIMATED":
+            if item["method"] in {
+                "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE",
+                "TRADE_FIFO_REALIZED_PLUS_PRICE_UNREALIZED_ESTIMATE",
+            }:
                 evidence = price_by_identity.get(item["identity"])
                 if (
                     evidence is None
@@ -1860,6 +1917,113 @@ def validate_performance_document(
                     fail("estimated contribution price evidence is not traceable")
         if sum(item["rows"] for item in payload["price_evidence"]) > 20_000:
             fail("price aggregate row budget exceeded")
+
+        trade_evidence = payload["trade_evidence"]
+        trade_review = trade_evidence["review"]
+        if trade_review is None:
+            if (
+                trade_evidence["status"] != "UNAVAILABLE"
+                or not trade_evidence["reason"]
+                or trade_evidence["review_digest"] is not None
+                or trade_evidence["used_for_contributions"]
+            ):
+                fail("unavailable trade evidence is inconsistent")
+            expected_trade_orders = expected_trade_fills = expected_trade_trips = 0
+        else:
+            validate_trade_review_document(trade_review)
+            trade_digest = hashlib.sha256(
+                json.dumps(trade_review, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if trade_evidence["review_digest"] != trade_digest:
+                fail("trade review digest does not bind normalized evidence")
+            if (
+                trade_review["start"] != period["requested_start"]
+                or trade_review["end"] != period["requested_end"]
+                or trade_review["base_currency"] != payload["base_currency"]
+                or trade_review["source_snapshot_as_of"] != valuations[-1]["as_of"]
+                or trade_review["coverage"]["source_snapshot_id"] != source_ids[-1]
+            ):
+                fail("trade evidence period, currency, or source snapshot is inconsistent")
+            fatal_trade_codes = {
+                "CONTEXT_FAILED",
+                "CONTEXT_OMITTED_BUDGET",
+                "CORPORATE_ACTION_EVIDENCE_UNSUPPORTED",
+                "NONTRADE_EVENTS_EXCLUDED",
+                "ORPHAN_FILL",
+                "ORDER_MISSING_FILLS",
+                "ORDER_FILL_QTY_MISMATCH",
+                "ORDER_STATUS_CONFLICT",
+                "UNMATCHED_SELL",
+                "SOURCE_UNAVAILABLE",
+            }
+            observed_trade_codes = {item["code"] for item in trade_review["quality_issues"]}
+            ending_identities = {
+                item["identity"] for item in contributions if item["evidence"]["end_present"]
+            }
+            open_lot_identities = {item["identity"] for item in trade_review["open_lots"]}
+            trade_is_authoritative = not (observed_trade_codes & fatal_trade_codes) and (
+                open_lot_identities <= ending_identities
+            )
+            if (trade_evidence["status"] == "COMPLETE") != trade_is_authoritative:
+                fail("trade evidence authority is not reconstructed from normalized evidence")
+            if trade_evidence["status"] == "COMPLETE":
+                if trade_evidence["reason"] is not None:
+                    fail("complete trade evidence cannot have an unavailable reason")
+            elif trade_evidence["used_for_contributions"] or not trade_evidence["reason"]:
+                fail("unavailable trade evidence cannot authorize contributions")
+            if trade_evidence["used_for_contributions"] != (
+                trade_evidence["status"] == "COMPLETE" and len(source_ids) == 1
+            ):
+                fail("trade contribution authority path is inconsistent")
+            expected_trade_orders = len(trade_review["normalized_orders"])
+            expected_trade_fills = len(trade_review["normalized_fills"])
+            expected_trade_trips = len(trade_review["round_trips"])
+            referenced_trip_indexes: list[int] = []
+            for item in contributions:
+                evidence = item["evidence"]
+                indexes = evidence.get("trade_round_trip_indexes")
+                if indexes is None:
+                    continue
+                if (
+                    evidence.get("trade_review_id") != trade_review["review_id"]
+                    or evidence.get("trade_review_digest") != trade_digest
+                    or indexes != sorted(set(indexes))
+                    or any(index >= expected_trade_trips for index in indexes)
+                ):
+                    fail("symbol FIFO evidence references are inconsistent")
+                referenced_trip_indexes.extend(indexes)
+                trips = [trade_review["round_trips"][index] for index in indexes]
+                if any(trip["identity"] != item["identity"] for trip in trips):
+                    fail("symbol FIFO evidence crosses canonical identities")
+                trip_accounts = {trip["account_ref"] for trip in trips}
+                if not trip_accounts <= set(item["account_refs"]):
+                    fail("symbol FIFO evidence crosses contribution accounts")
+                local: dict[str, Decimal] = {}
+                for trip in trips:
+                    currency = trip["currency"]
+                    local[currency] = local.get(currency, Decimal(0)) + decimal(
+                        trip["realized_pl_local"]
+                    )
+                if {
+                    key: decimal(value)
+                    for key, value in evidence.get("realized_local_by_currency", {}).items()
+                } != local:
+                    fail("symbol local-currency FIFO buckets do not reconcile")
+                if item["realized_pnl_base"] is not None:
+                    if any(trip["realized_pl_base"] is None for trip in trips) or decimal(
+                        item["realized_pnl_base"]
+                    ) != sum((decimal(trip["realized_pl_base"]) for trip in trips), Decimal(0)):
+                        fail("symbol FIFO realized base P&L does not reconcile")
+            if trade_evidence["used_for_contributions"] and sorted(referenced_trip_indexes) != list(
+                range(expected_trade_trips)
+            ):
+                fail("FIFO round trips are omitted or double counted")
+        if (
+            coverage["trade_orders"] != expected_trade_orders
+            or coverage["trade_fills"] != expected_trade_fills
+            or coverage["trade_round_trips"] != expected_trade_trips
+        ):
+            fail("trade evidence coverage does not reconcile")
 
         flows = payload["flow_evidence"]["flows"]
         if coverage["flow_rows"] != len(flows):
@@ -2072,6 +2236,10 @@ def validate_performance_document(
                 "PNL_FIELDS_INCOMPLETE",
                 "realized/unrealized base P&L is incomplete",
             ),
+            "TRADE_FIFO_BASE_FX_UNAVAILABLE": (
+                "TRADE_FIFO_BASE_FX_UNAVAILABLE",
+                "FIFO realized gross P&L is retained only in local-currency buckets because transaction-date base FX is unavailable",
+            ),
         }
         for item in contributions:
             reason = contribution_reason_details.get(item["method"])
@@ -2096,19 +2264,41 @@ def validate_performance_document(
                         "detail": "at least two common adjusted-close points are required for reconstruction",
                     }
                 )
-        if any(
+        reconstruction_without_realized = any(
             item["method"]
             in {
                 "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE",
                 "RECONSTRUCTION_EVIDENCE_INCOMPLETE",
             }
             for item in contributions
-        ):
+        )
+        if reconstruction_without_realized and payload["trade_evidence"]["review"] is None:
             expected_reasons.append(
                 {
                     "code": "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE",
                     "scope": "symbol_contributions",
                     "detail": "no pinned normalized trade source was supplied; realized P&L and exited positions are excluded",
+                }
+            )
+        elif (
+            reconstruction_without_realized and payload["trade_evidence"]["status"] == "UNAVAILABLE"
+        ):
+            expected_reasons.append(
+                {
+                    "code": "TRADE_HISTORY_UNAVAILABLE",
+                    "scope": "trade_evidence",
+                    "detail": payload["trade_evidence"]["reason"],
+                }
+            )
+        if (
+            payload["trade_evidence"]["used_for_contributions"]
+            and payload["coverage"]["trade_round_trips"]
+        ):
+            expected_reasons.append(
+                {
+                    "code": "TRADE_FEES_UNAVAILABLE",
+                    "scope": "symbol_contributions",
+                    "detail": "FIFO realized P&L is gross pre-fee because authoritative fee evidence is unavailable",
                 }
             )
         if gaps:

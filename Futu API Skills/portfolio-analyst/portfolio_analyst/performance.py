@@ -17,6 +17,7 @@ from typing import Any, Mapping, Protocol, Sequence
 from .models import PortfolioSnapshot, _deep_freeze, _json_value
 from .rendering import markdown_text, terminal_text
 from .snapshot_io import snapshot_from_document
+from .trade_review import TradeReview
 
 
 MAX_ATTRIBUTION_SNAPSHOTS = 366
@@ -239,6 +240,26 @@ class PriceEvidence:
 
 
 @dataclass(frozen=True)
+class TradeAttributionEvidence:
+    status: str
+    reason: str | None
+    review_digest: str | None
+    review: Mapping[str, Any] | None
+    used_for_contributions: bool
+
+    def __post_init__(self) -> None:
+        if self.status not in {"COMPLETE", "UNAVAILABLE"}:
+            raise AttributionInputError("trade attribution evidence status is invalid")
+        object.__setattr__(
+            self, "review", None if self.review is None else _deep_freeze(dict(self.review))
+        )
+
+    @classmethod
+    def unavailable(cls, reason: str) -> TradeAttributionEvidence:
+        return cls("UNAVAILABLE", reason, None, None, False)
+
+
+@dataclass(frozen=True)
 class PerformanceAttributionReport:
     schema_version: str
     attribution_id: str
@@ -263,6 +284,7 @@ class PerformanceAttributionReport:
     top_contributors: tuple[SymbolContribution, ...]
     top_detractors: tuple[SymbolContribution, ...]
     price_evidence: tuple[PriceEvidence, ...]
+    trade_evidence: TradeAttributionEvidence
     flow_evidence: ExternalFlowEvidence
     external_flow_base: Decimal | None
     internal_transfer_base: Decimal | None
@@ -355,6 +377,7 @@ class PerformanceAttributionReport:
                 ]
                 or ["- None"]
             ),
+            f"Trade evidence: {safe(json.dumps(_json_value(self.trade_evidence), ensure_ascii=False, sort_keys=True))}",
             f"Flow evidence: {safe(json.dumps(self.flow_evidence.to_dict(), ensure_ascii=False, sort_keys=True))}",
             "Quality reasons:",
             *(
@@ -442,6 +465,14 @@ class PerformanceAttributionReport:
                 for item in self.price_evidence
             ]
             or ["- No price series used; attribution is based on snapshot P&L fields."]
+        )
+        lines.extend(
+            [
+                "",
+                "## Trade traceability",
+                "",
+                f"- {md(json.dumps(_json_value(self.trade_evidence), ensure_ascii=False, sort_keys=True))}",
+            ]
         )
         lines.extend(["", "## Quality and limitations", ""])
         lines.extend(
@@ -1017,6 +1048,222 @@ def _reconstructed_contributions(
     return tuple(output), reasons
 
 
+def _trade_attribution_evidence(
+    trade_history: TradeReview | None,
+    *,
+    start: date,
+    end: date,
+    snapshot: PortfolioSnapshot,
+    use_contributions: bool,
+    unavailable_reason: str | None,
+) -> TradeAttributionEvidence:
+    if trade_history is None:
+        return TradeAttributionEvidence.unavailable(
+            unavailable_reason or "authoritative normalized trade history was not supplied"
+        )
+    from .schema import validate_trade_review_document
+
+    document = trade_history.to_dict()
+    try:
+        validate_trade_review_document(document)
+    except Exception as exc:
+        raise AttributionInputError("trade history semantics are invalid") from exc
+    if (
+        trade_history.start != start
+        or trade_history.end != end
+        or trade_history.base_currency != snapshot.base_currency
+        or trade_history.source_snapshot_as_of != snapshot.as_of
+        or trade_history.coverage.get("source_snapshot_id") != snapshot.snapshot_id
+    ):
+        raise AttributionInputError("trade history period, currency, or source snapshot mismatch")
+    account_refs = {item.account_ref for item in snapshot.accounts}
+    if any(
+        item.account_ref not in account_refs
+        for item in (*trade_history.normalized_orders, *trade_history.normalized_fills)
+    ):
+        raise AttributionInputError("trade history account aliases do not match the snapshot")
+    fatal_codes = {
+        "CONTEXT_FAILED",
+        "CONTEXT_OMITTED_BUDGET",
+        "CORPORATE_ACTION_EVIDENCE_UNSUPPORTED",
+        "NONTRADE_EVENTS_EXCLUDED",
+        "ORPHAN_FILL",
+        "ORDER_MISSING_FILLS",
+        "ORDER_FILL_QTY_MISMATCH",
+        "ORDER_STATUS_CONFLICT",
+        "UNMATCHED_SELL",
+        "SOURCE_UNAVAILABLE",
+    }
+    observed_codes = {str(item["code"]) for item in trade_history.quality_issues}
+    current_identities = set(_group_positions(snapshot))
+    unmatched_open_lot = any(
+        item.identity not in current_identities for item in trade_history.open_lots
+    )
+    if observed_codes & fatal_codes or unmatched_open_lot:
+        return TradeAttributionEvidence(
+            "UNAVAILABLE",
+            "trade history contains incomplete contexts, opening inventory, nontrade events, or order/fill conflicts",
+            hashlib.sha256(
+                json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            document,
+            False,
+        )
+    digest = hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return TradeAttributionEvidence("COMPLETE", None, digest, document, use_contributions)
+
+
+def _merge_trade_fifo_contributions(
+    contributions: Sequence[SymbolContribution],
+    trade_evidence: TradeAttributionEvidence,
+) -> tuple[tuple[SymbolContribution, ...], list[dict[str, str]]]:
+    if not trade_evidence.used_for_contributions or trade_evidence.review is None:
+        return tuple(contributions), []
+    trips = tuple(trade_evidence.review["round_trips"])
+    open_identities = {item["identity"] for item in trade_evidence.review["open_lots"]}
+    by_identity: dict[str, list[tuple[int, Mapping[str, Any]]]] = {}
+    for index, trip in enumerate(trips):
+        by_identity.setdefault(str(trip["identity"]), []).append((index, trip))
+    output = {item.identity: item for item in contributions}
+    reasons: list[dict[str, str]] = []
+    for identity, indexed in sorted(by_identity.items()):
+        local_by_currency: dict[str, Decimal] = {}
+        for _index, trip in indexed:
+            currency = str(trip["currency"])
+            local_by_currency[currency] = local_by_currency.get(currency, Decimal(0)) + Decimal(
+                trip["realized_pl_local"]
+            )
+        base_values = [trip["realized_pl_base"] for _index, trip in indexed]
+        existing = output.get(identity)
+        evidence = (
+            dict(existing.evidence)
+            if existing is not None
+            else {
+                "start_snapshot_id": trade_evidence.review["coverage"]["source_snapshot_id"],
+                "end_snapshot_id": trade_evidence.review["coverage"]["source_snapshot_id"],
+                "start_present": False,
+                "end_present": False,
+                "start_rows": 0,
+                "end_rows": 0,
+            }
+        )
+        evidence.update(
+            {
+                "trade_review_id": trade_evidence.review["review_id"],
+                "trade_review_digest": trade_evidence.review_digest,
+                "trade_round_trip_indexes": tuple(index for index, _trip in indexed),
+                "realized_local_by_currency": local_by_currency,
+            }
+        )
+        market, symbol = identity.split(".", 1)
+        accounts = tuple(sorted({str(trip["account_ref"]) for _index, trip in indexed}))
+        if any(value is None for value in base_values) or len(local_by_currency) != 1:
+            reasons.append(
+                {
+                    "code": "TRADE_FIFO_BASE_FX_UNAVAILABLE",
+                    "scope": identity,
+                    "detail": "FIFO realized gross P&L is retained only in local-currency buckets because transaction-date base FX is unavailable",
+                }
+            )
+            if existing is None:
+                output[identity] = SymbolContribution(
+                    identity,
+                    market,
+                    symbol,
+                    accounts,
+                    "UNAVAILABLE",
+                    "TRADE_FIFO_BASE_FX_UNAVAILABLE",
+                    None,
+                    None,
+                    None,
+                    "UNKNOWN",
+                    "UNKNOWN",
+                    (),
+                    evidence,
+                )
+            else:
+                output[identity] = replace(
+                    existing,
+                    account_refs=tuple(sorted(set(existing.account_refs) | set(accounts))),
+                    status="UNAVAILABLE",
+                    method="TRADE_FIFO_BASE_FX_UNAVAILABLE",
+                    pnl_base=None,
+                    realized_pnl_base=None,
+                    evidence=evidence,
+                )
+            continue
+        realized = sum((Decimal(value) for value in base_values), Decimal(0))
+        if existing is None:
+            if identity in open_identities:
+                reasons.append(
+                    {
+                        "code": "TRADE_OPEN_LOT_POSITION_MISMATCH",
+                        "scope": identity,
+                        "detail": "FIFO leaves an open lot but the ending snapshot has no matching current position",
+                    }
+                )
+                continue
+            output[identity] = SymbolContribution(
+                identity,
+                market,
+                symbol,
+                accounts,
+                "ESTIMATED",
+                "TRADE_FIFO_REALIZED_GROSS_PRE_FEE",
+                realized,
+                realized,
+                Decimal(0),
+                "UNKNOWN",
+                "UNKNOWN",
+                (),
+                evidence,
+            )
+        else:
+            unrealized = existing.unrealized_pnl_base
+            output[identity] = replace(
+                existing,
+                account_refs=tuple(sorted(set(existing.account_refs) | set(accounts))),
+                status="ESTIMATED",
+                method=(
+                    "TRADE_FIFO_REALIZED_PLUS_PRICE_UNREALIZED_ESTIMATE"
+                    if unrealized is not None
+                    else "TRADE_FIFO_REALIZED_GROSS_PRE_FEE"
+                ),
+                pnl_base=realized + (unrealized or Decimal(0)),
+                realized_pnl_base=realized,
+                evidence=evidence,
+            )
+    for identity, item in tuple(output.items()):
+        if item.pnl_base is None or item.realized_pnl_base is not None:
+            continue
+        evidence = dict(item.evidence)
+        evidence.update(
+            {
+                "trade_review_id": trade_evidence.review["review_id"],
+                "trade_review_digest": trade_evidence.review_digest,
+                "trade_round_trip_indexes": (),
+                "realized_local_by_currency": {},
+            }
+        )
+        output[identity] = replace(
+            item,
+            method="TRADE_FIFO_REALIZED_PLUS_PRICE_UNREALIZED_ESTIMATE",
+            realized_pnl_base=Decimal(0),
+            evidence=evidence,
+        )
+    if by_identity:
+        reasons.append(
+            {
+                "code": "TRADE_FEES_UNAVAILABLE",
+                "scope": "symbol_contributions",
+                "detail": "FIFO realized P&L is gross pre-fee because authoritative fee evidence is unavailable",
+            }
+        )
+    return tuple(output[key] for key in sorted(output)), reasons
+
+
 def _twr(
     interval: SnapshotInterval, flow_evidence: ExternalFlowEvidence
 ) -> tuple[str, str | None, Decimal | None, Decimal | None, Decimal | None, list[dict[str, str]]]:
@@ -1109,7 +1356,13 @@ def analyze_performance(
     end: date,
     flow_evidence: ExternalFlowEvidence | None = None,
     price_provider: PriceProvider | None = None,
+    trade_history: TradeReview | None = None,
+    trade_unavailable_reason: str | None = None,
 ) -> PerformanceAttributionReport:
+    if trade_history is not None and trade_unavailable_reason is not None:
+        raise AttributionInputError(
+            "trade history and an unavailable reason cannot both be supplied"
+        )
     interval = select_snapshot_interval(snapshots, start=start, end=end)
     selected = interval.snapshots
     first = selected[0]
@@ -1119,6 +1372,14 @@ def analyze_performance(
         raise AttributionInputError("snapshot environment changes inside the period")
     if any(tuple(item.accounts) != tuple(first.accounts) for item in selected[1:]):
         raise AttributionInputError("snapshot account identities change inside the period")
+    trade_evidence = _trade_attribution_evidence(
+        trade_history,
+        start=start,
+        end=end,
+        snapshot=selected[-1],
+        use_contributions=len(selected) == 1,
+        unavailable_reason=trade_unavailable_reason,
+    )
     requested_identities = tuple(
         sorted(
             set(_group_positions(selected[-1]))
@@ -1138,8 +1399,32 @@ def analyze_performance(
     )
     if len(selected) == 1:
         contributions, reasons = _reconstructed_contributions(selected[-1], prices)
+        contributions, trade_reasons = _merge_trade_fifo_contributions(
+            contributions, trade_evidence
+        )
+        if trade_evidence.used_for_contributions:
+            reasons = [
+                item
+                for item in reasons
+                if item["code"] != "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE"
+            ]
+        reasons.extend(trade_reasons)
     else:
         contributions, reasons = _contributions(first, selected[-1])
+    if trade_history is not None and trade_evidence.status == "UNAVAILABLE":
+        reasons = [
+            item
+            for item in reasons
+            if item["code"] != "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE"
+        ]
+        reasons.append(
+            {
+                "code": "TRADE_HISTORY_UNAVAILABLE",
+                "scope": "trade_evidence",
+                "detail": trade_evidence.reason
+                or "authoritative normalized trade history is unavailable",
+            }
+        )
     if not interval.continuous:
         reasons.append(
             {
@@ -1201,7 +1486,9 @@ def analyze_performance(
             (item.realized_pnl_base for item in available if item.realized_pnl_base is not None),
             Decimal(0),
         )
-        if available and all(item.realized_pnl_base is not None for item in available)
+        if available
+        and all(item.realized_pnl_base is not None for item in available)
+        and not any(item.method == "TRADE_FIFO_BASE_FX_UNAVAILABLE" for item in contributions)
         else None
     )
     unrealized = (
@@ -1302,7 +1589,7 @@ def analyze_performance(
                 "detail": "the audited adjusted-close provider is unavailable; snapshot P&L attribution remains isolated",
             }
         )
-    elif len(prices) < len(contributions):
+    elif len(prices) < len(requested_identities):
         reasons.append(
             {
                 "code": "PRICE_BUDGET_LIMIT",
@@ -1362,9 +1649,17 @@ def analyze_performance(
         limitations.append(
             "Reconstructed output is LOW confidence and does not claim complete account P&L."
         )
+        if trade_evidence.used_for_contributions:
+            limitations.append(
+                "Realized FIFO contribution covers only complete in-period normalized buy/sell evidence and is gross pre-fee; opening inventory, transfers, corporate actions, and conflicted orders fail closed."
+            )
+        else:
+            limitations.append(
+                "Authoritative normalized trade history is unavailable; reconstruction covers current holdings only and excludes realized P&L and exited positions."
+            )
     if return_status != "AVAILABLE":
         limitations.append(
-            "Portfolio return and TWR are disabled without complete external-flow and valuation coverage."
+            "Portfolio return and TWR are disabled for reconstructed mode or without complete external-flow and valuation coverage."
         )
     draft = PerformanceAttributionReport(
         "1.0",
@@ -1380,11 +1675,20 @@ def analyze_performance(
             "canonical_identities": len(contributions),
             "available_contributions": len(available),
             "unavailable_contributions": len(contributions) - len(available),
-            "price_requested": len(contributions),
+            "price_requested": len(requested_identities),
             "price_analyzed": len(prices),
-            "price_omitted": len(contributions) - len(prices),
+            "price_omitted": len(requested_identities) - len(prices),
             "price_available": sum(item.status == "AVAILABLE" for item in prices),
             "price_aligned": sum(len(item.aligned_points) >= 2 for item in prices),
+            "trade_orders": len(trade_evidence.review["normalized_orders"])
+            if trade_evidence.review is not None
+            else 0,
+            "trade_fills": len(trade_evidence.review["normalized_fills"])
+            if trade_evidence.review is not None
+            else 0,
+            "trade_round_trips": len(trade_evidence.review["round_trips"])
+            if trade_evidence.review is not None
+            else 0,
             "flow_rows": len(flow_evidence.flows),
         },
         mode,
@@ -1402,6 +1706,7 @@ def analyze_performance(
         contributors,
         detractors,
         prices,
+        trade_evidence,
         flow_evidence,
         external_flow,
         internal_flow,
@@ -1416,6 +1721,7 @@ def analyze_performance(
         (
             "symbol_pnl = delta(cumulative_realized_pl_base) + delta(cumulative_unrealized_pl_base)",
             "reconstructed_gross_unrealized_pnl_base = ending_quantity * (aligned_ending_adjusted_close - aligned_beginning_adjusted_close) * ending_fx_to_base; only base-currency FX=1 is authorized",
+            "fifo_realized_gross_local = sum(matched_quantity * (sell_price - buy_price)) by account, canonical identity, and currency; base-currency fills convert exactly 1:1 and non-base fills require transaction-date FX",
             "theme_split_pnl = symbol_pnl / number_of_themes; UNKNOWN receives the full amount when no theme exists",
             "TWR = product((ending_NAV - external_flows_in_subperiod) / beginning_NAV) - 1; flows are adjusted at subperiod end",
         ),

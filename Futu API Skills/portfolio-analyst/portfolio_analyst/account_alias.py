@@ -56,6 +56,14 @@ class AccountAliasStore:
         self.data_home = data_home.expanduser().absolute()
 
     def load_or_create(self) -> AccountAliaser:
+        return self._load(create=True)
+
+    def load(self) -> AccountAliaser:
+        """Load the stable alias key without creating directories or files."""
+
+        return self._load(create=False)
+
+    def _load(self, *, create: bool) -> AccountAliaser:
         if os.name != "posix":
             raise AccountAliasError(
                 "UNSUPPORTED_PLATFORM_SECURITY: account alias repository mutation disabled"
@@ -73,12 +81,15 @@ class AccountAliasStore:
             ):
                 raise AccountAliasError("private data home must have mode 0700")
             try:
-                config_fd = open_or_create_private_directory(root_fd, "config", flags)
+                if create:
+                    config_fd = open_or_create_private_directory(root_fd, "config", flags)
+                else:
+                    config_fd = os.open("config", flags, dir_fd=root_fd)
             except (OSError, ValueError) as exc:
                 raise AccountAliasError("private config path must not be a symlink") from exc
             try:
                 try:
-                    key = self._read_or_create_key(config_fd)
+                    key = self._read_or_create_key(config_fd, create=create)
                 except OSError as exc:
                     raise AccountAliasError("account alias key state is inaccessible") from exc
                 if not self._config_anchor_matches(
@@ -116,11 +127,13 @@ class AccountAliasStore:
         finally:
             os.close(check_fd)
 
-    def _read_or_create_key(self, directory_fd: int) -> bytes:
+    def _read_or_create_key(self, directory_fd: int, *, create: bool = True) -> bytes:
         read_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
             fd = os.open(self.KEY_NAME, read_flags, dir_fd=directory_fd)
         except FileNotFoundError:
+            if not create:
+                raise AccountAliasError("stable account alias key is unavailable") from None
             temporary = f".{self.KEY_NAME}.{secrets.token_hex(8)}.tmp"
             create_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
             temp_fd = os.open(temporary, create_flags, 0o600, dir_fd=directory_fd)

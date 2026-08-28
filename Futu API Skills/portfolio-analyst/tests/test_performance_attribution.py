@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.account_alias import AccountAliasStore
 from portfolio_analyst.models import FxRateEvidence
 from portfolio_analyst.performance import (
     AttributionInputError,
@@ -22,6 +23,7 @@ from portfolio_analyst.schema import ReportSemanticError, validate_performance_d
 from portfolio_analyst.snapshot_repository import SnapshotRepository
 from portfolio_analyst.snapshot_repository import SnapshotRepositoryError
 from portfolio_analyst.persistence import SnapshotStore
+from portfolio_analyst.trade_review import build_trade_review
 from portfolio_analyst import cli
 from test_risk_analysis import reconciled_snapshot, snapshot as make_snapshot
 
@@ -147,6 +149,9 @@ def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_m
         "price_omitted": 0,
         "price_available": 3,
         "price_aligned": 3,
+        "trade_orders": 0,
+        "trade_fills": 0,
+        "trade_round_trips": 0,
         "flow_rows": 0,
     }
     golden = json.loads((FIXTURES / "performance_attribution_golden_snippet.json").read_text())
@@ -465,6 +470,67 @@ def _after_us_close(snapshot):
     return _identified(snapshot, as_of=snapshot.as_of.replace(hour=22))
 
 
+def _authoritative_closed_trade_review(
+    current,
+    *,
+    code="US.DDD",
+    currency="USD",
+    buy_price="10",
+    sell_price="12",
+    event_type="TRADE",
+    include_sell=True,
+    corporate_action_evidence_status="AVAILABLE",
+):
+    account_ref = current.accounts[0].account_ref
+    executions = [("BUY", buy_price, "2026-08-27 10:00:00")]
+    if include_sell:
+        executions.append(("SELL", sell_price, "2026-08-27 11:00:00"))
+    orders = [
+        {
+            "order_id": f"order-{side.lower()}",
+            "account_ref": account_ref,
+            "code": code,
+            "side": side,
+            "status": "FILLED_ALL",
+            "qty": "1",
+            "price": price,
+            "dealt_qty": "1",
+            "create_time": at,
+            "updated_time": at,
+            "currency": currency,
+        }
+        for side, price, at in executions
+    ]
+    deals = [
+        {
+            "deal_id": f"fill-{side.lower()}",
+            "order_id": f"order-{side.lower()}",
+            "account_ref": account_ref,
+            "code": code,
+            "side": side,
+            "qty": "1",
+            "price": price,
+            "create_time": at,
+            "currency": currency,
+            "fx_to_base": "1" if currency == current.base_currency else "0.125",
+            "event_type": event_type,
+        }
+        for side, price, at in executions
+    ]
+    return build_trade_review(
+        orders=orders,
+        deals=deals,
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        base_currency=current.base_currency,
+        portfolio_nav_base=current.nav_base,
+        source_snapshot_id=current.snapshot_id,
+        source_snapshot_as_of=current.as_of,
+        acquired_at=current.as_of,
+        corporate_action_evidence_status=corporate_action_evidence_status,
+    )
+
+
 def test_one_current_snapshot_with_aligned_prices_reconstructs_gross_unrealized_only():
     current = _after_us_close(_pnl_start())
 
@@ -492,6 +558,215 @@ def test_one_current_snapshot_with_aligned_prices_reconstructs_gross_unrealized_
         for reason in report.quality_reasons
     )
     validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_authoritative_fifo_adds_closed_symbol_realized_gross_without_double_counting():
+    current = _after_us_close(_pnl_start())
+    trade_history = _authoritative_closed_trade_review(current)
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=trade_history,
+    )
+
+    closed = next(item for item in report.symbol_contributions if item.identity == "US.DDD")
+    assert closed.method == "TRADE_FIFO_REALIZED_GROSS_PRE_FEE"
+    assert closed.realized_pnl_base == Decimal("2")
+    assert closed.unrealized_pnl_base == Decimal("0")
+    assert report.total_pnl_base == Decimal("32")
+    assert report.realized_pnl_base == Decimal("2")
+    assert report.unrealized_pnl_base == Decimal("30")
+    assert report.trade_evidence.status == "COMPLETE"
+    assert report.trade_evidence.review_digest
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_cross_currency_fifo_retains_local_bucket_without_false_base_realized_total():
+    current = _after_us_close(_pnl_start())
+    trade_history = _authoritative_closed_trade_review(
+        current,
+        code="HK.00001",
+        currency="HKD",
+        buy_price="80",
+        sell_price="88",
+    )
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=trade_history,
+    )
+
+    closed = next(item for item in report.symbol_contributions if item.identity == "HK.00001")
+    assert closed.method == "TRADE_FIFO_BASE_FX_UNAVAILABLE"
+    assert closed.pnl_base is None
+    assert closed.evidence["realized_local_by_currency"] == {"HKD": Decimal("8")}
+    assert report.total_pnl_base == Decimal("30")
+    assert report.realized_pnl_base is None
+    assert report.contribution_status == "PARTIAL"
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_nontrade_or_conflicting_trade_history_fails_closed_without_losing_price_reconstruction():
+    current = _after_us_close(_pnl_start())
+    unsafe_history = _authoritative_closed_trade_review(current, event_type="TRANSFER")
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=unsafe_history,
+    )
+
+    assert report.trade_evidence.status == "UNAVAILABLE"
+    assert report.trade_evidence.used_for_contributions is False
+    assert report.total_pnl_base == Decimal("30")
+    assert all(item.identity != "US.DDD" for item in report.symbol_contributions)
+    assert any(item["code"] == "TRADE_HISTORY_UNAVAILABLE" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+    forged = report.to_dict()
+    forged["trade_evidence"]["status"] = "COMPLETE"
+    forged["trade_evidence"]["reason"] = None
+    canonical = dict(forged)
+    canonical.pop("attribution_id")
+    forged["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="trade evidence authority"):
+        validate_performance_document(forged, source_snapshots=(current,))
+
+
+def test_unsupported_corporate_action_coverage_cannot_authorize_fifo():
+    current = _after_us_close(_pnl_start())
+    incomplete_history = _authoritative_closed_trade_review(
+        current, corporate_action_evidence_status="UNSUPPORTED_EVIDENCE"
+    )
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=incomplete_history,
+    )
+
+    assert report.trade_evidence.status == "UNAVAILABLE"
+    assert all(item.identity != "US.DDD" for item in report.symbol_contributions)
+    assert any(item["code"] == "TRADE_HISTORY_UNAVAILABLE" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_trade_open_lot_missing_from_current_snapshot_fails_closed():
+    current = _after_us_close(_pnl_start())
+    unsafe_history = _authoritative_closed_trade_review(current, include_sell=False)
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=unsafe_history,
+    )
+
+    assert report.trade_evidence.status == "UNAVAILABLE"
+    assert report.trade_evidence.used_for_contributions is False
+    assert all(item.identity != "US.DDD" for item in report.symbol_contributions)
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_snapshot_cumulative_pnl_path_never_double_counts_fifo_trade_evidence():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+    trade_history = _authoritative_closed_trade_review(end)
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=trade_history,
+    )
+
+    assert report.mode == "ACCURATE_PNL"
+    assert report.total_pnl_base == Decimal("10")
+    assert all(item.identity != "US.DDD" for item in report.symbol_contributions)
+    assert report.trade_evidence.status == "COMPLETE"
+    assert report.trade_evidence.used_for_contributions is False
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
+def test_embedded_normalized_trade_evidence_is_semantically_bound_after_rehash():
+    current = _after_us_close(_pnl_start())
+    payload = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=_authoritative_closed_trade_review(current),
+    ).to_dict()
+    review = payload["trade_evidence"]["review"]
+    review["normalized_fills"][1]["price"] = "999"
+    trade_body = dict(review)
+    trade_body.pop("review_id")
+    review["review_id"] = (
+        "tr_"
+        + hashlib.sha256(
+            json.dumps(trade_body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+    )
+    review_digest = hashlib.sha256(
+        json.dumps(review, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    payload["trade_evidence"]["review_digest"] = review_digest
+    for item in payload["symbol_contributions"]:
+        if "trade_review_digest" in item["evidence"]:
+            item["evidence"]["trade_review_id"] = review["review_id"]
+            item["evidence"]["trade_review_digest"] = review_digest
+    canonical = dict(payload)
+    canonical.pop("attribution_id")
+    payload["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+
+    with pytest.raises(ReportSemanticError, match="performance|trade"):
+        validate_performance_document(payload, source_snapshots=(current,))
+
+
+def test_fifo_contribution_account_alias_is_bound_to_trade_and_snapshot_evidence():
+    current = _after_us_close(_pnl_start())
+    payload = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=_authoritative_closed_trade_review(current),
+    ).to_dict()
+    closed = next(item for item in payload["symbol_contributions"] if item["identity"] == "US.DDD")
+    closed["account_refs"] = ["acc_forged"]
+    canonical = dict(payload)
+    canonical.pop("attribution_id")
+    payload["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+    )
+
+    with pytest.raises(ReportSemanticError, match="performance|source|account"):
+        validate_performance_document(payload, source_snapshots=(current,))
 
 
 def test_one_snapshot_without_any_usable_price_evidence_is_unavailable_not_an_input_error():
@@ -867,6 +1142,64 @@ def test_performance_cli_accepts_one_snapshot_and_reports_unavailable_without_pr
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "UNAVAILABLE"
     assert payload["source_snapshot_ids"] == [current.snapshot_id]
+
+
+def test_performance_cli_collects_pinned_trade_history_with_existing_stable_alias_key(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    current = _after_us_close(_pnl_start())
+    SnapshotRepository(home).save(current)
+    AccountAliasStore(home).load_or_create()
+    expected_trade_history = _authoritative_closed_trade_review(current)
+
+    class FakeAdapter:
+        def read_private_json(self, name, arguments, *, timeout=30):
+            del timeout
+            assert name == "get_kline"
+            return {
+                "code": arguments[0],
+                "ktype": "1d",
+                "source": "history",
+                "data": [
+                    {"time": "2026-08-26 00:00:00", "close": "100"},
+                    {"time": "2026-08-27 00:00:00", "close": "110"},
+                ],
+            }
+
+    class FakeTradeService:
+        def __init__(self, adapter, *, aliaser):
+            assert isinstance(adapter, FakeAdapter)
+            assert aliaser.provenance == "STABLE"
+
+        def review(self, **kwargs):
+            assert kwargs["portfolio_snapshot"].snapshot_id == current.snapshot_id
+            return expected_trade_history
+
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: Path("/pinned/futuapi"))
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: FakeAdapter())
+    monkeypatch.setattr(cli, "FutuTradeHistoryService", FakeTradeService)
+
+    assert (
+        cli.main(
+            [
+                "performance",
+                "--from",
+                "2026-08-26",
+                "--to",
+                "2026-08-27",
+                "--json",
+                "--no-save",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["trade_evidence"]["status"] == "COMPLETE"
+    assert payload["trade_evidence"]["used_for_contributions"] is True
+    assert any(item["identity"] == "US.DDD" for item in payload["symbol_contributions"])
 
 
 def test_markdown_and_terminal_renderers_escape_untrusted_classification():
