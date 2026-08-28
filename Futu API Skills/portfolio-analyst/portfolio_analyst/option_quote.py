@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import subprocess
 
 from .futu_adapter import FutuReadError, UnsafeFutuCommand
-from .models import _decimal_text
+from .models import _decimal_text, decimal_fits_report
 
 
 GREEKS = ("delta", "gamma", "vega", "theta", "rho")
@@ -72,7 +72,12 @@ def _finite_decimal(value: object) -> Decimal | None:
     if not parsed.is_finite():
         return None
     parts = parsed.as_tuple()
-    if len(parts.digits) > 256 or abs(parts.exponent) > 1000 or abs(parsed.adjusted()) > 1000:
+    if (
+        len(parts.digits) > 256
+        or abs(parts.exponent) > 1000
+        or abs(parsed.adjusted()) > 1000
+        or not decimal_fits_report(parsed)
+    ):
         return None
     return parsed
 

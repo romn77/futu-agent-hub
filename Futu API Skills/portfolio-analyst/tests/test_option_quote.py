@@ -204,6 +204,29 @@ def test_finite_but_unbounded_decimal_expansion_is_not_accepted():
     assert quote.greeks["delta"] is None
 
 
+@pytest.mark.parametrize("value", ["1e1000", "1e-1000"])
+def test_fixed_point_overflow_is_rejected_independently_for_greek_strike_and_iv(value):
+    quote = parse_option_quote_response(
+        "US.X",
+        {
+            "data": [
+                {
+                    "code": "US.X",
+                    "delta": value,
+                    "gamma": "0.25",
+                    "strike_price": value,
+                    "implied_volatility": value,
+                }
+            ]
+        },
+    )
+
+    assert quote.greeks["delta"] is None
+    assert str(quote.greeks["gamma"]) == "0.25"
+    assert quote.strike is None
+    assert quote.implied_volatility is None
+
+
 def test_futu_option_provider_emits_only_canonical_read_request():
     class Adapter:
         def __init__(self):

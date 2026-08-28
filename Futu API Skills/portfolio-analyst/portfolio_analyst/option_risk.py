@@ -15,7 +15,7 @@ import time
 from typing import Any, Callable, Mapping, Protocol
 from zoneinfo import ZoneInfo
 
-from .models import PortfolioSnapshot, _deep_freeze, _json_value
+from .models import PortfolioSnapshot, _deep_freeze, _json_value, decimal_fits_report
 from .futu_adapter import FutuReadError
 from .option_quote import (
     GREEKS,
@@ -132,6 +132,11 @@ def _reason(code: str, scope: str, detail: str) -> dict[str, str]:
     return {"code": code, "scope": scope, "detail": detail}
 
 
+def _require_structural_decimals(*values: Decimal | None) -> None:
+    if any(value is not None and not decimal_fits_report(value) for value in values):
+        raise OptionRiskInputError("OPTION_STRUCTURAL_DECIMAL_OUT_OF_RANGE")
+
+
 @dataclass(frozen=True)
 class OptionRiskReport:
     payload: Mapping[str, Any]
@@ -226,6 +231,9 @@ def _selection(snapshot: PortfolioSnapshot) -> tuple[list[dict[str, Any]], list[
         )
         contract["gross_abs_market_value_base"] += abs(position.market_value_base)
         contract["leg_count"] += 1
+    _require_structural_decimals(
+        *(contract["gross_abs_market_value_base"] for contract in by_identity.values())
+    )
     option_legs.sort(key=lambda item: (item["identity"], item["account_ref"], item["source_index"]))
     contracts = sorted(
         by_identity.values(),
@@ -486,14 +494,17 @@ def analyze_option_risk(
         and snapshot.data_quality.status == "COMPLETE"
     )
     leg_exposures: list[dict[str, Any]] = []
+    derived_greek_overflows = {name: {"leg_values": 0, "aggregate": False} for name in GREEKS}
     for leg in option_legs:
         quote = quotes.get(leg["identity"])
-        greek_values = {
-            name: None
-            if quote is None or quote.greeks[name] is None
-            else leg["quantity"] * quote.greeks[name]
-            for name in GREEKS
-        }
+        greek_values: dict[str, Decimal | None] = {}
+        for name in GREEKS:
+            unit_greek = None if quote is None else quote.greeks[name]
+            value = None if unit_greek is None else leg["quantity"] * unit_greek
+            if value is not None and not decimal_fits_report(value):
+                derived_greek_overflows[name]["leg_values"] += 1
+                value = None
+            greek_values[name] = value
         leg_exposures.append(
             {
                 **leg,
@@ -513,13 +524,20 @@ def analyze_option_risk(
         available = [
             item["greeks"][name] for item in leg_exposures if item["greeks"][name] is not None
         ]
-        complete = full_population_authority and len(available) == len(option_legs)
+        net = sum(available, Decimal(0))
+        gross_abs = sum((abs(item) for item in available), Decimal(0))
+        aggregate_bounded = decimal_fits_report(net) and decimal_fits_report(gross_abs)
+        if available and not aggregate_bounded:
+            derived_greek_overflows[name]["aggregate"] = True
+        complete = (
+            full_population_authority and len(available) == len(option_legs) and aggregate_bounded
+        )
         status = "COMPLETE" if complete else ("PARTIAL" if available else "UNAVAILABLE")
         greek_aggregates[name] = {
             "unit": RAW_GREEK_UNIT,
             "status": status,
-            "net": sum(available, Decimal(0)) if complete else None,
-            "gross_abs": sum((abs(item) for item in available), Decimal(0)) if complete else None,
+            "net": net if complete else None,
+            "gross_abs": gross_abs if complete else None,
             "coverage": {"available_legs": len(available), "total_legs": len(option_legs)},
         }
         if option_legs and len(available) != len(option_legs):
@@ -528,6 +546,15 @@ def analyze_option_risk(
                     "GREEK_COVERAGE_INCOMPLETE",
                     name,
                     f"{len(available)} of {len(option_legs)} option legs have {name}",
+                )
+            )
+        overflow = derived_greek_overflows[name]
+        if overflow["leg_values"] or overflow["aggregate"]:
+            reasons.append(
+                _reason(
+                    "GREEK_DERIVED_VALUE_OUT_OF_RANGE",
+                    name,
+                    "derived Greek exceeds the fixed-point report boundary",
                 )
             )
 
@@ -569,18 +596,17 @@ def analyze_option_risk(
                 local_date = snapshot.as_of.astimezone(_MARKET_TIMEZONES[contract_market]).date()
                 dte = (date.fromisoformat(expiry) - local_date).days
                 dte_by_market.append({"market": contract_market, "dte": dte, "expired": dte < 0})
+        bucket_net = sum((item["market_value_base"] for item in legs), Decimal(0))
+        bucket_gross = sum((abs(item["market_value_base"]) for item in legs), Decimal(0))
+        _require_structural_decimals(bucket_net, bucket_gross)
         expiry_buckets.append(
             {
                 "expiry": expiry,
                 "dte_by_market": dte_by_market,
                 "leg_count": len(legs),
                 "identities": sorted({item["identity"] for item in legs}),
-                "net_market_value_base": sum(
-                    (item["market_value_base"] for item in legs), Decimal(0)
-                ),
-                "gross_market_value_base": sum(
-                    (abs(item["market_value_base"]) for item in legs), Decimal(0)
-                ),
+                "net_market_value_base": bucket_net,
+                "gross_market_value_base": bucket_gross,
             }
         )
 
@@ -593,16 +619,15 @@ def analyze_option_risk(
             == option_type
         ]
         if legs:
+            bucket_net = sum((item["market_value_base"] for item in legs), Decimal(0))
+            bucket_gross = sum((abs(item["market_value_base"]) for item in legs), Decimal(0))
+            _require_structural_decimals(bucket_net, bucket_gross)
             type_buckets.append(
                 {
                     "option_type": option_type,
                     "leg_count": len(legs),
-                    "net_market_value_base": sum(
-                        (item["market_value_base"] for item in legs), Decimal(0)
-                    ),
-                    "gross_market_value_base": sum(
-                        (abs(item["market_value_base"]) for item in legs), Decimal(0)
-                    ),
+                    "net_market_value_base": bucket_net,
+                    "gross_market_value_base": bucket_gross,
                 }
             )
 
@@ -626,6 +651,8 @@ def analyze_option_risk(
     )
     net_mv = sum((item["market_value_base"] for item in option_legs), Decimal(0))
     gross_mv = sum((abs(item["market_value_base"]) for item in option_legs), Decimal(0))
+    gross_to_nav = None if snapshot.nav_base == 0 else gross_mv / snapshot.nav_base
+    _require_structural_decimals(net_mv, gross_mv, gross_to_nav)
     snapshot_body = snapshot.to_dict()
     quote_capability = (
         "NOT_ACCESSED"
@@ -672,7 +699,7 @@ def analyze_option_risk(
         "source_population": {
             "net_market_value_base": net_mv,
             "gross_market_value_base": gross_mv,
-            "gross_to_nav": None if snapshot.nav_base == 0 else gross_mv / snapshot.nav_base,
+            "gross_to_nav": gross_to_nav,
             "contracts": contracts,
         },
         "quote_evidence": quote_evidence,

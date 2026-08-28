@@ -351,6 +351,92 @@ def test_nonfinite_numeric_greek_does_not_erase_other_fields_and_replays():
     validate_option_risk_document(report)
 
 
+@pytest.mark.parametrize("value", ["1e1000", "1e-1000"])
+def test_fixed_point_quote_overflow_degrades_fields_and_report_still_replays(value):
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(
+            rows={
+                "US.A": {
+                    "delta": value,
+                    "gamma": "0.25",
+                    "strike_price": value,
+                    "implied_volatility": value,
+                }
+            }
+        ),
+        clock=Clock(),
+    ).to_dict()
+
+    leg = report["leg_exposures"][0]
+    assert leg["greeks"]["delta"] is None
+    assert leg["greeks"]["gamma"] == "0.25"
+    assert leg["strike"] is None
+    assert leg["implied_volatility"] is None
+    assert report["greek_aggregates"]["delta"]["coverage"] == {
+        "available_legs": 0,
+        "total_legs": 1,
+    }
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_leg_greek_product_overflow_is_field_local_and_replayable():
+    report = analyze_option_risk(
+        _snapshot((_position("A", quantity="9" * 300),)),
+        quote_provider=Provider(rows={"US.A": {"delta": "9" * 256}}),
+        clock=Clock(),
+    ).to_dict()
+
+    assert report["leg_exposures"][0]["greeks"]["delta"] is None
+    assert report["greek_aggregates"]["delta"]["status"] == "UNAVAILABLE"
+    assert "GREEK_DERIVED_VALUE_OUT_OF_RANGE" in {
+        item["code"] for item in report["quality_reasons"]
+    }
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_greek_aggregate_overflow_suppresses_only_the_portfolio_total():
+    report = analyze_option_risk(
+        _snapshot(
+            (
+                _position("A", account_ref="acct-a", quantity="6" + "0" * 299),
+                _position("A", account_ref="acct-b", quantity="6" + "0" * 299),
+            )
+        ),
+        quote_provider=Provider(rows={"US.A": {"delta": "1" + "0" * 212}}),
+        clock=Clock(),
+    ).to_dict()
+
+    assert all(len(item["greeks"]["delta"]) <= 512 for item in report["leg_exposures"])
+    aggregate = report["greek_aggregates"]["delta"]
+    assert aggregate["coverage"] == {"available_legs": 2, "total_legs": 2}
+    assert aggregate["status"] == "PARTIAL"
+    assert aggregate["net"] is None
+    assert aggregate["gross_abs"] is None
+    assert "GREEK_DERIVED_VALUE_OUT_OF_RANGE" in {
+        item["code"] for item in report["quality_reasons"]
+    }
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_structural_decimal_overflow_fails_closed_before_report_serialization():
+    source = _snapshot(
+        (
+            _position("A", market_value="9" * 512),
+            _position("B", market_value="9" * 512),
+        )
+    )
+
+    with pytest.raises(OptionRiskInputError, match="^OPTION_STRUCTURAL_DECIMAL_OUT_OF_RANGE$"):
+        analyze_option_risk(source, quote_provider=None, clock=Clock())
+
+
 def test_quote_evidence_never_serializes_forbidden_pricing_or_probability_fields():
     report = analyze_option_risk(
         _snapshot((_position("A"),)),

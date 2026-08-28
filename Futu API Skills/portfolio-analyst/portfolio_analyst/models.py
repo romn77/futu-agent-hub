@@ -14,6 +14,30 @@ from .normalization import canonical_currency_provenance, canonical_unknown
 QUALITY_STATES = frozenset(
     {"COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"}
 )
+REPORT_DECIMAL_TEXT_MAX_LENGTH = 512
+
+
+def decimal_fits_report(value: Decimal) -> bool:
+    """Return whether ``_decimal_text`` can emit a schema-bounded value."""
+
+    if not isinstance(value, Decimal) or not value.is_finite():
+        return False
+    if value.is_zero():
+        return True
+    parts = value.as_tuple()
+    digits = list(parts.digits)
+    exponent = int(parts.exponent)
+    while exponent < 0 and len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    sign_length = 1 if parts.sign else 0
+    if exponent >= 0:
+        text_length = sign_length + len(digits) + exponent
+    elif len(digits) + exponent > 0:
+        text_length = sign_length + len(digits) + 1
+    else:
+        text_length = sign_length + 2 - exponent
+    return text_length <= REPORT_DECIMAL_TEXT_MAX_LENGTH
 
 
 def _decimal_text(value: Decimal) -> str:
