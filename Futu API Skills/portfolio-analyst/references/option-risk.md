@@ -12,6 +12,11 @@ and signed base-currency market value; names and codes are not parsed to infer d
 terms. The complete source population is capped at 10,000 positions and is never truncated for
 structural metrics.
 
+At the live source boundary, an explicit `SHORT` position with a positive source quantity is
+normalized to a negative quantity with an auditable quality note. Explicit `LONG`/`SHORT`
+direction conflicts and nonzero quantity/value sign conflicts fail closed. Lifecycle roles such as
+`CORE` and `HEDGE` are not directional evidence.
+
 The official `scripts/quote/get_option_quote.py` file is a capability-specific canonical SHA-256
 pin. Its absence or digest mismatch affects only live option quotes. Core accounts, portfolio,
 K-line, history, and doctor trust retain their existing full pins. A request is valid only when it
@@ -23,9 +28,14 @@ fail before a subprocess starts.
 Supported unique contracts are sorted by gross absolute base market value descending and identity
 ascending. The first 30 are requested sequentially, once each even when held in several accounts.
 Each call is bounded to 5 seconds and 256 KiB; total response bytes are bounded to 4 MiB and total
-wall time to 30 seconds. A daemon worker applies the remaining per-call/total deadline even if the
-provider ignores its own timeout. Three consecutive source failures open the circuit. Remaining contracts
-stay in structural metrics and are marked budget-omitted, circuit-open, or unsupported.
+wall time to 30 seconds. `quote_acquisition_started_at` independently anchors this Phase 6 budget;
+the earlier report `analysis_now` remains snapshot-future authority and does not consume quote time.
+A daemon worker applies the remaining per-call/total deadline even if the provider ignores its own
+timeout. Its first join timeout quarantines the provider for the rest of that analysis, while three
+ordinary consecutive source failures open the circuit. A normalized response that first crosses the
+4 MiB total is represented only by its bounded byte count and SHA-256 overflow marker; all later
+selected contracts are omitted without another provider call. Remaining contracts stay in structural
+metrics and are marked budget-omitted, circuit-open, or unsupported.
 
 ## Raw units and calculations
 
@@ -66,7 +76,8 @@ client `request_started_at` and `request_finished_at` bounds while freshness is 
 `UNVERIFIED`. Evidence uses finite stable reason codes for capability, timeout, audited read,
 source, response-contract, single/total byte budget, total wall budget, and circuit failures; raw
 exception text is never serialized. Runtime validation recomputes canonical response byte counts,
-failure progression, the circuit, request order, and both wall limits.
+overflow progression, provider quarantine/circuit behavior, request order, the independent
+acquisition anchor, and both wall limits.
 
 ## Output, validation, and non-goals
 

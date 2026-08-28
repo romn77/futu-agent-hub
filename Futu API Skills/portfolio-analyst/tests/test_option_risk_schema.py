@@ -1,6 +1,6 @@
 from copy import deepcopy
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -250,6 +250,63 @@ def test_runtime_rejects_rehashed_quote_windows_over_hard_limits(seconds):
         validate_option_risk_document(payload)
 
 
+@pytest.mark.parametrize("offset_seconds", [-1, 1])
+def test_runtime_rejects_rehashed_acquisition_anchor_outside_authority(offset_seconds):
+    payload = deepcopy(_payload())
+    reference = (
+        payload["analysis_now"]
+        if offset_seconds < 0
+        else payload["quote_evidence"][0]["request_started_at"]
+    )
+    instant = datetime.fromisoformat(reference.replace("Z", "+00:00")) + timedelta(
+        seconds=offset_seconds
+    )
+    payload["quote_acquisition_started_at"] = instant.isoformat().replace("+00:00", "Z")
+    _rehash(payload)
+
+    with pytest.raises(ReportSemanticError, match="acquisition"):
+        validate_option_risk_document(payload)
+
+
+def test_runtime_rejects_rehashed_total_overflow_marker_and_followup_tampering(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 900)
+    payload = analyze_option_risk(
+        _snapshot(tuple(_position(name) for name in ("A", "B", "C"))),
+        quote_provider=Provider(
+            rows={f"US.{name}": {"delta": "1" * 500} for name in ("A", "B", "C")}
+        ),
+        clock=Clock(),
+    ).to_dict()
+
+    forged = deepcopy(payload)
+    forged["quote_evidence"][1]["overflow_marker"] = None
+    _rehash(forged)
+    with pytest.raises(ReportSemanticError, match="overflow|byte"):
+        validate_option_risk_document(forged)
+
+    forged = deepcopy(payload)
+    started = datetime.fromisoformat(
+        forged["quote_evidence"][1]["request_started_at"].replace("Z", "+00:00")
+    )
+    boundary = (started + timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
+    forged["quote_evidence"][1]["request_finished_at"] = boundary
+    for item in forged["quote_evidence"][2:]:
+        item["request_started_at"] = boundary
+        item["request_finished_at"] = boundary
+    _rehash(forged)
+    with pytest.raises(ReportSemanticError, match="overflow|window"):
+        validate_option_risk_document(forged)
+
+    forged = deepcopy(payload)
+    forged["quote_evidence"][2]["status"] = "FAILURE"
+    forged["quote_evidence"][2]["reason_code"] = "QUOTE_SOURCE_UNAVAILABLE"
+    _rehash(forged)
+    with pytest.raises(ReportSemanticError, match="budget|omitted|replay"):
+        validate_option_risk_document(forged)
+
+
 def test_runtime_rejects_rehashed_failure_class_and_byte_count_tampering():
     payload = deepcopy(_payload())
     payload["quote_evidence"][0]["reason_code"] = "QUOTE_SOURCE_UNAVAILABLE"
@@ -289,6 +346,32 @@ def test_runtime_rejects_future_embedded_snapshot_even_when_rehashed():
     _rehash(payload)
 
     with pytest.raises(ReportSemanticError, match="follows analysis_now"):
+        validate_option_risk_document(payload)
+
+
+def test_runtime_rejects_rehashed_embedded_option_direction_conflict():
+    payload = deepcopy(_payload())
+    source = _snapshot(
+        (_position("A260116C1"), _position("B260116P1", quantity="-2", market_value="-50"))
+    )
+    forged = replace(
+        source,
+        positions=(
+            replace(source.positions[0], position_role="SHORT"),
+            *source.positions[1:],
+        ),
+        snapshot_id="",
+    )
+    forged = replace(forged, snapshot_id=snapshot_identity(forged))
+    source_body = forged.to_dict()
+    payload["provenance"]["source_snapshot"] = source_body
+    payload["source_snapshot_id"] = forged.snapshot_id
+    payload["source_snapshot_digest"] = hashlib.sha256(
+        json.dumps(source_body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    _rehash(payload)
+
+    with pytest.raises(ReportSemanticError, match="embedded option source snapshot is invalid"):
         validate_option_risk_document(payload)
 
 

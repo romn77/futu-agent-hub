@@ -49,6 +49,21 @@ class OptionQuoteProvider(Protocol):
     def quote(self, identity: str, *, timeout: float) -> object: ...
 
 
+class _OptionQuoteWorkerTimeout(TimeoutError):
+    pass
+
+
+class _OptionQuoteTotalBudgetEvidence(RuntimeError):
+    def __init__(self, byte_count: int, response_sha256: str) -> None:
+        self.byte_count = byte_count
+        self.response_sha256 = response_sha256
+        super().__init__("normalized option quote exceeds total evidence budget")
+
+
+class _OptionQuoteTotalWallEvidence(TimeoutError):
+    pass
+
+
 def _utc_text(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -121,7 +136,7 @@ def _bounded_provider_call(
     worker.start()
     worker.join(timeout)
     if worker.is_alive():
-        raise TimeoutError("bounded option quote request timed out")
+        raise _OptionQuoteWorkerTimeout("bounded option quote request timed out")
     ok, value = results.get_nowait()
     if not ok:
         raise value  # type: ignore[misc]
@@ -209,6 +224,16 @@ def _selection(snapshot: PortfolioSnapshot) -> tuple[list[dict[str, Any]], list[
     for source_index, position in enumerate(snapshot.positions):
         if position.quantity == 0 or position.security_type != "OPTION":
             continue
+        role = (position.position_role or "").upper()
+        if (
+            (role == "LONG" and position.quantity < 0)
+            or (role == "SHORT" and position.quantity > 0)
+            or any(
+                value != 0 and (position.quantity > 0) != (value > 0)
+                for value in (position.market_value_local, position.market_value_base)
+            )
+        ):
+            raise OptionRiskInputError("OPTION_POSITION_SIGN_INCONSISTENT")
         identity = _identity(position)
         leg = {
             "source_index": source_index,
@@ -259,13 +284,19 @@ def _collect_quotes(
     provider: OptionQuoteProvider | None,
     clock: Callable[[], datetime],
     analysis_now: datetime,
-) -> tuple[list[dict[str, Any]], dict[str, OptionQuote]]:
+) -> tuple[datetime, list[dict[str, Any]], dict[str, OptionQuote]]:
     evidence: list[dict[str, Any]] = []
     quotes: dict[str, OptionQuote] = {}
     consecutive_failures = 0
     total_bytes = 0
+    total_budget_exhausted = False
+    provider_quarantined = False
+    acquisition_started = _safe_clock(clock)
+    if acquisition_started < analysis_now:
+        raise OptionRiskInputError("trusted option acquisition precedes analysis_now")
     operation_started = time.monotonic()
-    trusted_deadline = analysis_now + timedelta(seconds=TOTAL_WALL_SECONDS)
+    trusted_deadline = acquisition_started + timedelta(seconds=TOTAL_WALL_SECONDS)
+    last_instant = acquisition_started
 
     def unavailable_evidence(
         base: dict[str, Any], instant: datetime, reason_code: str
@@ -280,13 +311,31 @@ def _collect_quotes(
             "reason_code": reason_code,
             "response_byte_count": 0,
             "source_response": None,
+            "overflow_marker": None,
             "response": None,
         }
 
-    for contract in sorted(
+    selected = sorted(
         (item for item in contracts if item["selection_status"] == "SELECTED"),
         key=lambda item: item["selection_rank"],
-    ):
+    )
+    if provider is None:
+        for contract in selected:
+            evidence.append(
+                unavailable_evidence(
+                    {
+                        "identity": contract["identity"],
+                        "selection_rank": contract["selection_rank"],
+                        "request": {"action": "BUY", "quantity": "1.0"},
+                        "freshness": "UNVERIFIED",
+                    },
+                    acquisition_started,
+                    "QUOTE_CAPABILITY_UNAVAILABLE",
+                )
+            )
+        return acquisition_started, evidence, quotes
+
+    for index, contract in enumerate(selected):
         identity = contract["identity"]
         base = {
             "identity": identity,
@@ -294,25 +343,21 @@ def _collect_quotes(
             "request": {"action": "BUY", "quantity": "1.0"},
             "freshness": "UNVERIFIED",
         }
-        if provider is None:
-            evidence.append(
-                unavailable_evidence(base, analysis_now, "QUOTE_CAPABILITY_UNAVAILABLE")
-            )
+        if total_budget_exhausted:
+            evidence.append(unavailable_evidence(base, last_instant, "QUOTE_TOTAL_BUDGET_EXCEEDED"))
             continue
-        started = _safe_clock(clock)
-        trusted_elapsed = (started - analysis_now).total_seconds()
+        if provider_quarantined or consecutive_failures >= CIRCUIT_BREAKER_FAILURES:
+            evidence.append(unavailable_evidence(base, last_instant, "QUOTE_CIRCUIT_OPEN"))
+            continue
+        started = acquisition_started if index == 0 else _safe_clock(clock)
+        trusted_elapsed = (started - acquisition_started).total_seconds()
         real_elapsed = time.monotonic() - operation_started
         if trusted_elapsed < 0:
-            raise OptionRiskInputError("trusted option quote clock moved before analysis_now")
+            raise OptionRiskInputError("trusted option quote clock moved before acquisition")
         if trusted_elapsed >= TOTAL_WALL_SECONDS or real_elapsed >= TOTAL_WALL_SECONDS:
-            evidence.append(
-                unavailable_evidence(
-                    base, min(started, trusted_deadline), "QUOTE_TOTAL_BUDGET_EXCEEDED"
-                )
-            )
-            continue
-        if consecutive_failures >= CIRCUIT_BREAKER_FAILURES:
-            evidence.append(unavailable_evidence(base, started, "QUOTE_CIRCUIT_OPEN"))
+            total_budget_exhausted = True
+            last_instant = min(started, trusted_deadline)
+            evidence.append(unavailable_evidence(base, last_instant, "QUOTE_TOTAL_BUDGET_EXCEEDED"))
             continue
 
         remaining = min(
@@ -324,6 +369,7 @@ def _collect_quotes(
         reason_code: str | None = None
         response: dict[str, object] | None = None
         source_response: object | None = None
+        overflow_marker: dict[str, str] | None = None
         response_byte_count = 0
         quote: OptionQuote | None = None
         call_started = time.monotonic()
@@ -337,10 +383,18 @@ def _collect_quotes(
             normalized_bytes = _bounded_response_bytes(source_response)
             response_byte_count = len(normalized_bytes)
             if total_bytes + response_byte_count > MAX_TOTAL_RESPONSE_BYTES:
-                raise OverflowError("total")
+                raise _OptionQuoteTotalBudgetEvidence(
+                    response_byte_count, hashlib.sha256(normalized_bytes).hexdigest()
+                )
             total_bytes += response_byte_count
             quote = parse_option_quote_response(identity, raw)
             response = quote.to_dict()
+        except _OptionQuoteWorkerTimeout:
+            status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
+            provider_quarantined = True
+        except _OptionQuoteTotalWallEvidence:
+            status, reason_code = "FAILURE", "QUOTE_TOTAL_BUDGET_EXCEEDED"
+            total_budget_exhausted = True
         except TimeoutError:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
         except FutuReadError:
@@ -349,47 +403,48 @@ def _collect_quotes(
             status, reason_code = "FAILURE", exc.reason_code
             if reason_code == "QUOTE_RESPONSE_TOO_LARGE":
                 response_byte_count = MAX_SINGLE_RESPONSE_BYTES + 1
-        except OverflowError as exc:
+        except _OptionQuoteTotalBudgetEvidence as exc:
+            status, reason_code = "FAILURE", "QUOTE_TOTAL_BUDGET_EXCEEDED"
+            response_byte_count = exc.byte_count
+            source_response = None
+            overflow_marker = {"response_sha256": exc.response_sha256}
+            total_budget_exhausted = True
+        except OverflowError:
             status = "FAILURE"
-            reason_code = (
-                "QUOTE_RESPONSE_TOO_LARGE"
-                if str(exc) == "single"
-                else "QUOTE_TOTAL_BUDGET_EXCEEDED"
-            )
+            reason_code = "QUOTE_RESPONSE_TOO_LARGE"
         except (OptionQuoteError, TypeError, ValueError):
             status, reason_code = "FAILURE", "QUOTE_RESPONSE_CONTRACT_INVALID"
         except Exception:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_UNAVAILABLE"
         observed_finished = _safe_clock(clock)
         trusted_duration = (observed_finished - started).total_seconds()
-        trusted_total = (observed_finished - analysis_now).total_seconds()
+        trusted_total = (observed_finished - acquisition_started).total_seconds()
         real_total = time.monotonic() - operation_started
         real_duration = time.monotonic() - call_started
         if observed_finished < started:
             raise OptionRiskInputError("trusted option quote clock moved backwards")
         call_deadline = min(started + timedelta(seconds=PER_CALL_TIMEOUT_SECONDS), trusted_deadline)
-        if trusted_total > TOTAL_WALL_SECONDS or real_total > TOTAL_WALL_SECONDS:
-            reason_code = (
-                "QUOTE_SOURCE_TIMEOUT"
-                if call_deadline < trusted_deadline
-                else "QUOTE_TOTAL_BUDGET_EXCEEDED"
-            )
+        if trusted_total >= TOTAL_WALL_SECONDS or real_total >= TOTAL_WALL_SECONDS:
+            reason_code = "QUOTE_TOTAL_BUDGET_EXCEEDED"
             status = "FAILURE"
             quote = response = source_response = None
+            overflow_marker = None
             response_byte_count = 0
-        elif trusted_duration > PER_CALL_TIMEOUT_SECONDS or real_duration > remaining + 0.01:
+            total_budget_exhausted = True
+        elif reason_code != "QUOTE_TOTAL_BUDGET_EXCEEDED" and (
+            trusted_duration >= PER_CALL_TIMEOUT_SECONDS or real_duration >= remaining
+        ):
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
             quote = response = source_response = None
+            overflow_marker = None
             response_byte_count = 0
-        finished = (
-            min(observed_finished, call_deadline)
-            if reason_code
-            in {
-                "QUOTE_SOURCE_TIMEOUT",
-                "QUOTE_TOTAL_BUDGET_EXCEEDED",
-            }
-            else observed_finished
-        )
+        if reason_code == "QUOTE_TOTAL_BUDGET_EXCEEDED":
+            finished = min(observed_finished, call_deadline)
+        elif reason_code == "QUOTE_SOURCE_TIMEOUT":
+            finished = min(observed_finished, call_deadline)
+        else:
+            finished = observed_finished
+        last_instant = finished
         if status == "SUCCESS" and quote is not None:
             quotes[identity] = quote
             consecutive_failures = 0
@@ -405,10 +460,11 @@ def _collect_quotes(
                 "reason_code": reason_code,
                 "response_byte_count": response_byte_count,
                 "source_response": source_response,
+                "overflow_marker": overflow_marker,
                 "response": response,
             }
         )
-    return evidence, quotes
+    return acquisition_started, evidence, quotes
 
 
 def analyze_option_risk(
@@ -433,8 +489,11 @@ def analyze_option_risk(
     )
     quote_evidence: list[dict[str, Any]] = []
     quotes: dict[str, OptionQuote] = {}
-    if option_legs:
-        quote_evidence, quotes = _collect_quotes(contracts, quote_provider, clock, analysis_now)
+    quote_acquisition_started_at = analysis_now
+    if option_legs and any(item["selection_status"] == "SELECTED" for item in contracts):
+        quote_acquisition_started_at, quote_evidence, quotes = _collect_quotes(
+            contracts, quote_provider, clock, analysis_now
+        )
 
     reasons: list[dict[str, str]] = []
     if unknown_count:
@@ -666,6 +725,7 @@ def analyze_option_risk(
         "schema_version": "1.0",
         "option_risk_id": "",
         "analysis_now": analysis_now,
+        "quote_acquisition_started_at": quote_acquisition_started_at,
         "as_of": snapshot.as_of,
         "source_snapshot_id": snapshot.snapshot_id,
         "source_snapshot_digest": hashlib.sha256(_canonical_bytes(snapshot_body)).hexdigest(),

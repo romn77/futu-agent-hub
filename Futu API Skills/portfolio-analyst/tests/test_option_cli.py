@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import shutil
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -12,7 +12,7 @@ from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst.settings import Settings
 from portfolio_analyst.skill_trust import audited_files
 
-from test_option_risk import _position, _snapshot
+from test_option_risk import Provider, _position, _snapshot
 
 
 def _future_snapshot():
@@ -125,6 +125,42 @@ def test_analyze_embeds_unavailable_option_report_without_changing_phase2_findin
         phrase in json.dumps(payload["largest_risks"], ensure_ascii=False).lower()
         for phrase in ("buy ", "sell ", "should buy", "should sell")
     )
+
+
+def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    _save(home, (_position("A260116C1"),))
+    provider = Provider()
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
+    monkeypatch.setattr(
+        cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
+    )
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+    monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: provider)
+    from portfolio_analyst import price_history
+
+    monkeypatch.setattr(price_history, "FutuAdjustedPriceProvider", lambda _adapter: None)
+    frozen_now = datetime.now(timezone.utc) - timedelta(seconds=31)
+
+    assert (
+        cli.main(
+            ["analyze", "--snapshot", "snapshots/source.json", "--json", "--no-save"],
+            trusted_now=frozen_now,
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)["options"]
+
+    assert provider.calls == [("US.A260116C1", 5.0)]
+    analysis_now = datetime.fromisoformat(payload["analysis_now"].replace("Z", "+00:00"))
+    acquisition = datetime.fromisoformat(
+        payload["quote_acquisition_started_at"].replace("Z", "+00:00")
+    )
+    assert acquisition - analysis_now >= timedelta(seconds=30)
+    assert payload["quote_evidence"][0]["status"] == "SUCCESS"
 
 
 def test_standalone_options_accepts_signed_legs_but_analyze_keeps_phase2_fail_closed(

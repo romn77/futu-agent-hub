@@ -4,11 +4,12 @@
   "type": "object",
   "maxProperties": 32,
   "additionalProperties": false,
-  "required": ["schema_version", "option_risk_id", "analysis_now", "as_of", "source_snapshot_id", "source_snapshot_digest", "base_currency", "status", "data_quality", "coverage", "provenance", "source_population", "quote_evidence", "leg_exposures", "greek_aggregates", "implied_volatility_coverage", "option_type_buckets", "expiry_buckets", "quality_reasons", "formulas", "limitations"],
+  "required": ["schema_version", "option_risk_id", "analysis_now", "quote_acquisition_started_at", "as_of", "source_snapshot_id", "source_snapshot_digest", "base_currency", "status", "data_quality", "coverage", "provenance", "source_population", "quote_evidence", "leg_exposures", "greek_aggregates", "implied_volatility_coverage", "option_type_buckets", "expiry_buckets", "quality_reasons", "formulas", "limitations"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "option_risk_id": {"type": "string", "maxLength": 20, "pattern": "^[0-9a-f]{20}$"},
     "analysis_now": {"type": "string", "maxLength": 64, "format": "date-time"},
+    "quote_acquisition_started_at": {"type": "string", "maxLength": 64, "format": "date-time"},
     "as_of": {"type": "string", "maxLength": 64, "format": "date-time"},
     "source_snapshot_id": {"type": "string", "maxLength": 80, "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
     "source_snapshot_digest": {"type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
@@ -125,8 +126,8 @@
       }
     },
     "quoteEvidence": {
-      "type": "object", "maxProperties": 11, "additionalProperties": false,
-      "required": ["identity", "selection_rank", "request", "freshness", "request_started_at", "request_finished_at", "status", "reason_code", "response_byte_count", "source_response", "response"],
+      "type": "object", "maxProperties": 12, "additionalProperties": false,
+      "required": ["identity", "selection_rank", "request", "freshness", "request_started_at", "request_finished_at", "status", "reason_code", "response_byte_count", "source_response", "overflow_marker", "response"],
       "properties": {
         "identity": {"$ref": "#/$defs/identity"}, "selection_rank": {"type": "integer", "minimum": 1, "maximum": 30},
         "request": {"type": "object", "maxProperties": 2, "additionalProperties": false, "required": ["action", "quantity"], "properties": {"action": {"const": "BUY"}, "quantity": {"const": "1.0"}}},
@@ -136,6 +137,7 @@
         "reason_code": {"enum": [null, "QUOTE_CAPABILITY_UNAVAILABLE", "QUOTE_SOURCE_TIMEOUT", "QUOTE_SOURCE_READ_FAILED", "QUOTE_SOURCE_UNAVAILABLE", "QUOTE_RESPONSE_CONTRACT_INVALID", "QUOTE_RESPONSE_TOO_LARGE", "QUOTE_TOTAL_BUDGET_EXCEEDED", "QUOTE_CIRCUIT_OPEN"]},
         "response_byte_count": {"type": "integer", "minimum": 0, "maximum": 262145},
         "source_response": {"$ref": "#/$defs/boundedJson"},
+        "overflow_marker": {"oneOf": [{"type": "object", "maxProperties": 1, "additionalProperties": false, "required": ["response_sha256"], "properties": {"response_sha256": {"type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}}}, {"type": "null"}]},
         "response": {"oneOf": [{"$ref": "#/$defs/quoteResponse"}, {"type": "null"}]}
       }
     },

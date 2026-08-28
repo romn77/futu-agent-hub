@@ -167,9 +167,12 @@ high/low interpretation.
 
 The live quote budget is 30 unique supported contracts, selected by gross absolute base market
 value descending then identity ascending, with 5 seconds per call, a 30-second total wall bound,
-and a consecutive-failure circuit breaker. A daemon worker enforces those bounds even when a
-provider ignores its timeout; runtime replay rejects request windows over 5 seconds or an operation
-window over 30 seconds. Request start/finish windows are recorded, but quote
+and a consecutive-failure circuit breaker. The serialized `quote_acquisition_started_at`, not the
+earlier `analysis_now`, anchors the independent Phase 6 wall budget. A daemon worker enforces those
+bounds even when a provider ignores its timeout; its first join timeout quarantines that provider
+for the remaining contracts. A normalized response that crosses the 4 MiB total is reduced to
+bounded overflow evidence and stops later provider calls. Runtime replay rejects request windows
+over 5 seconds or an acquisition window over 30 seconds. Request start/finish windows are recorded, but quote
 freshness remains `UNVERIFIED` because the official response supplies no trusted quote timestamp.
 Missing fields remain unavailable and never become zero. SDK/OpenD/timeouts/quote-shape failures
 degrade the option subreport while `analyze` continues to preserve Phase 2's exactly-three findings

@@ -6,7 +6,7 @@ import pytest
 
 from portfolio_analyst.account_alias import AccountAliaser
 from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError
-from portfolio_analyst.repository import FutuPortfolioRepository
+from portfolio_analyst.repository import FutuPortfolioRepository, SourceDataError
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -109,6 +109,58 @@ def test_repository_queries_each_real_securities_account_with_exact_firm_and_mar
     }
     serialized = json.dumps(result, default=str)
     assert all(account_id not in serialized for account_id in ACCOUNT_IDS)
+
+
+def test_short_position_type_normalizes_positive_quantity_and_value_signs():
+    destination = []
+
+    FutuPortfolioRepository._parse_positions(
+        [
+            {
+                "acc_id": 90000001,
+                "code": "US.SHORT",
+                "name": "Short fixture",
+                "qty": "2",
+                "can_sell_qty": "0",
+                "average_cost": "90",
+                "nominal_price": "100",
+                "market_val": "200",
+                "position_type": "SHORT",
+            }
+        ],
+        "acct-a",
+        "90000001",
+        destination,
+    )
+
+    assert destination[0].quantity == -2
+    assert destination[0].market_value_local == -200
+    assert destination[0].data_quality_notes == (
+        "quantity sign normalized from source SHORT semantics",
+        "market value sign normalized from source short semantics",
+    )
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"qty": "-2", "market_val": "-200", "position_type": "LONG"},
+        {"qty": "2", "market_val": "-200", "position_type": "LONG"},
+    ],
+)
+def test_explicit_live_position_direction_conflicts_fail_closed(row):
+    raw = {
+        "acc_id": 90000001,
+        "code": "US.CONFLICT",
+        "name": "Conflict fixture",
+        "can_sell_qty": "0",
+        "average_cost": "90",
+        "nominal_price": "100",
+        **row,
+    }
+
+    with pytest.raises(SourceDataError, match="position direction conflicts"):
+        FutuPortfolioRepository._parse_positions([raw], "acct-a", "90000001", [])
 
 
 def test_per_account_failure_is_partial_and_never_echoes_any_discovered_id():

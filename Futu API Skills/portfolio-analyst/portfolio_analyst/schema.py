@@ -731,8 +731,12 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
     from .option_risk import (
         MAX_SINGLE_RESPONSE_BYTES,
         MAX_TOTAL_RESPONSE_BYTES,
+        CIRCUIT_BREAKER_FAILURES,
         PER_CALL_TIMEOUT_SECONDS,
         TOTAL_WALL_SECONDS,
+        _OptionQuoteTotalBudgetEvidence,
+        _OptionQuoteTotalWallEvidence,
+        _OptionQuoteWorkerTimeout,
         _bounded_response_bytes,
         analyze_option_risk,
     )
@@ -759,53 +763,122 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
     evidence = payload["quote_evidence"]
     analysis_now = _option_datetime(payload["analysis_now"], "analysis_now")
+    acquisition_started = _option_datetime(
+        payload["quote_acquisition_started_at"], "quote_acquisition_started_at"
+    )
     if snapshot.as_of > analysis_now:
         raise ReportSemanticError("option source snapshot follows analysis_now")
-    clock_values: list[datetime] = []
-    previous_finished = analysis_now
+    if acquisition_started < analysis_now:
+        raise ReportSemanticError("option quote acquisition precedes analysis_now")
+    if not evidence and acquisition_started != analysis_now:
+        raise ReportSemanticError("unattempted option acquisition must equal analysis_now")
+    previous_finished = acquisition_started
     response_bytes = 0
-    for item in evidence:
+    stored_response_bytes = 0
+    total_budget_exhausted = False
+    provider_quarantined = False
+    consecutive_failures = 0
+    attempted: list[dict[str, Any]] = []
+    for index, item in enumerate(evidence):
         started = _option_datetime(item["request_started_at"], "request_started_at")
         finished = _option_datetime(item["request_finished_at"], "request_finished_at")
         duration = (finished - started).total_seconds()
+        total_duration = (finished - acquisition_started).total_seconds()
+        if started < acquisition_started:
+            raise ReportSemanticError("option quote starts before acquisition")
         if (
-            started < analysis_now
-            or started < previous_finished
+            started < previous_finished
             or finished < started
             or duration > PER_CALL_TIMEOUT_SECONDS
-            or (finished - analysis_now).total_seconds() > TOTAL_WALL_SECONDS
+            or total_duration > TOTAL_WALL_SECONDS
         ):
             raise ReportSemanticError("option quote request window is inconsistent")
         previous_finished = finished
         status = item["status"]
         reason = item["reason_code"]
         source_response = item["source_response"]
+        overflow_marker = item["overflow_marker"]
         normalized_response = item["response"]
         byte_count = item["response_byte_count"]
+        if total_budget_exhausted:
+            if (
+                status != "OMITTED"
+                or reason != "QUOTE_TOTAL_BUDGET_EXCEEDED"
+                or source_response is not None
+                or overflow_marker is not None
+                or normalized_response is not None
+                or byte_count
+                or finished != started
+            ):
+                raise ReportSemanticError(
+                    "option quotes after total budget exhaustion must be omitted"
+                )
+            continue
+        if overflow_marker is not None:
+            if (
+                status != "FAILURE"
+                or reason != "QUOTE_TOTAL_BUDGET_EXCEEDED"
+                or source_response is not None
+                or normalized_response is not None
+                or not 0 < byte_count <= MAX_SINGLE_RESPONSE_BYTES
+                or response_bytes + byte_count <= MAX_TOTAL_RESPONSE_BYTES
+                or duration >= PER_CALL_TIMEOUT_SECONDS
+                or total_duration >= TOTAL_WALL_SECONDS
+            ):
+                raise ReportSemanticError("option total overflow marker is inconsistent")
+            total_budget_exhausted = True
+            consecutive_failures += 1
+            attempted.append(item)
+            continue
         if source_response is not None:
             measured = len(_bounded_response_bytes(source_response))
             if measured != byte_count or measured > MAX_SINGLE_RESPONSE_BYTES:
                 raise ReportSemanticError("option quote response byte evidence is inconsistent")
+            stored_response_bytes += measured
+            if stored_response_bytes > MAX_TOTAL_RESPONSE_BYTES:
+                raise ReportSemanticError("stored option responses exceed total budget")
         elif reason == "QUOTE_RESPONSE_TOO_LARGE":
             if byte_count != MAX_SINGLE_RESPONSE_BYTES + 1:
                 raise ReportSemanticError("oversized option quote byte evidence is inconsistent")
         elif byte_count != 0:
             raise ReportSemanticError("empty option quote response must have zero bytes")
         if status == "SUCCESS":
-            if reason is not None or source_response is None or normalized_response is None:
+            if (
+                reason is not None
+                or source_response is None
+                or normalized_response is None
+                or duration >= PER_CALL_TIMEOUT_SECONDS
+                or total_duration >= TOTAL_WALL_SECONDS
+            ):
                 raise ReportSemanticError("successful option quote evidence is inconsistent")
             response_bytes += byte_count
             if response_bytes > MAX_TOTAL_RESPONSE_BYTES:
                 raise ReportSemanticError("successful option quote bytes exceed total budget")
-            clock_values.extend((started, finished))
+            consecutive_failures = 0
+            attempted.append(item)
         elif status == "OMITTED":
             if reason not in {"QUOTE_CIRCUIT_OPEN", "QUOTE_TOTAL_BUDGET_EXCEEDED"}:
                 raise ReportSemanticError("omitted option quote reason is inconsistent")
-            if source_response is not None or normalized_response is not None or byte_count:
+            if (
+                source_response is not None
+                or overflow_marker is not None
+                or normalized_response is not None
+                or byte_count
+            ):
                 raise ReportSemanticError("omitted option quote cannot contain a response")
             if finished != started:
                 raise ReportSemanticError("unattempted option quote window must be instantaneous")
-            clock_values.append(started)
+            if reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
+                if total_duration != TOTAL_WALL_SECONDS:
+                    raise ReportSemanticError(
+                        "option total budget omission lacks deadline evidence"
+                    )
+                total_budget_exhausted = True
+            elif consecutive_failures < CIRCUIT_BREAKER_FAILURES and not provider_quarantined:
+                previous = evidence[index - 1] if index else None
+                if not previous or previous["reason_code"] != "QUOTE_SOURCE_TIMEOUT":
+                    raise ReportSemanticError("option quote circuit lacks failure evidence")
+                provider_quarantined = True
         elif status == "FAILURE":
             if reason is None or normalized_response is not None:
                 raise ReportSemanticError("failed option quote evidence is inconsistent")
@@ -814,23 +887,25 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
                     raise ReportSemanticError(
                         "unavailable option capability evidence is inconsistent"
                     )
-                if started != analysis_now or finished != analysis_now:
-                    clock_values.extend((started, finished))
             else:
-                if (
-                    source_response is not None
-                    and reason != "QUOTE_RESPONSE_CONTRACT_INVALID"
-                    and reason != "QUOTE_TOTAL_BUDGET_EXCEEDED"
-                ):
+                if source_response is not None and reason != "QUOTE_RESPONSE_CONTRACT_INVALID":
                     raise ReportSemanticError("option failure response evidence is inconsistent")
                 if source_response is not None and reason == "QUOTE_RESPONSE_CONTRACT_INVALID":
                     response_bytes += byte_count
                     if response_bytes > MAX_TOTAL_RESPONSE_BYTES:
                         raise ReportSemanticError("invalid option response exceeds total budget")
-                if source_response is not None and reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
-                    if response_bytes + byte_count <= MAX_TOTAL_RESPONSE_BYTES:
-                        raise ReportSemanticError("option total byte failure lacks budget evidence")
-                clock_values.extend((started, finished))
+                if reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
+                    expected_finished = min(
+                        started + timedelta(seconds=PER_CALL_TIMEOUT_SECONDS),
+                        acquisition_started + timedelta(seconds=TOTAL_WALL_SECONDS),
+                    )
+                    if source_response is not None or byte_count or finished != expected_finished:
+                        raise ReportSemanticError(
+                            "option total wall failure lacks deadline evidence"
+                        )
+                    total_budget_exhausted = True
+            consecutive_failures += 1
+            attempted.append(item)
         else:
             raise ReportSemanticError("option quote evidence status is invalid")
 
@@ -838,6 +913,25 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
         raise ReportSemanticError("option quote identities must be unique")
     if [item["selection_rank"] for item in evidence] != list(range(1, len(evidence) + 1)):
         raise ReportSemanticError("option quote evidence order is inconsistent")
+    capability_not_accessed = bool(evidence) and all(
+        item["reason_code"] == "QUOTE_CAPABILITY_UNAVAILABLE"
+        and item["request_started_at"] == payload["quote_acquisition_started_at"]
+        and item["request_finished_at"] == payload["quote_acquisition_started_at"]
+        for item in evidence
+    )
+    clock_values: list[datetime] = []
+    if evidence:
+        clock_values.append(acquisition_started)
+    if attempted and not capability_not_accessed:
+        for attempt_index, item in enumerate(attempted):
+            started = _option_datetime(item["request_started_at"], "request_started_at")
+            finished = _option_datetime(item["request_finished_at"], "request_finished_at")
+            if attempt_index == 0:
+                if started != acquisition_started:
+                    raise ReportSemanticError("first option quote must start at acquisition")
+            else:
+                clock_values.append(started)
+            clock_values.append(finished)
     iterator = iter(clock_values)
 
     def replay_clock() -> datetime:
@@ -848,7 +942,7 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
     class ReplayProvider:
         def __init__(self) -> None:
-            self.items = iter(evidence)
+            self.items = iter(attempted)
 
         def quote(self, identity: str, *, timeout: float) -> object:
             if timeout <= 0 or timeout > PER_CALL_TIMEOUT_SECONDS:
@@ -860,9 +954,20 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
             if identity != item["identity"] or item["status"] == "OMITTED":
                 raise ReportSemanticError("option quote replay order is inconsistent")
             reason = item["reason_code"]
+            if item["overflow_marker"] is not None:
+                raise _OptionQuoteTotalBudgetEvidence(
+                    item["response_byte_count"], item["overflow_marker"]["response_sha256"]
+                )
             if item["status"] == "SUCCESS" or item["source_response"] is not None:
                 return item["source_response"]
             if reason == "QUOTE_SOURCE_TIMEOUT":
+                item_index = evidence.index(item)
+                if (
+                    item_index + 1 < len(evidence)
+                    and evidence[item_index + 1]["status"] == "OMITTED"
+                    and evidence[item_index + 1]["reason_code"] == "QUOTE_CIRCUIT_OPEN"
+                ):
+                    raise _OptionQuoteWorkerTimeout("recorded bounded worker timeout")
                 raise TimeoutError("recorded timeout")
             if reason == "QUOTE_SOURCE_READ_FAILED":
                 raise FutuReadError("recorded read failure")
@@ -872,16 +977,12 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
                 raise OptionQuoteProviderError(reason)
             if reason == "QUOTE_RESPONSE_CONTRACT_INVALID":
                 raise OptionQuoteError("recorded response contract failure")
+            if reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
+                raise _OptionQuoteTotalWallEvidence("recorded total wall deadline")
             raise RuntimeError("recorded source unavailable")
 
     reasons = {item["reason_code"] for item in evidence}
     provider: Any
-    capability_not_accessed = bool(evidence) and all(
-        item["reason_code"] == "QUOTE_CAPABILITY_UNAVAILABLE"
-        and item["request_started_at"] == payload["analysis_now"]
-        and item["request_finished_at"] == payload["analysis_now"]
-        for item in evidence
-    )
     if capability_not_accessed:
         if reasons != {"QUOTE_CAPABILITY_UNAVAILABLE"}:
             raise ReportSemanticError("option source unavailable evidence cannot be mixed")

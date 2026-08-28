@@ -142,6 +142,14 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
             "duplicate account and canonical identity economic position leg"
         )
     for position in snapshot.positions:
+        quantity = _finite(position.quantity, "position quantity")
+        role = (position.position_role or "").upper()
+        if quantity and ((role == "LONG" and quantity < 0) or (role == "SHORT" and quantity > 0)):
+            raise SnapshotSemanticError("position directional role and quantity signs conflict")
+        if quantity:
+            for market_value in (position.market_value_local, position.market_value_base):
+                if market_value and (quantity > 0) != (market_value > 0):
+                    raise SnapshotSemanticError("position quantity and market value signs conflict")
         rate = fx_rates.get((position.currency, snapshot.base_currency))
         if rate is None:
             raise SnapshotSemanticError("position conversion lacks FX evidence")

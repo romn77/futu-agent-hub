@@ -259,10 +259,17 @@ class FutuPortfolioRepository:
             quantity = _decimal(raw.get("qty"), "qty")
             market_value = _decimal(raw.get("market_val"), "market_val")
             position_role = str(raw.get("position_type", "")).upper()
-            notes: tuple[str, ...] = ()
-            if (quantity < 0 or position_role == "SHORT") and market_value > 0:
+            notes: list[str] = []
+            if position_role == "LONG" and quantity < 0:
+                raise SourceDataError("position direction conflicts with signed quantity")
+            if position_role == "SHORT" and quantity > 0:
+                quantity = -quantity
+                notes.append("quantity sign normalized from source SHORT semantics")
+            if quantity > 0 and market_value < 0:
+                raise SourceDataError("position direction conflicts with signed market value")
+            if quantity < 0 and market_value > 0:
                 market_value = -market_value
-                notes = ("market value sign normalized from source short semantics",)
+                notes.append("market value sign normalized from source short semantics")
             destination.append(
                 Position(
                     account_ref=account_ref,
@@ -287,6 +294,6 @@ class FutuPortfolioRepository:
                         else None
                     ),
                     position_role=position_role or None,
-                    data_quality_notes=notes,
+                    data_quality_notes=tuple(notes),
                 )
             )

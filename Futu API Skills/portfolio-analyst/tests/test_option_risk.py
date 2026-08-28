@@ -20,6 +20,7 @@ from portfolio_analyst.option_risk import analyze_option_risk
 from portfolio_analyst.option_risk import OptionRiskInputError
 from portfolio_analyst.futu_adapter import FutuReadError
 from portfolio_analyst.option_quote import OptionQuoteProviderError
+from portfolio_analyst.snapshot_semantics import SnapshotSemanticError, validate_snapshot_semantics
 
 
 AS_OF = datetime(2026, 1, 10, 15, tzinfo=timezone.utc)
@@ -214,6 +215,36 @@ def test_same_contract_across_accounts_is_quoted_once_and_signed_greeks_net():
     ]
 
 
+@pytest.mark.parametrize(
+    "position",
+    [
+        replace(_position("A"), position_role="SHORT"),
+        replace(_position("A", quantity="-1", market_value="-100"), position_role="LONG"),
+        _position("A", quantity="-1", market_value="100"),
+    ],
+)
+def test_snapshot_and_direct_option_analysis_reject_directional_sign_conflicts(position):
+    source = _snapshot((position,))
+
+    with pytest.raises(SnapshotSemanticError, match="position.*sign"):
+        validate_snapshot_semantics(source)
+    with pytest.raises(OptionRiskInputError, match="^OPTION_POSITION_SIGN_INCONSISTENT$"):
+        analyze_option_risk(source, quote_provider=Provider(), clock=Clock())
+
+
+@pytest.mark.parametrize("role", ["CORE", "HEDGE", None])
+def test_nondirectional_lifecycle_roles_do_not_override_signed_quantity(role):
+    source = _snapshot(
+        (replace(_position("A", quantity="-1", market_value="-100"), position_role=role),)
+    )
+
+    validate_snapshot_semantics(source)
+    report = analyze_option_risk(source, quote_provider=Provider(), clock=Clock()).to_dict()
+
+    assert report["leg_exposures"][0]["direction"] == "SHORT"
+    assert report["leg_exposures"][0]["greeks"]["delta"] == "-0.5"
+
+
 def test_missing_one_greek_is_partial_and_never_publishes_partial_total():
     identity = "AAPL260116P00150000"
     source = _snapshot((_position(identity),))
@@ -251,6 +282,56 @@ def test_future_snapshot_is_rejected_before_quote():
             source, quote_provider=provider, clock=Clock(start=AS_OF - timedelta(seconds=1))
         )
     assert provider.calls == []
+
+
+def test_quote_budget_starts_at_phase6_acquisition_after_earlier_analysis_delay():
+    analysis_now = AS_OF + timedelta(hours=1)
+    acquisition = analysis_now + timedelta(seconds=31)
+    provider = Provider()
+
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=provider,
+        analysis_now=analysis_now,
+        clock=SequenceClock(acquisition, acquisition + timedelta(milliseconds=1)),
+    ).to_dict()
+
+    assert provider.calls == [("US.A", 5.0)]
+    assert report["quote_acquisition_started_at"] == acquisition.isoformat().replace("+00:00", "Z")
+    assert report["quote_evidence"][0]["status"] == "SUCCESS"
+
+
+def test_no_option_uses_analysis_now_as_acquisition_anchor_without_reading_clock():
+    analysis_now = AS_OF + timedelta(hours=1)
+
+    def forbidden_clock():
+        raise AssertionError("no option acquisition must not read the clock")
+
+    report = analyze_option_risk(
+        _snapshot((_position("A", security_type="STOCK"),)),
+        quote_provider=None,
+        analysis_now=analysis_now,
+        clock=forbidden_clock,
+    ).to_dict()
+
+    assert report["quote_acquisition_started_at"] == analysis_now.isoformat().replace("+00:00", "Z")
+
+
+def test_unavailable_provider_records_the_real_acquisition_anchor():
+    analysis_now = AS_OF + timedelta(hours=1)
+    acquisition = analysis_now + timedelta(seconds=31)
+
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=None,
+        analysis_now=analysis_now,
+        clock=SequenceClock(acquisition),
+    ).to_dict()
+
+    assert report["quote_acquisition_started_at"] == acquisition.isoformat().replace("+00:00", "Z")
+    assert (
+        report["quote_evidence"][0]["request_started_at"] == report["quote_acquisition_started_at"]
+    )
 
 
 def test_empty_multirow_and_wrong_identity_are_contract_failures_not_fabricated_zeroes():
@@ -537,9 +618,29 @@ def test_total_wall_budget_omits_later_quotes_and_runtime_can_rebuild_it():
 
     assert len(provider.calls) == 1
     assert [item["reason_code"] for item in report["quote_evidence"]] == [
-        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
         "QUOTE_TOTAL_BUDGET_EXCEEDED",
     ]
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_exact_total_deadline_is_a_replayable_total_budget_failure(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "TOTAL_WALL_SECONDS", 1.0)
+    analysis_now = AS_OF + timedelta(hours=1)
+    acquisition = analysis_now
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(acquisition, acquisition + timedelta(seconds=1)),
+    ).to_dict()
+
+    assert report["quote_evidence"][0]["status"] == "FAILURE"
+    assert report["quote_evidence"][0]["reason_code"] == "QUOTE_TOTAL_BUDGET_EXCEEDED"
     from portfolio_analyst.schema import validate_option_risk_document
 
     validate_option_risk_document(report)
@@ -568,6 +669,40 @@ def test_timeout_ignoring_provider_is_bounded_by_daemon_worker(monkeypatch):
     assert report["quote_evidence"][0]["status"] == "FAILURE"
     assert report["quote_evidence"][0]["reason_code"] == "QUOTE_SOURCE_TIMEOUT"
     assert report["coverage"]["quoted_contracts"] == 0
+
+
+def test_first_daemon_timeout_quarantines_provider_for_remaining_contracts(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "PER_CALL_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(option_risk, "TOTAL_WALL_SECONDS", 0.2)
+
+    class IgnoringProvider:
+        def __init__(self):
+            self.calls = []
+
+        def quote(self, identity, *, timeout):
+            self.calls.append((identity, timeout))
+            time.sleep(0.1)
+            return Provider().quote(identity, timeout=timeout)
+
+    provider = IgnoringProvider()
+    report = analyze_option_risk(
+        _snapshot(tuple(_position(name) for name in ("A", "B", "C", "D"))),
+        quote_provider=provider,
+        clock=lambda: datetime.now(timezone.utc),
+    ).to_dict()
+
+    assert len(provider.calls) == 1
+    assert [item["reason_code"] for item in report["quote_evidence"]] == [
+        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_CIRCUIT_OPEN",
+        "QUOTE_CIRCUIT_OPEN",
+        "QUOTE_CIRCUIT_OPEN",
+    ]
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
 
 
 @pytest.mark.parametrize(
@@ -615,6 +750,50 @@ def test_single_and_total_response_byte_budgets_are_stable_failures(monkeypatch)
         "QUOTE_TOTAL_BUDGET_EXCEEDED",
         "QUOTE_TOTAL_BUDGET_EXCEEDED",
     ]
+
+
+def test_first_normalized_total_overflow_uses_marker_and_omits_all_later_calls(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 900)
+    rows = {f"US.{name}": {"delta": "1" * 500} for name in ("A", "B", "C", "D")}
+    provider = Provider(rows=rows)
+
+    report = analyze_option_risk(
+        _snapshot(tuple(_position(name) for name in ("A", "B", "C", "D"))),
+        quote_provider=provider,
+        clock=Clock(),
+    ).to_dict()
+
+    assert len(provider.calls) == 2
+    evidence = report["quote_evidence"]
+    assert [item["status"] for item in evidence] == [
+        "SUCCESS",
+        "FAILURE",
+        "OMITTED",
+        "OMITTED",
+    ]
+    assert [item["reason_code"] for item in evidence] == [
+        None,
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+    ]
+    assert evidence[1]["source_response"] is None
+    marker = evidence[1]["overflow_marker"]
+    assert set(marker) == {"response_sha256"}
+    assert len(marker["response_sha256"]) == 64
+    assert (
+        sum(
+            len(option_risk._bounded_response_bytes(item["source_response"]))
+            for item in evidence
+            if item["source_response"] is not None
+        )
+        <= option_risk.MAX_TOTAL_RESPONSE_BYTES
+    )
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
 
 
 @pytest.mark.parametrize(
