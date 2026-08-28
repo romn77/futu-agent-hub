@@ -1,0 +1,12 @@
+{
+  "mode": "ACCURATE_PNL",
+  "confidence": "HIGH",
+  "contribution_status": "COMPLETE",
+  "total_pnl_base": "10",
+  "realized_pnl_base": "2",
+  "unrealized_pnl_base": "8",
+  "return_status": "UNAVAILABLE",
+  "portfolio_return": null,
+  "irr_status": "NOT_CALCULATED",
+  "irr": null
+}

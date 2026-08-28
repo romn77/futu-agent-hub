@@ -1,9 +1,9 @@
 ---
 name: portfolio-analyst
-description: Read-only portfolio snapshots, risk and trade review, plus non-executable rebalance simulation using the official futuapi Skill.
+description: Read-only portfolio snapshots, risk, trade review, lifecycle, performance attribution, and non-executable rebalance simulation using the official futuapi Skill.
 allowed-tools: Bash Read
 metadata:
-  version: 0.4.0
+  version: 0.5.0
 ---
 
 # Portfolio Analyst
@@ -123,7 +123,7 @@ transactionally saves `portfolio_report.json` and `portfolio_report.md` together
 `--no-save` always wins and the default remains side-effect free. Reports preserve one
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
 order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
-correlation, optional user-policy, unavailable-data, and Phase 4-6 placeholder contracts.
+correlation, optional user-policy, unavailable-data, and Phase 6 option-risk placeholder contracts.
 Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` identity and metadata
 agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather
 than distorting Top-N, HHI, P&L, role, or correlation evidence. Risk aggregation reapplies the
@@ -267,6 +267,38 @@ Every eligible history snapshot contributes an explicit observation with `presen
 weight. An absence interrupts persistence and cannot support `ROLE_DRIFT`. Canonical timestamped
 snapshot IDs are bound to `as_of`, weights are finite long-only values, and snapshot, record,
 observation, operation, and wall-time budgets fail closed. Accepted history is indexed once.
+
+Attribute evidenced P&L over bounded immutable snapshot history:
+
+```bash
+python scripts/portfolio.py performance --from 2026-08-01 --to 2026-08-27 --json --no-save
+```
+
+Dates are inclusive UTC calendar dates. The first and last selected snapshots must fall on the
+requested endpoint dates, and gaps longer than 36 hours prevent `ACCURATE_PNL`. Every snapshot is
+loaded through `SnapshotRepository`, so schema, full-body identity, and Phase 1 financial semantics
+are revalidated before attribution. Accounts, base currency, classifications, account-level legs,
+and FX source provenance must remain consistent. A missing/opened/closed/transferred leg is
+`UNAVAILABLE`, never silently netted at the canonical `MARKET.SYMBOL` level.
+
+Symbol P&L uses only complete cumulative realized/unrealized base-field endpoint deltas. Sector,
+region, theme-full, and additive theme-split totals are Decimal-only and reconcile to the available
+symbol population. Top contributors and detractors are deterministically ranked. The report's
+`ACCURATE_PNL` mode describes P&L-field authority only; it does not imply an account return.
+
+The official cash-flow reader is not in the current digest-pinned adapter allowlist. Therefore the
+CLI truthfully records external-flow evidence as unavailable and leaves `portfolio_return` null.
+Library callers may supply strictly verified deposits, withdrawals, and internal transfers with
+currency, FX, timestamp, coverage, and provenance. Only complete flow coverage plus continuous
+valuations enables the documented end-of-subperiod-adjusted TWR. IRR is always explicitly
+`NOT_CALCULATED`; it is never inferred. Price traceability uses only the audited forward-adjusted
+daily `get_kline` reader, completed market-local close cutoffs, strict date intersection, per-call,
+row, request, failure-circuit, and wall-time budgets. Price failure cannot change snapshot-field P&L
+authority. See [references/performance-attribution.md](references/performance-attribution.md).
+
+`performance --output DIRECTORY` writes JSON and escaped Markdown as one private manifest-last
+transaction. The default and `--no-save` are side-effect free. Performance never appends a journal
+event implicitly.
 
 Journal writes are explicit, append-only operations:
 

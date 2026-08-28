@@ -56,6 +56,12 @@ from .snapshot import UnsafeAggregationError
 from .snapshot_io import InvalidSnapshot
 from .trade_history import FutuTradeHistoryService
 from .trade_review import TradePolicyConfigError, TradeReviewInputError, load_trade_policy
+from .performance import (
+    AttributionInputError,
+    ExternalFlowEvidence,
+    MAX_ATTRIBUTION_SNAPSHOTS,
+    analyze_performance,
+)
 
 
 class _JsonParseError(ValueError):
@@ -157,6 +163,18 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     trades.add_argument("--no-save", action="store_true")
     trades.add_argument("--verbose", action="store_true")
 
+    performance = subparsers.add_parser(
+        "performance", help="attribute P&L across immutable snapshot history"
+    )
+    performance.add_argument("--from", required=True, dest="start", help="inclusive UTC date")
+    performance.add_argument("--to", required=True, dest="end", help="inclusive UTC date")
+    performance.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    performance.add_argument("--output", help="relative bundle directory under data home")
+    performance.add_argument("--no-save", action="store_true")
+    performance.add_argument("--verbose", action="store_true")
+
     lifecycle = subparsers.add_parser("lifecycle", help="inspect or validate local lifecycle facts")
     lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
     lifecycle_init = lifecycle_actions.add_parser("init", help="explicitly create one user record")
@@ -243,7 +261,7 @@ def _requires_secure_platform_mutation(args: argparse.Namespace) -> bool:
 
     if args.command == "snapshot":
         return bool(args.save and not args.no_save)
-    if args.command in {"doctor", "risk", "analyze", "simulate", "trades"}:
+    if args.command in {"doctor", "risk", "analyze", "simulate", "trades", "performance"}:
         return bool(args.output and not args.no_save)
     if args.command == "lifecycle":
         return args.lifecycle_action == "init" or bool(
@@ -495,6 +513,71 @@ def main(argv: Sequence[str] | None = None) -> int:
                 SnapshotStore(private_home).save(args.output, rendered + "\n")
             print(rendered)
             return 0 if report["ok"] else 1
+
+        if args.command == "performance":
+            try:
+                start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+            except ValueError:
+                raise AttributionInputError("performance dates must use YYYY-MM-DD") from None
+            if start > end or end > datetime.now(timezone.utc).date() or (end - start).days > 366:
+                raise AttributionInputError(
+                    "performance range is invalid, future-dated, or exceeds 366 days"
+                )
+            range_start = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
+            range_end = datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc)
+            snapshots = SnapshotRepository(settings.data_home).list(
+                start=range_start,
+                end=range_end,
+                limit=MAX_ATTRIBUTION_SNAPSHOTS,
+                max_total_bytes=MAX_HISTORY_TOTAL_BYTES,
+            )
+            price_provider = None
+            skill_dir = discover_futuapi_skill()
+            if skill_dir is not None:
+                from .price_history import FutuAdjustedPriceProvider
+
+                price_provider = FutuAdjustedPriceProvider(FutuAdapter(skill_dir))
+            report = analyze_performance(
+                snapshots,
+                start=start,
+                end=end,
+                flow_evidence=ExternalFlowEvidence.unavailable(
+                    "authoritative deposits, withdrawals and transfers are not configured"
+                ),
+                price_provider=price_provider,
+            )
+            payload = report.to_dict()
+            from .schema import validate_performance_document
+
+            validate_performance_document(payload, source_snapshots=snapshots)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                json_content = rendered + "\n"
+                json_digest = hashlib.sha256(json_content.encode("utf-8")).hexdigest()
+                resolve_output_path(
+                    settings.data_home, Path(args.output) / "performance_attribution.json"
+                )
+                artifact_files = {
+                    "performance_attribution.json": json_content,
+                    "performance_attribution.md": report.to_markdown(
+                        json_artifact="performance_attribution.json",
+                        json_digest=json_digest,
+                    ),
+                }
+                SnapshotStore(settings.data_home).save_bundle(
+                    args.output,
+                    {
+                        **artifact_files,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=report.source_snapshot_ids[-1],
+                            as_of=payload["as_of"],
+                            report_id=report.attribution_id,
+                            files=artifact_files,
+                        ),
+                    },
+                )
+            print(rendered if args.as_json else report.to_human())
+            return 0
 
         if args.command in {"risk", "analyze"}:
             source_snapshot = _load_selected_snapshot(
@@ -781,6 +864,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "INVALID_LIFECYCLE", str(exc))
     except JournalError as exc:
         return _emit_error(args, "INVALID_JOURNAL", str(exc))
+    except AttributionInputError as exc:
+        return _emit_error(args, "INVALID_PERFORMANCE", str(exc))
     except SnapshotRepositoryError as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except UnsafeAggregationError as exc:

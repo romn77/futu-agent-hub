@@ -11,7 +11,7 @@ from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, NoReturn, Sequence
 from zoneinfo import ZoneInfo
 
 import jsonschema
@@ -1340,6 +1340,695 @@ def validate_journal_document(payload: dict[str, Any]) -> None:
         raise ReportSemanticError("journal decision semantics are inconsistent")
     if (payload["event_type"] == "PORTFOLIO_ANALYSIS") != (payload["artifact_path"] is not None):
         raise ReportSemanticError("journal artifact semantics are inconsistent")
+
+
+def validate_performance_document(
+    payload: dict[str, Any],
+    *,
+    source_snapshots: Sequence[Any] | None = None,
+    max_validation_operations: int = 750_000,
+    max_validation_seconds: float = 10.0,
+    validation_clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Validate strict attribution shape and reconstruct every authority-bearing total."""
+
+    started = validation_clock()
+    remaining = max_validation_operations
+    if remaining <= 0 or max_validation_seconds <= 0:
+        raise ReportSemanticError("performance validation budgets must be positive")
+
+    def consume(count: int = 1) -> None:
+        nonlocal remaining
+        remaining -= count
+        if remaining < 0 or validation_clock() - started > max_validation_seconds:
+            raise ReportSemanticError("performance validation budget exceeded")
+
+    stack: list[tuple[Any, int]] = [(payload, 0)]
+    nodes = strings = 0
+    while stack:
+        value, depth = stack.pop()
+        consume()
+        nodes += 1
+        if nodes > 400_000 or depth > 32:
+            raise ReportSemanticError("performance validation shape exceeded")
+        if isinstance(value, dict):
+            if len(value) > 4096:
+                raise ReportSemanticError("performance validation map exceeded")
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise ReportSemanticError("performance validation key is invalid")
+                strings += len(key.encode("utf-8"))
+                stack.append((child, depth + 1))
+        elif isinstance(value, list):
+            if len(value) > 20_000:
+                raise ReportSemanticError("performance validation array exceeded")
+            stack.extend((child, depth + 1) for child in value)
+        elif isinstance(value, str):
+            strings += len(value.encode("utf-8"))
+        if strings > 32 * 1024 * 1024:
+            raise ReportSemanticError("performance validation document exceeded")
+    _validate(payload, "performance_attribution.schema.json")
+    consume()
+
+    verified_fx_changed: bool | None = None
+    if source_snapshots is not None:
+        from .performance import _contributions, _snapshot_digest
+        from .snapshot_io import snapshot_from_document
+
+        try:
+            if len(source_snapshots) > 366:
+                raise ValueError("source snapshot validation budget exceeded")
+            validated_sources = tuple(
+                sorted(
+                    (snapshot_from_document(item.to_dict()) for item in source_snapshots),
+                    key=lambda item: (item.as_of, item.snapshot_id),
+                )
+            )
+            consume(len(validated_sources) * 10)
+            if tuple(item.snapshot_id for item in validated_sources) != tuple(
+                payload["source_snapshot_ids"]
+            ):
+                raise ValueError("source snapshot sequence mismatch")
+            if {item.snapshot_id: _snapshot_digest(item) for item in validated_sources} != payload[
+                "source_snapshot_digests"
+            ]:
+                raise ValueError("source snapshot digest mismatch")
+            expected_valuations = [
+                {
+                    "snapshot_id": item.snapshot_id,
+                    "as_of": _json_value(item.as_of),
+                    "nav_base": _json_value(item.nav_base),
+                }
+                for item in validated_sources
+            ]
+            if expected_valuations != payload["period"]["valuations"]:
+                raise ValueError("source valuation evidence mismatch")
+            if (
+                not validated_sources
+                or payload["base_currency"] != validated_sources[0].base_currency
+            ):
+                raise ValueError("source base currency mismatch")
+            if payload["coverage"]["source_position_rows"] != sum(
+                len(item.positions) for item in validated_sources
+            ):
+                raise ValueError("source position coverage mismatch")
+            expected_contributions, _unused_reasons = _contributions(
+                validated_sources[0], validated_sources[-1]
+            )
+            if [_json_value(item) for item in expected_contributions] != payload[
+                "symbol_contributions"
+            ]:
+                raise ValueError("source snapshot contribution evidence mismatch")
+            verified_fx_changed = (
+                len(
+                    {
+                        tuple(
+                            sorted(
+                                (
+                                    evidence.source_currency,
+                                    evidence.target_currency,
+                                    evidence.source,
+                                )
+                                for evidence in item.fx_evidence
+                            )
+                        )
+                        for item in validated_sources
+                    }
+                )
+                != 1
+            )
+        except Exception as exc:
+            raise ReportSemanticError(f"performance source validation failed: {exc}") from exc
+
+    def fail(detail: str) -> NoReturn:
+        raise ReportSemanticError(f"performance semantic validation failed: {detail}")
+
+    try:
+
+        def decimal(value: Any) -> Decimal:
+            return Decimal(value)
+
+        source_ids = payload["source_snapshot_ids"]
+        valuations = payload["period"]["valuations"]
+        if [item["snapshot_id"] for item in valuations] != source_ids:
+            fail("valuation identities must exactly match source snapshots")
+        if set(payload["source_snapshot_digests"]) != set(source_ids):
+            fail("snapshot digests must exactly cover source snapshots")
+        coverage = payload["coverage"]
+        if coverage["source_snapshots"] != len(source_ids):
+            fail("snapshot coverage does not reconcile")
+        timestamps = [
+            datetime.fromisoformat(item["as_of"].replace("Z", "+00:00")) for item in valuations
+        ]
+        if timestamps != sorted(timestamps) or len(set(timestamps)) != len(timestamps):
+            fail("valuation timestamps must be unique and ordered")
+        for source_id, instant in zip(source_ids, timestamps):
+            if _snapshot_id_timestamp(source_id, label="performance source") != utc_floor_second(
+                instant
+            ):
+                fail("snapshot identity timestamp disagrees with valuation")
+        if payload["as_of"] != valuations[-1]["as_of"]:
+            fail("report as_of must equal final valuation")
+        period = payload["period"]
+        start_date, end_date = (
+            date.fromisoformat(period["requested_start"]),
+            date.fromisoformat(period["requested_end"]),
+        )
+        if start_date > end_date or (end_date - start_date).days > 366:
+            fail("requested period is invalid")
+        if (
+            period["selected_start_as_of"] != valuations[0]["as_of"]
+            or period["selected_end_as_of"] != valuations[-1]["as_of"]
+        ):
+            fail("selected endpoint evidence is inconsistent")
+        expected_start_covered = timestamps[0].astimezone(timezone.utc).date() == start_date
+        expected_end_covered = timestamps[-1].astimezone(timezone.utc).date() == end_date
+        if (
+            period["start_date_covered"] != expected_start_covered
+            or period["end_date_covered"] != expected_end_covered
+        ):
+            fail("date coverage flags are inconsistent")
+        gaps = []
+        maximum_gap = 0
+        for index, (before, after) in enumerate(zip(timestamps, timestamps[1:])):
+            delta = after - before
+            microseconds = (
+                delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
+            )
+            seconds = (microseconds + 999_999) // 1_000_000
+            maximum_gap = max(maximum_gap, seconds)
+            if seconds > 36 * 60 * 60:
+                gaps.append(
+                    {
+                        "from_snapshot_id": source_ids[index],
+                        "to_snapshot_id": source_ids[index + 1],
+                        "seconds": seconds,
+                    }
+                )
+        if (
+            period["gaps"] != gaps
+            or period["maximum_gap_seconds"] != maximum_gap
+            or period["continuous"] != (not gaps)
+        ):
+            fail("valuation gap evidence is inconsistent")
+
+        contributions = payload["symbol_contributions"]
+        identities = [item["identity"] for item in contributions]
+        if identities != sorted(set(identities)):
+            fail("symbol contributions must be unique and identity-sorted")
+        if coverage["canonical_identities"] != len(contributions) or coverage[
+            "price_requested"
+        ] != len(contributions):
+            fail("identity coverage does not reconcile")
+        available = []
+        for item in contributions:
+            consume(10)
+            values = (item["pnl_base"], item["realized_pnl_base"], item["unrealized_pnl_base"])
+            if item["status"] == "AVAILABLE":
+                if (
+                    any(value is None for value in values)
+                    or item["method"] != "SNAPSHOT_CUMULATIVE_PNL_DELTA"
+                ):
+                    fail("available contribution lacks exact P&L evidence")
+                if decimal(item["pnl_base"]) != decimal(item["realized_pnl_base"]) + decimal(
+                    item["unrealized_pnl_base"]
+                ):
+                    fail("symbol P&L does not reconcile")
+                available.append(item)
+            elif any(value is not None for value in values):
+                fail("unavailable contribution cannot contain P&L")
+        expected_complete = (
+            bool(contributions)
+            and len(available) == len(contributions)
+            and period["continuous"]
+            and expected_start_covered
+            and expected_end_covered
+            and not any(
+                reason["code"] in {"FX_PROVENANCE_CHANGED", "PNL_NAV_RECONCILIATION_MISMATCH"}
+                for reason in payload["quality_reasons"]
+            )
+        )
+        expected_status = (
+            "COMPLETE" if expected_complete else "PARTIAL" if available else "UNAVAILABLE"
+        )
+        expected_mode = (
+            "ACCURATE_PNL"
+            if expected_complete
+            else "RECONSTRUCTED"
+            if contributions
+            else "UNAVAILABLE"
+        )
+        expected_confidence = "HIGH" if expected_complete else "LOW" if contributions else "NONE"
+        if (payload["contribution_status"], payload["mode"], payload["confidence"]) != (
+            expected_status,
+            expected_mode,
+            expected_confidence,
+        ):
+            fail("mode, confidence and contribution coverage disagree")
+        if coverage["available_contributions"] != len(available) or coverage[
+            "unavailable_contributions"
+        ] != len(contributions) - len(available):
+            fail("contribution coverage does not reconcile")
+        expected_total = (
+            sum((decimal(item["pnl_base"]) for item in available), Decimal(0))
+            if available
+            else None
+        )
+        expected_realized = (
+            sum((decimal(item["realized_pnl_base"]) for item in available), Decimal(0))
+            if available
+            else None
+        )
+        expected_unrealized = (
+            sum((decimal(item["unrealized_pnl_base"]) for item in available), Decimal(0))
+            if available
+            else None
+        )
+        for field, expected in (
+            ("total_pnl_base", expected_total),
+            ("realized_pnl_base", expected_realized),
+            ("unrealized_pnl_base", expected_unrealized),
+        ):
+            observed = None if payload[field] is None else decimal(payload[field])
+            if observed != expected:
+                fail(f"{field} does not reconcile")
+
+        def aggregate(attribute: str, *, split: bool = False) -> dict[str, Decimal]:
+            result: dict[str, Decimal] = {}
+            for item in available:
+                labels = item[attribute]
+                if isinstance(labels, str):
+                    labels = [labels]
+                labels = labels or ["UNKNOWN"]
+                amount = (
+                    decimal(item["pnl_base"]) / Decimal(len(labels))
+                    if split
+                    else decimal(item["pnl_base"])
+                )
+                for label in labels:
+                    result[label] = result.get(label, Decimal(0)) + amount
+            return dict(sorted(result.items()))
+
+        for field, attribute, split in (
+            ("sector_contributions", "sector", False),
+            ("region_contributions", "region", False),
+            ("theme_full_contributions", "themes", False),
+            ("theme_split_contributions", "themes", True),
+        ):
+            observed = {key: decimal(value) for key, value in payload[field].items()}
+            if observed != aggregate(attribute, split=split):
+                fail(f"{field} does not reconcile")
+        expected_contributors = sorted(
+            (item for item in available if decimal(item["pnl_base"]) > 0),
+            key=lambda item: (-decimal(item["pnl_base"]), item["identity"]),
+        )[:5]
+        expected_detractors = sorted(
+            (item for item in available if decimal(item["pnl_base"]) < 0),
+            key=lambda item: (decimal(item["pnl_base"]), item["identity"]),
+        )[:5]
+        if (
+            payload["top_contributors"] != expected_contributors
+            or payload["top_detractors"] != expected_detractors
+        ):
+            fail("top contribution rankings are inconsistent")
+
+        price_identities: set[str] = set()
+        if [item["identity"] for item in payload["price_evidence"]] != identities[
+            : len(payload["price_evidence"])
+        ]:
+            fail("price evidence must follow the bounded contribution identity prefix")
+        for evidence in payload["price_evidence"]:
+            consume(5 + len(evidence["points"]))
+            if evidence["identity"] in price_identities:
+                fail("price evidence identities must be unique")
+            price_identities.add(evidence["identity"])
+            points = evidence["points"]
+            point_dates = [date.fromisoformat(item["date"]) for item in points]
+            market = evidence["identity"].split(".", 1)[0]
+            if (
+                evidence["requested_start"] != period["requested_start"]
+                or evidence["requested_end"] != period["requested_end"]
+            ):
+                fail("price request period must match report period")
+            expected_cutoff = min(
+                date.fromisoformat(evidence["requested_end"]),
+                _latest_complete_market_close_date(timestamps[-1], market),
+            )
+            if date.fromisoformat(evidence["cutoff_date"]) != expected_cutoff:
+                fail("price completed-close cutoff is inconsistent")
+            if point_dates != sorted(set(point_dates)):
+                fail("price dates must be unique and ordered")
+            if any(
+                day < date.fromisoformat(evidence["requested_start"]) or day > expected_cutoff
+                for day in point_dates
+            ):
+                fail("price evidence contains look-ahead or pre-period rows")
+            if evidence["rows"] != len(points):
+                fail("price row coverage does not reconcile")
+            if points:
+                raw = "|".join(f"{item['date']}:{item['adjusted_close']}" for item in points)
+                expected_digest = hashlib.sha256(raw.encode()).hexdigest()
+                if (
+                    evidence["status"] != "AVAILABLE"
+                    or evidence["first_date"] != points[0]["date"]
+                    or evidence["last_date"] != points[-1]["date"]
+                    or evidence["digest"] != expected_digest
+                    or evidence["reason"] is not None
+                    or any(decimal(item["adjusted_close"]) <= 0 for item in points)
+                ):
+                    fail("available price evidence is inconsistent")
+            elif (
+                evidence["status"] != "UNAVAILABLE"
+                or evidence["first_date"] is not None
+                or evidence["last_date"] is not None
+                or evidence["digest"] is not None
+                or not evidence["reason"]
+            ):
+                fail("unavailable price evidence is inconsistent")
+        if (
+            coverage["price_analyzed"] != len(payload["price_evidence"])
+            or coverage["price_omitted"] != coverage["price_requested"] - coverage["price_analyzed"]
+            or coverage["price_available"]
+            != sum(item["status"] == "AVAILABLE" for item in payload["price_evidence"])
+        ):
+            fail("price coverage does not reconcile")
+        if sum(item["rows"] for item in payload["price_evidence"]) > 20_000:
+            fail("price aggregate row budget exceeded")
+
+        flows = payload["flow_evidence"]["flows"]
+        if coverage["flow_rows"] != len(flows):
+            fail("flow coverage does not reconcile")
+        if len({item["flow_id"] for item in flows}) != len(flows):
+            fail("flow IDs are not unique")
+        for item in flows:
+            amount_base = decimal(item["amount_base"])
+            if (
+                decimal(item["fx_to_base"]) <= 0
+                or decimal(item["amount_local"]) * decimal(item["fx_to_base"]) != amount_base
+                or (item["flow_type"] == "DEPOSIT" and amount_base <= 0)
+                or (item["flow_type"] == "WITHDRAWAL" and amount_base >= 0)
+            ):
+                fail("flow FX does not reconcile")
+        external = sum(
+            (
+                decimal(item["amount_base"])
+                for item in flows
+                if item["flow_type"] != "INTERNAL_TRANSFER"
+            ),
+            Decimal(0),
+        )
+        internal = sum(
+            (
+                decimal(item["amount_base"])
+                for item in flows
+                if item["flow_type"] == "INTERNAL_TRANSFER"
+            ),
+            Decimal(0),
+        )
+        expected_external = (
+            external if flows or payload["flow_evidence"]["status"] == "COMPLETE" else None
+        )
+        expected_internal = (
+            internal if flows or payload["flow_evidence"]["status"] == "COMPLETE" else None
+        )
+        if (
+            None
+            if payload["external_flow_base"] is None
+            else decimal(payload["external_flow_base"])
+        ) != expected_external or (
+            None
+            if payload["internal_transfer_base"] is None
+            else decimal(payload["internal_transfer_base"])
+        ) != expected_internal:
+            fail("flow totals do not reconcile")
+        flow_coverage = payload["flow_evidence"]
+        if flow_coverage["status"] == "COMPLETE":
+            if (
+                flow_coverage["source"] is None
+                or flow_coverage["coverage_start"] is None
+                or flow_coverage["coverage_end"] is None
+                or flow_coverage["reason"] is not None
+            ):
+                fail("complete flow evidence is inconsistent")
+            coverage_start = datetime.fromisoformat(
+                flow_coverage["coverage_start"].replace("Z", "+00:00")
+            )
+            coverage_end = datetime.fromisoformat(
+                flow_coverage["coverage_end"].replace("Z", "+00:00")
+            )
+            if coverage_start > coverage_end or any(
+                not (
+                    coverage_start
+                    <= datetime.fromisoformat(item["occurred_at"].replace("Z", "+00:00"))
+                    <= coverage_end
+                )
+                for item in flows
+            ):
+                fail("flow rows lie outside declared source coverage")
+            if any(
+                not (
+                    timestamps[0]
+                    < datetime.fromisoformat(item["occurred_at"].replace("Z", "+00:00"))
+                    <= timestamps[-1]
+                )
+                for item in flows
+            ):
+                fail("report flow rows must be scoped to the selected valuation interval")
+        elif flow_coverage["status"] == "UNAVAILABLE":
+            if (
+                flow_coverage["source"] is not None
+                or flow_coverage["coverage_start"] is not None
+                or flow_coverage["coverage_end"] is not None
+                or flows
+                or not flow_coverage["reason"]
+            ):
+                fail("unavailable flow evidence is inconsistent")
+        else:
+            if (
+                flow_coverage["source"] is None
+                or flow_coverage["coverage_start"] is None
+                or flow_coverage["coverage_end"] is None
+                or not flow_coverage["reason"]
+            ):
+                fail("partial flow evidence is inconsistent")
+            partial_start = datetime.fromisoformat(
+                flow_coverage["coverage_start"].replace("Z", "+00:00")
+            )
+            partial_end = datetime.fromisoformat(
+                flow_coverage["coverage_end"].replace("Z", "+00:00")
+            )
+            if partial_start > partial_end or any(
+                not (
+                    partial_start
+                    <= datetime.fromisoformat(item["occurred_at"].replace("Z", "+00:00"))
+                    <= partial_end
+                )
+                for item in flows
+            ):
+                fail("partial flow rows lie outside source coverage")
+        coverage_complete = (
+            flow_coverage["status"] == "COMPLETE"
+            and datetime.fromisoformat(flow_coverage["coverage_start"].replace("Z", "+00:00"))
+            <= timestamps[0]
+            and datetime.fromisoformat(flow_coverage["coverage_end"].replace("Z", "+00:00"))
+            >= timestamps[-1]
+        )
+        return_authorized = (
+            coverage_complete and not gaps and expected_start_covered and expected_end_covered
+        )
+        reconciliation = payload["pnl_reconciliation"]
+        nav_change = decimal(valuations[-1]["nav_base"]) - decimal(valuations[0]["nav_base"])
+        field_population_complete = bool(contributions) and len(available) == len(contributions)
+        if coverage_complete and expected_total is not None:
+            expected_net = nav_change - external
+            if field_population_complete:
+                expected_residual = expected_net - expected_total
+                expected_reconciliation_status = "MATCHED" if expected_residual == 0 else "MISMATCH"
+            else:
+                expected_residual = None
+                expected_reconciliation_status = "PARTIAL"
+        else:
+            expected_net = None
+            expected_residual = None
+            expected_reconciliation_status = "UNAVAILABLE"
+        expected_reconciliation = {
+            "status": expected_reconciliation_status,
+            "basis": "ENDING_NAV_MINUS_BEGINNING_NAV_MINUS_EXTERNAL_FLOWS",
+            "nav_change_base": nav_change,
+            "external_flow_base": external if coverage_complete else None,
+            "expected_net_pnl_base": expected_net,
+            "attributed_pnl_base": expected_total,
+            "residual_base": expected_residual,
+        }
+        observed_reconciliation = {
+            key: decimal(value) if key.endswith("_base") and value is not None else value
+            for key, value in reconciliation.items()
+        }
+        if observed_reconciliation != expected_reconciliation:
+            fail("P&L to NAV reconciliation evidence is inconsistent")
+        if return_authorized:
+            chained = Decimal(1)
+            for before_index, (before_time, after_time) in enumerate(
+                zip(timestamps, timestamps[1:])
+            ):
+                beginning_nav = decimal(valuations[before_index]["nav_base"])
+                if beginning_nav <= 0:
+                    fail("TWR beginning NAV must be positive")
+                subflow = sum(
+                    (
+                        decimal(item["amount_base"])
+                        for item in flows
+                        if item["flow_type"] != "INTERNAL_TRANSFER"
+                        and before_time
+                        < datetime.fromisoformat(item["occurred_at"].replace("Z", "+00:00"))
+                        <= after_time
+                    ),
+                    Decimal(0),
+                )
+                chained *= (
+                    decimal(valuations[before_index + 1]["nav_base"]) - subflow
+                ) / beginning_nav
+            if (
+                payload["return_status"] != "AVAILABLE"
+                or payload["return_method"] != "TWR_END_OF_SUBPERIOD_FLOW_ADJUSTMENT"
+                or decimal(payload["portfolio_return"]) != chained - Decimal(1)
+            ):
+                fail("TWR does not reconstruct from valuations and flows")
+        elif (
+            payload["return_status"] != "UNAVAILABLE"
+            or payload["return_method"] is not None
+            or payload["portfolio_return"] is not None
+        ):
+            fail("return is claimed without complete flow and valuation authority")
+        if (
+            payload["irr_status"] != "NOT_CALCULATED"
+            or payload["irr_method"] is not None
+            or payload["irr"] is not None
+        ):
+            fail("IRR authority is inconsistent")
+
+        expected_reasons: list[dict[str, str]] = []
+        contribution_reason_details = {
+            "ENDPOINT_POSITION_MISSING": (
+                "POSITION_ENDPOINT_MISSING",
+                "position opened or closed inside the interval; trades/corporate actions are not authoritative",
+            ),
+            "ACCOUNT_LEGS_CHANGED": (
+                "ACCOUNT_LEGS_CHANGED",
+                "account-level position legs differ across endpoints; transfer or closure is ambiguous",
+            ),
+            "CLASSIFICATION_INCONSISTENT": (
+                "CLASSIFICATION_CHANGED",
+                "classification is inconsistent across accounts or endpoints",
+            ),
+            "SNAPSHOT_PNL_FIELDS_INCOMPLETE": (
+                "PNL_FIELDS_INCOMPLETE",
+                "realized/unrealized base P&L is incomplete",
+            ),
+        }
+        for item in contributions:
+            reason = contribution_reason_details.get(item["method"])
+            if reason is not None:
+                expected_reasons.append(
+                    {"code": reason[0], "scope": item["identity"], "detail": reason[1]}
+                )
+        if gaps:
+            expected_reasons.append(
+                {
+                    "code": "SNAPSHOT_CADENCE_GAP",
+                    "scope": "snapshot_interval",
+                    "detail": "one or more valuation gaps exceed the documented 36-hour cadence",
+                }
+            )
+        if not expected_start_covered or not expected_end_covered:
+            expected_reasons.append(
+                {
+                    "code": "ENDPOINT_DATE_COVERAGE_INCOMPLETE",
+                    "scope": "snapshot_interval",
+                    "detail": "both requested inclusive UTC dates require a snapshot",
+                }
+            )
+        observed_fx_reason = any(
+            item["code"] == "FX_PROVENANCE_CHANGED" for item in payload["quality_reasons"]
+        )
+        if verified_fx_changed is True or (verified_fx_changed is None and observed_fx_reason):
+            expected_reasons.append(
+                {
+                    "code": "FX_PROVENANCE_CHANGED",
+                    "scope": "snapshot_interval",
+                    "detail": "FX currency-pair source provenance changes inside the period",
+                }
+            )
+        if verified_fx_changed is False and observed_fx_reason:
+            fail("FX provenance reason contradicts source snapshots")
+        if not return_authorized:
+            if not coverage_complete:
+                expected_reasons.append(
+                    {
+                        "code": "EXTERNAL_FLOW_COVERAGE_INCOMPLETE",
+                        "scope": "portfolio_return",
+                        "detail": flow_coverage["reason"]
+                        or "flow evidence does not cover selected valuation timestamps",
+                    }
+                )
+            else:
+                expected_reasons.append(
+                    {
+                        "code": "VALUATION_COVERAGE_INCOMPLETE",
+                        "scope": "portfolio_return",
+                        "detail": "TWR requires continuous snapshots and both requested UTC dates",
+                    }
+                )
+        if expected_reconciliation_status == "MISMATCH":
+            expected_reasons.append(
+                {
+                    "code": "PNL_NAV_RECONCILIATION_MISMATCH",
+                    "scope": "pnl_reconciliation",
+                    "detail": "attributed cumulative P&L deltas do not reconcile to NAV change after verified external flows",
+                }
+            )
+        if coverage["price_analyzed"] == 0 and coverage["price_requested"]:
+            expected_reasons.append(
+                {
+                    "code": "PRICE_SOURCE_UNAVAILABLE",
+                    "scope": "price_evidence",
+                    "detail": "the audited adjusted-close provider is unavailable; snapshot P&L attribution remains isolated",
+                }
+            )
+        elif coverage["price_omitted"]:
+            expected_reasons.append(
+                {
+                    "code": "PRICE_BUDGET_LIMIT",
+                    "scope": "price_evidence",
+                    "detail": "price request count was capped by the documented budget",
+                }
+            )
+        if coverage["price_analyzed"] and coverage["price_available"] < coverage["price_analyzed"]:
+            expected_reasons.append(
+                {
+                    "code": "PRICE_DATA_PARTIAL",
+                    "scope": "price_evidence",
+                    "detail": "one or more bounded adjusted-close histories are unavailable",
+                }
+            )
+        if payload["quality_reasons"] != expected_reasons:
+            fail("quality reasons do not reconstruct from report evidence")
+        if payload["quality_status"] != (
+            "COMPLETE" if not payload["quality_reasons"] else "PARTIAL"
+        ):
+            fail("quality status does not match structured reasons")
+
+        canonical = dict(payload)
+        canonical.pop("attribution_id")
+        digest = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:20]
+        if payload["attribution_id"] != f"pa-{digest}":
+            fail("attribution ID does not bind the complete report body")
+    except ReportSemanticError:
+        raise
+    except (KeyError, InvalidOperation, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ReportSemanticError(f"performance semantic validation failed: {exc}") from exc
 
 
 def validate_trade_review_document(

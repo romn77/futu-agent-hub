@@ -15,3 +15,9 @@ not a claim about a live rate provider. Account-currency IDs are invented and re
 
 Lifecycle examples are synthetic and contain no account identifiers or real investment theses.
 All persistence and concurrency tests write only below pytest temporary directories.
+
+# Phase 5
+
+`performance_attribution_golden_snippet.json` contains only deterministic synthetic endpoint-P&L
+expectations. It deliberately keeps portfolio return and IRR unavailable because no authoritative
+external cash-flow source is present in the fixture.

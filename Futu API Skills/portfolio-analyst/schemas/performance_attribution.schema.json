@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-analyst.local/schemas/performance_attribution.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attribution_id", "as_of", "period", "base_currency", "source_snapshot_ids", "source_snapshot_digests", "coverage", "mode", "confidence", "contribution_status", "total_pnl_base", "realized_pnl_base", "unrealized_pnl_base", "pnl_reconciliation", "symbol_contributions", "sector_contributions", "region_contributions", "theme_full_contributions", "theme_split_contributions", "top_contributors", "top_detractors", "price_evidence", "flow_evidence", "external_flow_base", "internal_transfer_base", "return_status", "return_method", "portfolio_return", "irr_status", "irr_method", "irr", "quality_status", "quality_reasons", "formulas", "limitations"],
+  "$defs": {
+    "decimal": {"type": "string", "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$", "maxLength": 256},
+    "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
+    "snapshotId": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
+    "qualityReason": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "scope", "detail"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "scope": {"type": "string", "minLength": 1, "maxLength": 256},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 2048}
+      }
+    },
+    "contribution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "market", "symbol", "account_refs", "status", "method", "pnl_base", "realized_pnl_base", "unrealized_pnl_base", "sector", "region", "themes", "evidence"],
+      "properties": {
+        "identity": {"type": "string", "pattern": "^(US|HK|CN|SG|MY|JP|CA|AU)\\.[A-Z0-9]+([.-][A-Z0-9]+)*$"},
+        "market": {"enum": ["US", "HK", "CN", "SG", "MY", "JP", "CA", "AU"]},
+        "symbol": {"type": "string", "minLength": 1, "maxLength": 128},
+        "account_refs": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "status": {"enum": ["AVAILABLE", "UNAVAILABLE"]},
+        "method": {"enum": ["SNAPSHOT_CUMULATIVE_PNL_DELTA", "ENDPOINT_POSITION_MISSING", "ACCOUNT_LEGS_CHANGED", "CLASSIFICATION_INCONSISTENT", "SNAPSHOT_PNL_FIELDS_INCOMPLETE"]},
+        "pnl_base": {"$ref": "#/$defs/nullableDecimal"},
+        "realized_pnl_base": {"$ref": "#/$defs/nullableDecimal"},
+        "unrealized_pnl_base": {"$ref": "#/$defs/nullableDecimal"},
+        "sector": {"type": "string", "minLength": 1, "maxLength": 256},
+        "region": {"type": "string", "minLength": 1, "maxLength": 256},
+        "themes": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "evidence": {
+          "type": "object", "additionalProperties": false,
+          "required": ["start_snapshot_id", "end_snapshot_id", "start_present", "end_present", "start_rows", "end_rows"],
+          "properties": {
+            "start_snapshot_id": {"$ref": "#/$defs/snapshotId"},
+            "end_snapshot_id": {"$ref": "#/$defs/snapshotId"},
+            "start_present": {"type": "boolean"}, "end_present": {"type": "boolean"},
+            "start_rows": {"type": "integer", "minimum": 0, "maximum": 2000},
+            "end_rows": {"type": "integer", "minimum": 0, "maximum": 2000}
+          }
+        }
+      }
+    },
+    "contributionMap": {"type": "object", "maxProperties": 4096, "propertyNames": {"minLength": 1, "maxLength": 256}, "additionalProperties": {"$ref": "#/$defs/decimal"}},
+    "flow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["flow_id", "occurred_at", "flow_type", "currency", "amount_local", "fx_to_base", "amount_base", "provenance"],
+      "properties": {
+        "flow_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,256}$"},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "flow_type": {"enum": ["DEPOSIT", "WITHDRAWAL", "INTERNAL_TRANSFER"]},
+        "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "amount_local": {"$ref": "#/$defs/decimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"}, "amount_base": {"$ref": "#/$defs/decimal"},
+        "provenance": {"type": "string", "pattern": "^[A-Z][A-Z0-9_.:-]{0,127}$"}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "attribution_id": {"type": "string", "pattern": "^pa-[0-9a-f]{20}$"},
+    "as_of": {"type": "string", "format": "date-time"},
+    "period": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requested_start", "requested_end", "date_semantics", "selected_start_as_of", "selected_end_as_of", "start_date_covered", "end_date_covered", "continuous", "maximum_gap_seconds", "gaps", "valuations"],
+      "properties": {
+        "requested_start": {"type": "string", "format": "date"}, "requested_end": {"type": "string", "format": "date"},
+        "date_semantics": {"const": "INCLUSIVE_UTC_CALENDAR_DATES"},
+        "selected_start_as_of": {"type": "string", "format": "date-time"}, "selected_end_as_of": {"type": "string", "format": "date-time"},
+        "start_date_covered": {"type": "boolean"}, "end_date_covered": {"type": "boolean"}, "continuous": {"type": "boolean"},
+        "maximum_gap_seconds": {"type": "integer", "minimum": 0, "maximum": 31708800},
+        "gaps": {"type": "array", "maxItems": 365, "items": {"type": "object", "additionalProperties": false, "required": ["from_snapshot_id", "to_snapshot_id", "seconds"], "properties": {"from_snapshot_id": {"$ref": "#/$defs/snapshotId"}, "to_snapshot_id": {"$ref": "#/$defs/snapshotId"}, "seconds": {"type": "integer", "minimum": 1, "maximum": 31708800}}}},
+        "valuations": {"type": "array", "minItems": 2, "maxItems": 366, "items": {"type": "object", "additionalProperties": false, "required": ["snapshot_id", "as_of", "nav_base"], "properties": {"snapshot_id": {"$ref": "#/$defs/snapshotId"}, "as_of": {"type": "string", "format": "date-time"}, "nav_base": {"$ref": "#/$defs/decimal"}}}}
+      }
+    },
+    "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "source_snapshot_ids": {"type": "array", "minItems": 2, "maxItems": 366, "uniqueItems": true, "items": {"$ref": "#/$defs/snapshotId"}},
+    "source_snapshot_digests": {"type": "object", "minProperties": 2, "maxProperties": 366, "propertyNames": {"$ref": "#/$defs/snapshotId"}, "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "coverage": {"type": "object", "additionalProperties": false, "required": ["source_snapshots", "source_position_rows", "canonical_identities", "available_contributions", "unavailable_contributions", "price_requested", "price_analyzed", "price_omitted", "price_available", "flow_rows"], "properties": {"source_snapshots": {"type": "integer", "minimum": 2, "maximum": 366}, "source_position_rows": {"type": "integer", "minimum": 0, "maximum": 732000}, "canonical_identities": {"type": "integer", "minimum": 0, "maximum": 2000}, "available_contributions": {"type": "integer", "minimum": 0, "maximum": 2000}, "unavailable_contributions": {"type": "integer", "minimum": 0, "maximum": 2000}, "price_requested": {"type": "integer", "minimum": 0, "maximum": 2000}, "price_analyzed": {"type": "integer", "minimum": 0, "maximum": 100}, "price_omitted": {"type": "integer", "minimum": 0, "maximum": 2000}, "price_available": {"type": "integer", "minimum": 0, "maximum": 100}, "flow_rows": {"type": "integer", "minimum": 0, "maximum": 20000}}},
+    "mode": {"enum": ["ACCURATE_PNL", "RECONSTRUCTED", "UNAVAILABLE"]},
+    "confidence": {"enum": ["HIGH", "LOW", "NONE"]},
+    "contribution_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+    "total_pnl_base": {"$ref": "#/$defs/nullableDecimal"}, "realized_pnl_base": {"$ref": "#/$defs/nullableDecimal"}, "unrealized_pnl_base": {"$ref": "#/$defs/nullableDecimal"},
+    "pnl_reconciliation": {"type": "object", "additionalProperties": false, "required": ["status", "basis", "nav_change_base", "external_flow_base", "expected_net_pnl_base", "attributed_pnl_base", "residual_base"], "properties": {"status": {"enum": ["MATCHED", "MISMATCH", "PARTIAL", "UNAVAILABLE"]}, "basis": {"const": "ENDING_NAV_MINUS_BEGINNING_NAV_MINUS_EXTERNAL_FLOWS"}, "nav_change_base": {"$ref": "#/$defs/decimal"}, "external_flow_base": {"$ref": "#/$defs/nullableDecimal"}, "expected_net_pnl_base": {"$ref": "#/$defs/nullableDecimal"}, "attributed_pnl_base": {"$ref": "#/$defs/nullableDecimal"}, "residual_base": {"$ref": "#/$defs/nullableDecimal"}}},
+    "symbol_contributions": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/contribution"}},
+    "sector_contributions": {"$ref": "#/$defs/contributionMap"}, "region_contributions": {"$ref": "#/$defs/contributionMap"}, "theme_full_contributions": {"$ref": "#/$defs/contributionMap"}, "theme_split_contributions": {"$ref": "#/$defs/contributionMap"},
+    "top_contributors": {"type": "array", "maxItems": 5, "items": {"$ref": "#/$defs/contribution"}},
+    "top_detractors": {"type": "array", "maxItems": 5, "items": {"$ref": "#/$defs/contribution"}},
+    "price_evidence": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["identity", "status", "requested_start", "requested_end", "cutoff_date", "cutoff_policy", "first_date", "last_date", "rows", "points", "source", "adjustment", "digest", "reason"], "properties": {"identity": {"type": "string", "minLength": 1, "maxLength": 256}, "status": {"enum": ["AVAILABLE", "UNAVAILABLE"]}, "requested_start": {"type": "string", "format": "date"}, "requested_end": {"type": "string", "format": "date"}, "cutoff_date": {"type": "string", "format": "date"}, "cutoff_policy": {"const": "REGULAR_SESSIONS_V1"}, "first_date": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]}, "last_date": {"oneOf": [{"type": "string", "format": "date"}, {"type": "null"}]}, "rows": {"type": "integer", "minimum": 0, "maximum": 1000}, "points": {"type": "array", "maxItems": 1000, "items": {"type": "object", "additionalProperties": false, "required": ["date", "adjusted_close"], "properties": {"date": {"type": "string", "format": "date"}, "adjusted_close": {"$ref": "#/$defs/decimal"}}}}, "source": {"const": "AUDITED_FUTU_GET_KLINE"}, "adjustment": {"const": "FORWARD_ADJUSTED_DAILY_CLOSE"}, "digest": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]}, "reason": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 1024}, {"type": "null"}]}}}},
+    "flow_evidence": {"type": "object", "additionalProperties": false, "required": ["status", "source", "coverage_start", "coverage_end", "flows", "reason"], "properties": {"status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]}, "source": {"oneOf": [{"type": "string", "pattern": "^[A-Z][A-Z0-9_.:-]{0,127}$"}, {"type": "null"}]}, "coverage_start": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}, "coverage_end": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}, "flows": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/flow"}}, "reason": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 2048}, {"type": "null"}]}}},
+    "external_flow_base": {"$ref": "#/$defs/nullableDecimal"}, "internal_transfer_base": {"$ref": "#/$defs/nullableDecimal"},
+    "return_status": {"enum": ["AVAILABLE", "UNAVAILABLE"]}, "return_method": {"oneOf": [{"const": "TWR_END_OF_SUBPERIOD_FLOW_ADJUSTMENT"}, {"type": "null"}]}, "portfolio_return": {"$ref": "#/$defs/nullableDecimal"},
+    "irr_status": {"const": "NOT_CALCULATED"}, "irr_method": {"type": "null"}, "irr": {"type": "null"},
+    "quality_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+    "quality_reasons": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/qualityReason"}},
+    "formulas": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+    "limitations": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
+  }
+}
