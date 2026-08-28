@@ -10,22 +10,28 @@ valuations more than 36 hours apart are serialized as gaps and prohibit an accur
 All selected snapshots must retain the same environment, base currency, account identities and
 alias provenance. Each snapshot is reconstructed through the strict Phase 1 schema, complete-body
 content identity, and financial semantic validator. The report records every source ID plus a full
-SHA-256 serialization digest, selected valuation timestamps/NAVs, precise endpoint rules, and gap
-coverage.
+SHA-256 serialization digest, the source `data_quality` status/warnings/missing fields/source
+errors, selected valuation timestamps/NAVs, precise endpoint rules, and gap coverage. A partial,
+stale, reconstructed, unavailable, or error source cannot authorize `ACCURATE_PNL` or HIGH
+confidence. The CLI freezes one trusted `analysis_now`; future snapshots, including later instants
+on the same UTC date, fail with `FUTURE_SNAPSHOT`. Price cutoffs cannot exceed that instant.
 
 ## P&L authority
 
 Positions first aggregate by canonical `MARKET.SYMBOL` while retaining sorted account aliases.
-Sector, region and theme classifications must agree across every account leg and both endpoints.
-Account-leg changes, endpoint absence, or incomplete realized/unrealized base fields make that
-symbol unavailable. This avoids interpreting transfers, opens, closes or corporate actions as
-investment performance.
+The identity population is the union across every selected snapshot, not just the endpoints. Each
+report embeds an adjacent-snapshot trajectory with presence, account-leg quantity, cumulative
+realized/unrealized base fields, classification, FX and quality evidence. Sector, region and theme
+classifications must agree across every account leg and the full trajectory. A middle-only
+identity, account-leg reset/transfer, cumulative-field regression, FX discontinuity, or incomplete
+field is explicit and unavailable unless complete authoritative trade evidence reconciles it; it
+is never silently dropped or presented as HIGH-confidence snapshot attribution.
 
 For an available symbol:
 
 ```text
-realized contribution   = ending cumulative realized P&L base - beginning value
-unrealized contribution = ending cumulative unrealized P&L base - beginning value
+realized contribution   = sum(delta(cumulative realized P&L base) for every adjacent snapshot pair)
+unrealized contribution = sum(delta(cumulative unrealized P&L base) for every adjacent snapshot pair)
 symbol contribution     = realized contribution + unrealized contribution
 ```
 
@@ -59,7 +65,17 @@ authority rules. Unexpected programming errors are not swallowed by this degrada
 
 Validated normalized fills are FIFO matched by account and canonical identity. Fully in-period
 closed lots contribute gross pre-fee realized P&L, including symbols absent from the ending
-snapshot. Current symbols combine that realized amount with the adjusted-close unrealized estimate.
+snapshot. When authoritative open lots are available, current-symbol unrealized P&L is instead:
+
+```text
+open-lot unrealized gross base = sum((aligned ending close - lot cost) * lot quantity)
+```
+
+Open-lot quantities must exactly equal every ending snapshot account/identity leg. Fill prices and
+adjustment/corporate-action semantics must be consistent; otherwise the base contribution is null
+and partial. Thus a lot bought at 109 and ending at 110 contributes 1, regardless of an earlier
+period close of 100. The current-holding period-price-change formula is retained only as a
+separately named LOW-confidence fallback when authoritative trade evidence is unavailable.
 Base-currency fills convert exactly 1:1. Non-base FIFO P&L remains visible in local-currency buckets
 but its base contribution is null without transaction-date FX. Unmatched sells/opening inventory,
 transfers, corporate actions, orphan fills, order/fill quantity mismatches, status conflicts, failed
@@ -76,8 +92,9 @@ corporate actions, or cost-basis resets are not guessed. Without complete flow e
 cross-check is explicitly `UNAVAILABLE` and does not turn a snapshot-field delta into a return claim.
 
 Sector and region are additive. Theme-full repeats a multi-theme symbol's full contribution in each
-theme and is intentionally overlapping. Theme-split divides it equally and is additive. An empty
-theme list maps to `UNKNOWN`. Rankings use contribution descending then canonical identity for
+theme and is intentionally overlapping. Theme-split sorts labels, divides the first `n-1` shares,
+then assigns the exact Decimal residual to the last label, so each identity and aggregate reconcile
+exactly. An empty theme list maps to `UNKNOWN`. Rankings use contribution descending then canonical identity for
 contributors, and contribution ascending then identity for detractors.
 
 ## Cash flows and returns
@@ -114,16 +131,20 @@ price-only partial coverage as appropriate.
 
 ## Output and security
 
-The strict schema rejects unknown fields and caps every collection. Runtime validation reconstructs
-period gaps, P&L totals and splits, aggregates, rankings, price row digests/cutoffs, embedded Phase 3
-trade-review semantics/digest/FIFO references/local-currency buckets, flow totals,
+The strict schema rejects unknown fields and caps every collection. Shape preflight runs before
+schema validation, and operation/wall budgets are consumed while reading every source position and
+reconstructing every trajectory snapshot, leg and adjacent pair. Runtime validation reconstructs
+period gaps, source quality, P&L totals and splits, aggregates, rankings, price row digests/cutoffs,
+embedded Phase 3 trade-review semantics/digest/FIFO and open-lot references/local-currency buckets, flow totals,
 TWR, quality coverage and the complete report ID. Human and Markdown views escape all untrusted
 labels, show raw and aligned price coverage, formulas, source evidence, limitations and unavailable modules.
 
 The CLI range reader first narrows canonical IDs to the requested UTC year/month and whole-second
 envelope, then applies row/byte budgets and descriptor-reads bodies for exact microsecond `as_of`
-filtering. Thus unrelated history and out-of-range corrupt bodies do not exhaust or block a small
-range; matching misplaced, duplicate, or corrupt entries fail closed.
+filtering. Preflight sizes are not trusted: the opened descriptor's device/inode is matched and the
+actual bytes read are accumulated again, rejecting replacement or whitespace expansion beyond the
+consumer budget. Thus unrelated history and out-of-range corrupt bodies do not exhaust or block a
+small range; matching misplaced, duplicate, or corrupt entries fail closed.
 
 `--output DIR` writes `performance_attribution.json`, `performance_attribution.md`, then
 `manifest.json` as one private no-replace transaction below `PORTFOLIO_AGENT_HOME`. `--no-save`

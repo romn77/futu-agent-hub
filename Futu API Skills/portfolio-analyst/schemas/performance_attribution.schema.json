@@ -7,10 +7,12 @@
     "schema_version",
     "attribution_id",
     "as_of",
+    "analysis_now",
     "period",
     "base_currency",
     "source_snapshot_ids",
     "source_snapshot_digests",
+    "source_snapshot_quality",
     "coverage",
     "mode",
     "confidence",
@@ -147,15 +149,22 @@
         "method": {
           "enum": [
             "SNAPSHOT_CUMULATIVE_PNL_DELTA",
+            "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA",
             "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE",
             "TRADE_FIFO_REALIZED_PLUS_PRICE_UNREALIZED_ESTIMATE",
             "TRADE_FIFO_REALIZED_GROSS_PRE_FEE",
             "TRADE_FIFO_BASE_FX_UNAVAILABLE",
+            "TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE",
+            "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
             "RECONSTRUCTION_EVIDENCE_INCOMPLETE",
             "ENDPOINT_POSITION_MISSING",
             "ACCOUNT_LEGS_CHANGED",
             "CLASSIFICATION_INCONSISTENT",
-            "SNAPSHOT_PNL_FIELDS_INCOMPLETE"
+            "SNAPSHOT_PNL_FIELDS_INCOMPLETE",
+            "TRAJECTORY_POSITION_DISCONTINUITY",
+            "TRAJECTORY_ACCOUNT_LEGS_CHANGED",
+            "TRAJECTORY_FX_DISCONTINUITY",
+            "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY"
           ]
         },
         "pnl_base": {
@@ -242,6 +251,18 @@
             "ending_quantity": {
               "$ref": "#/$defs/decimal"
             },
+            "ending_quantity_by_account": {
+              "type": "object",
+              "maxProperties": 128,
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/decimal"
+              }
+            },
             "ending_fx_to_base": {
               "$ref": "#/$defs/decimal"
             },
@@ -277,6 +298,120 @@
               },
               "additionalProperties": {
                 "$ref": "#/$defs/decimal"
+              }
+            },
+            "open_lot_indexes": {
+              "type": "array",
+              "maxItems": 20000,
+              "uniqueItems": true,
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 19999
+              }
+            },
+            "open_lot_unrealized_base": {
+              "$ref": "#/$defs/decimal"
+            },
+            "price_fill_consistency": {
+              "const": "CORPORATE_ACTION_EVIDENCE_AVAILABLE_FORWARD_ADJUSTED"
+            },
+            "trajectory": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 366,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "snapshot_id",
+                  "as_of",
+                  "present",
+                  "legs"
+                ],
+                "properties": {
+                  "snapshot_id": {
+                    "$ref": "#/$defs/snapshotId"
+                  },
+                  "as_of": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "present": {
+                    "type": "boolean"
+                  },
+                  "legs": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "account_ref",
+                        "quantity",
+                        "cumulative_realized_pnl_base",
+                        "cumulative_unrealized_pnl_base",
+                        "currency",
+                        "fx_to_base",
+                        "sector",
+                        "region",
+                        "themes",
+                        "quality_notes"
+                      ],
+                      "properties": {
+                        "account_ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "quantity": {
+                          "$ref": "#/$defs/decimal"
+                        },
+                        "cumulative_realized_pnl_base": {
+                          "$ref": "#/$defs/nullableDecimal"
+                        },
+                        "cumulative_unrealized_pnl_base": {
+                          "$ref": "#/$defs/nullableDecimal"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "pattern": "^[A-Z]{3}$"
+                        },
+                        "fx_to_base": {
+                          "$ref": "#/$defs/decimal"
+                        },
+                        "sector": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "region": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "themes": {
+                          "type": "array",
+                          "maxItems": 64,
+                          "uniqueItems": true,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          }
+                        },
+                        "quality_notes": {
+                          "type": "array",
+                          "maxItems": 128,
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2048
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -352,6 +487,10 @@
       "pattern": "^pa-[0-9a-f]{20}$"
     },
     "as_of": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "analysis_now": {
       "type": "string",
       "format": "date-time"
     },
@@ -484,6 +623,61 @@
         "pattern": "^[0-9a-f]{64}$"
       }
     },
+    "source_snapshot_quality": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 366,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "snapshot_id",
+          "status",
+          "warnings",
+          "missing_fields",
+          "source_errors"
+        ],
+        "properties": {
+          "snapshot_id": {
+            "$ref": "#/$defs/snapshotId"
+          },
+          "status": {
+            "enum": [
+              "COMPLETE",
+              "PARTIAL",
+              "STALE",
+              "RECONSTRUCTED",
+              "UNAVAILABLE",
+              "ERROR"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "maxItems": 2048,
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "missing_fields": {
+            "type": "array",
+            "maxItems": 2048,
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "source_errors": {
+            "type": "array",
+            "maxItems": 2048,
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        }
+      }
+    },
     "coverage": {
       "type": "object",
       "additionalProperties": false,
@@ -491,6 +685,7 @@
         "source_snapshots",
         "source_position_rows",
         "canonical_identities",
+        "trajectory_identities",
         "available_contributions",
         "unavailable_contributions",
         "price_requested",
@@ -515,6 +710,11 @@
           "maximum": 732000
         },
         "canonical_identities": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "trajectory_identities": {
           "type": "integer",
           "minimum": 0,
           "maximum": 2000
@@ -842,26 +1042,48 @@
         "used_for_contributions"
       ],
       "properties": {
-        "status": {"enum": ["COMPLETE", "UNAVAILABLE"]},
+        "status": {
+          "enum": [
+            "COMPLETE",
+            "UNAVAILABLE"
+          ]
+        },
         "reason": {
           "oneOf": [
-            {"type": "string", "minLength": 1, "maxLength": 2048},
-            {"type": "null"}
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "review_digest": {
           "oneOf": [
-            {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            {"type": "null"}
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "review": {
           "oneOf": [
-            {"$ref": "https://portfolio-analyst.local/schemas/trade_review.schema.json"},
-            {"type": "null"}
+            {
+              "$ref": "https://portfolio-analyst.local/schemas/trade_review.schema.json"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
-        "used_for_contributions": {"type": "boolean"}
+        "used_for_contributions": {
+          "type": "boolean"
+        }
       }
     },
     "flow_evidence": {

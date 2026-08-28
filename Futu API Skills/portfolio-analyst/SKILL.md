@@ -280,17 +280,25 @@ longer than 36 hours. The range reader filters canonical timestamp paths before 
 consumer row/byte budgets, then descriptor-reads matching bodies and filters exact microsecond
 `as_of` values. Every selected snapshot is
 loaded through `SnapshotRepository`, so schema, full-body identity, and Phase 1 financial semantics
-are revalidated before attribution. Accounts, base currency, classifications, account-level legs,
-and FX source provenance must remain consistent. A missing/opened/closed/transferred leg is
-`UNAVAILABLE`, never silently netted at the canonical `MARKET.SYMBOL` level.
+are revalidated before attribution. The CLI freezes one trusted current instant, rejects later
+same-day snapshots as `FUTURE_SNAPSHOT`, and binds that instant into price cutoffs and the report.
+Every source snapshot's quality status, warnings, missing fields, and errors are embedded and bound.
+Accounts, base currency, classifications, account-level legs, and FX source provenance must remain
+consistent. Attribution traverses every adjacent snapshot and retains the union of all trajectory
+identities; a middle-only, missing/opened/closed/transferred/reset leg is `UNAVAILABLE`, never
+silently netted at the canonical `MARKET.SYMBOL` level.
 
-Symbol P&L uses only complete cumulative realized/unrealized base-field endpoint deltas. Sector,
+Symbol P&L uses only complete cumulative realized/unrealized base-field deltas summed across every
+adjacent trajectory pair. Sector,
 region, theme-full, and additive theme-split totals are Decimal-only and reconcile to the available
 symbol population. With only a current/end snapshot, common aligned adjusted closes can estimate
 base-currency current holdings as `ending quantity * adjusted-close change`. When the existing
 stable alias key and pinned audited Skill are available, `performance` also reuses the bounded,
 context-atomic Phase 3 history service. Account-and-symbol FIFO matches can add gross pre-fee
-realized P&L and fully closed symbols; base-currency fills are exact 1:1. Cross-currency FIFO remains
+realized P&L and fully closed symbols. Authoritative open lots compute current unrealized P&L from
+each lot cost to the aligned ending close, and their quantities must exactly match ending account
+legs; the period-price-change estimate is only a separately named no-trade LOW-confidence fallback.
+Base-currency fills are exact 1:1. Cross-currency FIFO remains
 in local buckets and base P&L stays null without transaction-date FX. Opening inventory, nontrade
 events, context gaps, orphan fills, quantity mismatches, and status conflicts fail closed. The
 snapshot cumulative-field path never adds FIFO results, preventing double counting. Without usable
@@ -299,7 +307,8 @@ The current Phase 3 adapter reports corporate-action evidence as unsupported, so
 retained as structured unavailable evidence rather than authorizing FIFO contribution claims.
 Timeout, budget, source-read, normalized-contract, and stable-alias acquisition failures are
 sanitized to fixed trade-source reason codes; independent price/snapshot attribution continues.
-Top contributors and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires
+Theme splits sort labels and assign the exact Decimal residual to the last label. Top contributors
+and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires
 at least two common aligned price
 points for every authoritative contributed symbol and describes P&L-field authority only.
 
@@ -312,7 +321,9 @@ reports always leave return/TWR null. IRR is always explicitly
 `NOT_CALCULATED`; it is never inferred. Price traceability uses only the audited forward-adjusted
 daily `get_kline` reader, completed market-local close cutoffs, strict date intersection, per-call,
 row, request, failure-circuit, and wall-time budgets. Missing or unequal price coverage downgrades
-the accuracy claim and remains explicit. See
+the accuracy claim and remains explicit. Snapshot range reads recheck opened descriptor identity
+and actual bytes; semantic validation consumes operation/wall budgets inside source-position and
+trajectory-leg loops. See
 [references/performance-attribution.md](references/performance-attribution.md).
 
 `performance --output DIRECTORY` writes JSON and escaped Markdown as one private manifest-last

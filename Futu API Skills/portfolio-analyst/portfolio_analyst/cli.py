@@ -68,6 +68,10 @@ class _JsonParseError(ValueError):
     pass
 
 
+class FutureSnapshotError(AttributionInputError):
+    pass
+
+
 def _load_selected_snapshot(data_home: Path, *, latest: bool, relative_path: str | Path | None):
     repository = SnapshotRepository(data_home)
     if latest:
@@ -364,7 +368,7 @@ def _human_risk_report(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     json_requested = "--json" in raw_argv
     try:
@@ -383,6 +387,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
+        frozen_now = trusted_now or datetime.now(timezone.utc)
+        if frozen_now.tzinfo is None or frozen_now.utcoffset() is None:
+            raise AttributionInputError("trusted current time must be timezone-aware")
+        frozen_now = frozen_now.astimezone(timezone.utc)
         if _requires_secure_platform_mutation(args):
             require_secure_platform_mutation()
         settings = Settings.from_env()
@@ -519,7 +527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
             except ValueError:
                 raise AttributionInputError("performance dates must use YYYY-MM-DD") from None
-            if start > end or end > datetime.now(timezone.utc).date() or (end - start).days > 366:
+            if start > end or end > frozen_now.date() or (end - start).days > 366:
                 raise AttributionInputError(
                     "performance range is invalid, future-dated, or exceeds 366 days"
                 )
@@ -531,6 +539,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limit=MAX_ATTRIBUTION_SNAPSHOTS,
                 max_bytes=MAX_HISTORY_TOTAL_BYTES,
             )
+            if any(item.as_of.astimezone(timezone.utc) > frozen_now for item in snapshots):
+                raise FutureSnapshotError("selected snapshot is later than trusted analysis time")
             price_provider = None
             trade_history = None
             trade_unavailable_reason = "audited normalized trade history source is unavailable"
@@ -569,6 +579,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 price_provider=price_provider,
                 trade_history=trade_history,
                 trade_unavailable_reason=trade_unavailable_reason,
+                analysis_now=frozen_now,
             )
             payload = report.to_dict()
             from .schema import validate_performance_document
@@ -888,6 +899,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit_error(args, "INVALID_LIFECYCLE", str(exc))
     except JournalError as exc:
         return _emit_error(args, "INVALID_JOURNAL", str(exc))
+    except FutureSnapshotError:
+        return _emit_error(args, "FUTURE_SNAPSHOT", "selected snapshot is future-dated")
     except AttributionInputError as exc:
         return _emit_error(args, "INVALID_PERFORMANCE", str(exc))
     except SnapshotRepositoryError as exc:

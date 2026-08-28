@@ -67,6 +67,8 @@ def _pnl_start():
     positions = tuple(
         replace(
             item,
+            industry="GENERAL",
+            themes=item.themes or ("OTHER",),
             unrealized_pl_local=Decimal("0"),
             unrealized_pl_base=Decimal("0"),
             realized_pl_local=Decimal("0"),
@@ -74,7 +76,17 @@ def _pnl_start():
         )
         for item in base.positions
     )
-    return _identified(reconciled_snapshot(base, positions))
+    snapshot = reconciled_snapshot(base, positions)
+    return _identified(
+        snapshot,
+        data_quality=replace(
+            snapshot.data_quality,
+            status="COMPLETE",
+            warnings=(),
+            missing_fields=(),
+            source_errors=(),
+        ),
+    )
 
 
 def test_interval_selection_is_date_inclusive_precise_and_reports_gaps():
@@ -95,6 +107,20 @@ def test_interval_selection_is_date_inclusive_precise_and_reports_gaps():
     assert selected.continuous is True
 
 
+def test_interval_deduplicates_identical_snapshot_id_but_rejects_same_as_of_conflict():
+    start = _pnl_start()
+    selected = select_snapshot_interval(
+        (start, start), start=start.as_of.date(), end=start.as_of.date()
+    )
+    assert selected.snapshots == (start,)
+
+    conflicting = _identified(_endpoint(start), as_of=start.as_of)
+    with pytest.raises(AttributionInputError, match="same as-of|timestamp"):
+        select_snapshot_interval(
+            (start, conflicting), start=start.as_of.date(), end=start.as_of.date()
+        )
+
+
 def test_gap_prevents_accurate_pnl_mode_even_when_endpoint_fields_are_complete():
     start = _pnl_start()
     end = _endpoint(start, days=3)
@@ -104,6 +130,42 @@ def test_gap_prevents_accurate_pnl_mode_even_when_endpoint_fields_are_complete()
     assert report.mode == "RECONSTRUCTED"
     assert report.confidence == "LOW"
     assert any(reason["code"] == "SNAPSHOT_CADENCE_GAP" for reason in report.quality_reasons)
+
+
+def test_full_interval_trajectory_retains_middle_only_identity_and_blocks_exact_mode():
+    start = _pnl_start()
+    middle_position = replace(
+        start.positions[0],
+        symbol="DDD",
+        name="Middle-only holding",
+        sector="OTHER",
+        industry="OTHER",
+        themes=("TRANSIENT",),
+    )
+    middle = _identified(
+        reconciled_snapshot(start, (*start.positions, middle_position)),
+        as_of=start.as_of + timedelta(hours=12),
+    )
+    end = _after_us_close(_endpoint(start))
+
+    report = analyze_performance(
+        (start, middle, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    transient = next(item for item in report.symbol_contributions if item.identity == "US.DDD")
+    assert transient.status == "UNAVAILABLE"
+    assert transient.method == "TRAJECTORY_POSITION_DISCONTINUITY"
+    assert [item["present"] for item in transient.evidence["trajectory"]] == [False, True, False]
+    assert report.coverage["trajectory_identities"] == 4
+    assert report.mode == "RECONSTRUCTED"
+    assert report.confidence == "LOW"
+    assert any(
+        item["code"] == "TRAJECTORY_POSITION_DISCONTINUITY" for item in report.quality_reasons
+    )
+    validate_performance_document(report.to_dict(), source_snapshots=(start, middle, end))
 
 
 def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_means_no_return():
@@ -134,17 +196,18 @@ def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_m
     assert report.theme_full_contributions == {
         "AI": Decimal("10"),
         "CLOUD": Decimal("10"),
-        "UNKNOWN": Decimal("0"),
+        "OTHER": Decimal("0"),
     }
     assert report.theme_split_contributions == {
         "AI": Decimal("5"),
         "CLOUD": Decimal("5"),
-        "UNKNOWN": Decimal("0"),
+        "OTHER": Decimal("0"),
     }
     assert payload["coverage"] == {
         "source_snapshots": 2,
         "source_position_rows": 6,
         "canonical_identities": 3,
+        "trajectory_identities": 3,
         "available_contributions": 3,
         "unavailable_contributions": 0,
         "price_requested": 3,
@@ -160,6 +223,38 @@ def test_exact_pnl_attribution_reconciles_symbols_sector_and_theme_but_no_flow_m
     golden = json.loads((FIXTURES / "performance_attribution_golden_snippet.json").read_text())
     assert {key: payload[key] for key in golden} == golden
     validate_performance_document(payload)
+
+
+def test_partial_source_data_quality_is_embedded_and_cannot_authorize_high_confidence():
+    start = _pnl_start()
+    start = _identified(
+        start,
+        data_quality=replace(
+            start.data_quality,
+            status="PARTIAL",
+            warnings=(*start.data_quality.warnings, "bounded warning"),
+        ),
+    )
+    end = _after_us_close(_endpoint(start))
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    assert report.mode == "RECONSTRUCTED"
+    assert report.confidence == "LOW"
+    assert report.source_snapshot_quality[0] == {
+        "snapshot_id": start.snapshot_id,
+        "status": "PARTIAL",
+        "warnings": start.data_quality.warnings,
+        "missing_fields": start.data_quality.missing_fields,
+        "source_errors": (),
+    }
+    assert any(item["code"] == "SOURCE_DATA_QUALITY_INCOMPLETE" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
 def test_cross_currency_contribution_uses_reconciled_base_pnl_without_mixing_local_values():
@@ -292,6 +387,29 @@ def test_complete_flows_cannot_authorize_twr_after_pnl_reconciliation_downgrade(
     validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
+def test_theme_split_allocates_sorted_final_residual_for_exact_additivity():
+    start = _pnl_start()
+    positions = tuple(
+        replace(item, themes=("ZETA", "ALPHA", "MIDDLE")) if item.symbol == "AAA" else item
+        for item in start.positions
+    )
+    start = _identified(reconciled_snapshot(start, positions), as_of=start.as_of)
+    end = _after_us_close(_endpoint(start))
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    split = report.theme_split_contributions
+    assert split["ALPHA"] == split["MIDDLE"]
+    assert split["ZETA"] == Decimal("10") - split["ALPHA"] - split["MIDDLE"]
+    assert split["ALPHA"] + split["MIDDLE"] + split["ZETA"] == Decimal("10")
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
 def test_explicit_verified_no_flow_evidence_enables_return_without_inference():
     start = _pnl_start()
     end = _after_us_close(_endpoint(start))
@@ -330,7 +448,10 @@ def test_opened_or_closed_position_cannot_be_silently_claimed_as_exact():
     missing = next(item for item in report.symbol_contributions if item.identity == "US.CCC")
     assert missing.status == "UNAVAILABLE"
     assert missing.pnl_base is None
-    assert any(reason["code"] == "POSITION_ENDPOINT_MISSING" for reason in report.quality_reasons)
+    assert any(
+        reason["code"] == "TRAJECTORY_POSITION_DISCONTINUITY" for reason in report.quality_reasons
+    )
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
 def test_zero_current_holding_with_realized_pnl_is_not_silently_dropped():
@@ -365,6 +486,67 @@ def test_zero_current_holding_with_realized_pnl_is_not_silently_dropped():
     assert closed.status == "AVAILABLE"
     assert closed.realized_pnl_base == Decimal("5")
     assert closed.unrealized_pnl_base == Decimal("0")
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
+def test_intermediate_cumulative_pnl_regression_is_explicitly_unavailable():
+    start = _pnl_start()
+    middle_positions = tuple(
+        replace(
+            item,
+            realized_pl_local=Decimal("5"),
+            realized_pl_base=Decimal("5"),
+            unrealized_pl_local=Decimal("4"),
+            unrealized_pl_base=Decimal("4"),
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in start.positions
+    )
+    middle = _identified(
+        reconciled_snapshot(start, middle_positions), as_of=start.as_of + timedelta(hours=12)
+    )
+    end = _after_us_close(_endpoint(start, realized="2", unrealized="8"))
+
+    report = analyze_performance(
+        (start, middle, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
+    assert aaa.status == "UNAVAILABLE"
+    assert aaa.method == "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY"
+    assert report.mode == "RECONSTRUCTED"
+    validate_performance_document(report.to_dict(), source_snapshots=(start, middle, end))
+
+
+def test_embedded_trajectory_reconstructs_without_source_objects_after_report_rehash():
+    start = _pnl_start()
+    middle = _identified(start, as_of=start.as_of + timedelta(hours=12))
+    end = _after_us_close(_endpoint(start))
+    payload = analyze_performance(
+        (start, middle, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    ).to_dict()
+    aaa = next(item for item in payload["symbol_contributions"] if item["identity"] == "US.AAA")
+    aaa["evidence"]["trajectory"][1]["legs"][0]["cumulative_realized_pnl_base"] = "999"
+    payload["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in payload.items() if key != "attribution_id"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:20]
+    )
+
+    with pytest.raises(ReportSemanticError, match="trajectory|performance"):
+        validate_performance_document(payload)
 
 
 def test_cross_account_leg_change_is_not_netted_into_exact_identity_pnl():
@@ -386,8 +568,10 @@ def test_cross_account_leg_change_is_not_netted_into_exact_identity_pnl():
 
     aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
     assert aaa.status == "UNAVAILABLE"
-    assert aaa.method == "ACCOUNT_LEGS_CHANGED"
-    assert any(reason["code"] == "ACCOUNT_LEGS_CHANGED" for reason in report.quality_reasons)
+    assert aaa.method == "TRAJECTORY_ACCOUNT_LEGS_CHANGED"
+    assert any(
+        reason["code"] == "TRAJECTORY_ACCOUNT_LEGS_CHANGED" for reason in report.quality_reasons
+    )
 
 
 def test_schema_semantics_reject_tampered_totals_rankings_and_return_authority():
@@ -520,6 +704,41 @@ def _authoritative_closed_trade_review(
         }
         for side, price, at in executions
     ]
+    if include_sell:
+        for index, position in enumerate(current.positions):
+            open_id = f"current-{position.market}-{position.symbol}-{index}"
+            opened_at = f"2026-08-27 09:00:{index:02d}"
+            identity = f"{position.market}.{position.symbol}"
+            orders.append(
+                {
+                    "order_id": f"order-{open_id}",
+                    "account_ref": position.account_ref,
+                    "code": identity,
+                    "side": "BUY",
+                    "status": "FILLED_ALL",
+                    "qty": str(position.quantity),
+                    "price": "109",
+                    "dealt_qty": str(position.quantity),
+                    "create_time": opened_at,
+                    "updated_time": opened_at,
+                    "currency": current.base_currency,
+                }
+            )
+            deals.append(
+                {
+                    "deal_id": f"fill-{open_id}",
+                    "order_id": f"order-{open_id}",
+                    "account_ref": position.account_ref,
+                    "code": identity,
+                    "side": "BUY",
+                    "qty": str(position.quantity),
+                    "price": "109",
+                    "create_time": opened_at,
+                    "currency": current.base_currency,
+                    "fx_to_base": "1",
+                    "event_type": "TRADE",
+                }
+            )
     return build_trade_review(
         orders=orders,
         deals=deals,
@@ -563,6 +782,28 @@ def test_one_current_snapshot_with_aligned_prices_reconstructs_gross_unrealized_
     validate_performance_document(report.to_dict(), source_snapshots=(current,))
 
 
+def test_single_snapshot_flow_reconciliation_is_unavailable_even_with_complete_flow_coverage():
+    current = _after_us_close(_pnl_start())
+    flows = ExternalFlowEvidence.complete(
+        source="FIXTURE",
+        coverage_start=current.as_of - timedelta(days=1),
+        coverage_end=current.as_of + timedelta(days=1),
+    )
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        flow_evidence=flows,
+    )
+
+    assert report.pnl_reconciliation["status"] == "UNAVAILABLE"
+    assert report.pnl_reconciliation["expected_net_pnl_base"] is None
+    assert report.return_status == "UNAVAILABLE"
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
 def test_authoritative_fifo_adds_closed_symbol_realized_gross_without_double_counting():
     current = _after_us_close(_pnl_start())
     trade_history = _authoritative_closed_trade_review(current)
@@ -579,11 +820,39 @@ def test_authoritative_fifo_adds_closed_symbol_realized_gross_without_double_cou
     assert closed.method == "TRADE_FIFO_REALIZED_GROSS_PRE_FEE"
     assert closed.realized_pnl_base == Decimal("2")
     assert closed.unrealized_pnl_base == Decimal("0")
-    assert report.total_pnl_base == Decimal("32")
+    assert report.total_pnl_base == Decimal("5")
     assert report.realized_pnl_base == Decimal("2")
-    assert report.unrealized_pnl_base == Decimal("30")
+    assert report.unrealized_pnl_base == Decimal("3")
     assert report.trade_evidence.status == "COMPLETE"
     assert report.trade_evidence.review_digest
+    validate_performance_document(report.to_dict(), source_snapshots=(current,))
+
+
+def test_authoritative_fifo_open_lot_uses_lot_cost_not_period_price_change():
+    full = _after_us_close(_pnl_start())
+    current = _identified(reconciled_snapshot(full, (full.positions[0],)), as_of=full.as_of)
+    trade_history = _authoritative_closed_trade_review(
+        current,
+        code="US.AAA",
+        buy_price="109",
+        include_sell=False,
+    )
+
+    report = analyze_performance(
+        (current,),
+        start=current.as_of.date() - timedelta(days=1),
+        end=current.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_history=trade_history,
+    )
+
+    contribution = report.symbol_contributions[0]
+    assert contribution.identity == "US.AAA"
+    assert contribution.method == "TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE"
+    assert contribution.pnl_base == Decimal("1")
+    assert contribution.realized_pnl_base == Decimal("0")
+    assert contribution.unrealized_pnl_base == Decimal("1")
+    assert contribution.evidence["open_lot_indexes"] == (0,)
     validate_performance_document(report.to_dict(), source_snapshots=(current,))
 
 
@@ -609,7 +878,7 @@ def test_cross_currency_fifo_retains_local_bucket_without_false_base_realized_to
     assert closed.method == "TRADE_FIFO_BASE_FX_UNAVAILABLE"
     assert closed.pnl_base is None
     assert closed.evidence["realized_local_by_currency"] == {"HKD": Decimal("8")}
-    assert report.total_pnl_base == Decimal("30")
+    assert report.total_pnl_base == Decimal("3")
     assert report.realized_pnl_base is None
     assert report.contribution_status == "PARTIAL"
     validate_performance_document(report.to_dict(), source_snapshots=(current,))
@@ -903,6 +1172,34 @@ def test_reconstructed_aligned_price_evidence_is_bound_against_tampering():
         validate_performance_document(payload, source_snapshots=(current,))
 
 
+def test_analysis_now_is_bound_and_rejects_future_snapshot_after_report_rehash():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+    trusted_now = end.as_of + timedelta(hours=1)
+    payload = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        analysis_now=trusted_now,
+    ).to_dict()
+    assert payload["analysis_now"] == trusted_now.isoformat().replace("+00:00", "Z")
+
+    payload["analysis_now"] = (end.as_of - timedelta(microseconds=1)).isoformat()
+    payload["attribution_id"] = (
+        "pa-"
+        + hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in payload.items() if key != "attribution_id"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:20]
+    )
+    with pytest.raises(ReportSemanticError, match="future snapshot|analysis_now"):
+        validate_performance_document(payload, source_snapshots=(start, end))
+
+
 def test_price_evidence_is_bounded_to_requested_dates_and_digest_traceable():
     start = _pnl_start()
     end = _endpoint(start, days=2)
@@ -1094,6 +1391,36 @@ def test_snapshot_range_ignores_outside_corrupt_body_but_fails_inside_and_mispla
         )
 
 
+def test_range_repository_recharges_actual_opened_bytes_after_descriptor_preflight(
+    monkeypatch, tmp_path
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    repository = SnapshotRepository(home)
+    snapshot = _pnl_start()
+    path = repository.save(snapshot)
+    initial_size = path.stat().st_size
+    original = repository._read_anchored
+    expanded = False
+
+    def expand_during_open(relative, *args, **kwargs):
+        nonlocal expanded
+        if not expanded:
+            path.write_bytes(path.read_bytes() + b" " * 128)
+            path.chmod(0o600)
+            expanded = True
+        return original(relative, *args, **kwargs)
+
+    monkeypatch.setattr(repository, "_read_anchored", expand_during_open)
+    with pytest.raises(SnapshotRepositoryError, match="actual.*byte budget|changed"):
+        repository.list_range(
+            start=snapshot.as_of,
+            end=snapshot.as_of,
+            limit=1,
+            max_bytes=initial_size + 64,
+        )
+
+
 def test_performance_cli_no_save_and_transactional_private_bundle(monkeypatch, tmp_path, capsys):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
@@ -1107,7 +1434,8 @@ def test_performance_cli_no_save_and_transactional_private_bundle(monkeypatch, t
 
     assert (
         cli.main(
-            ["performance", "--from", "2026-08-27", "--to", "2026-08-28", "--json", "--no-save"]
+            ["performance", "--from", "2026-08-27", "--to", "2026-08-28", "--json", "--no-save"],
+            trusted_now=datetime(2026, 8, 29, tzinfo=timezone.utc),
         )
         == 0
     )
@@ -1126,7 +1454,8 @@ def test_performance_cli_no_save_and_transactional_private_bundle(monkeypatch, t
                 "--output",
                 "reports/perf",
                 "--json",
-            ]
+            ],
+            trusted_now=datetime(2026, 8, 29, tzinfo=timezone.utc),
         )
         == 0
     )
@@ -1160,13 +1489,43 @@ def test_performance_cli_accepts_one_snapshot_and_reports_unavailable_without_pr
                 current.as_of.date().isoformat(),
                 "--json",
                 "--no-save",
-            ]
+            ],
+            trusted_now=datetime(2026, 8, 29, tzinfo=timezone.utc),
         )
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "UNAVAILABLE"
     assert payload["source_snapshot_ids"] == [current.snapshot_id]
+
+
+def test_performance_cli_rejects_future_snapshot_on_same_utc_date_with_structured_code(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    current = _after_us_close(_pnl_start())
+    SnapshotRepository(home).save(current)
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: None)
+
+    assert (
+        cli.main(
+            [
+                "performance",
+                "--from",
+                current.as_of.date().isoformat(),
+                "--to",
+                current.as_of.date().isoformat(),
+                "--json",
+                "--no-save",
+            ],
+            trusted_now=current.as_of - timedelta(microseconds=1),
+        )
+        == 2
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "FUTURE_SNAPSHOT"
 
 
 def test_performance_cli_collects_pinned_trade_history_with_existing_stable_alias_key(
@@ -1217,7 +1576,8 @@ def test_performance_cli_collects_pinned_trade_history_with_existing_stable_alia
                 "2026-08-27",
                 "--json",
                 "--no-save",
-            ]
+            ],
+            trusted_now=datetime(2026, 8, 29, tzinfo=timezone.utc),
         )
         == 0
     )
@@ -1283,7 +1643,8 @@ def test_performance_cli_structured_trade_acquisition_errors_degrade_without_lea
                 "2026-08-27",
                 "--json",
                 "--no-save",
-            ]
+            ],
+            trusted_now=datetime(2026, 8, 29, tzinfo=timezone.utc),
         )
         == 0
     )
@@ -1328,3 +1689,23 @@ def test_markdown_and_terminal_renderers_escape_untrusted_classification():
     markdown = report.to_markdown()
     assert "\x1b" not in human and "\x1b" not in markdown
     assert "javascript:alert" not in markdown or "\\(" in markdown
+
+
+def test_performance_validator_operation_and_injected_wall_budgets_fail_closed():
+    start = _pnl_start()
+    end = _endpoint(start)
+    payload = analyze_performance(
+        (start, end), start=start.as_of.date(), end=end.as_of.date()
+    ).to_dict()
+
+    with pytest.raises(ReportSemanticError, match="performance validation budget exceeded"):
+        validate_performance_document(payload, max_validation_operations=1)
+
+    ticks = iter((0.0, 0.0, 11.0))
+    with pytest.raises(ReportSemanticError, match="performance validation budget exceeded"):
+        validate_performance_document(
+            payload,
+            source_snapshots=(start, end),
+            max_validation_seconds=10.0,
+            validation_clock=lambda: next(ticks, 11.0),
+        )

@@ -103,6 +103,9 @@ class SnapshotRepository:
         """Read a private explicit import path, or a canonical repository path, securely."""
 
         relative, raw = self.read_private_bytes(relative_path)
+        return self._snapshot_from_private_bytes(relative, raw)
+
+    def _snapshot_from_private_bytes(self, relative: Path, raw: bytes) -> PortfolioSnapshot:
         try:
             payload = json.loads(raw, object_pairs_hook=self._unique_object)
             loaded = snapshot_from_document(payload)
@@ -161,7 +164,12 @@ class SnapshotRepository:
         except OSError as exc:
             raise SnapshotRepositoryError("snapshot directory is unavailable or unsafe") from exc
 
-    def _read_anchored(self, relative: Path) -> bytes:
+    def _read_anchored(
+        self,
+        relative: Path,
+        *,
+        expected_file_identity: tuple[int, int] | None = None,
+    ) -> bytes:
         dflags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
         fflags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -184,6 +192,17 @@ class SnapshotRepository:
             file_fd = os.open(relative.name, fflags, dir_fd=current_fd)
             try:
                 metadata = os.fstat(file_fd)
+                if (
+                    expected_file_identity is not None
+                    and (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    )
+                    != expected_file_identity
+                ):
+                    raise SnapshotRepositoryError(
+                        "snapshot changed between descriptor preflight and opened read"
+                    )
                 if (
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_nlink != 1
@@ -408,7 +427,7 @@ class SnapshotRepository:
             months.append((year, month))
             year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
-        candidates: list[tuple[str, Path, int]] = []
+        candidates: list[tuple[str, Path, int, int, int]] = []
         seen_ids: set[str] = set()
         total_bytes = 0
         enumerated = 0
@@ -452,7 +471,9 @@ class SnapshotRepository:
                 metadata = path.lstat()
                 if not stat.S_ISREG(metadata.st_mode):
                     raise SnapshotRepositoryError("snapshot range entry is not a regular file")
-                candidates.append((path.stem, relative, metadata.st_size))
+                candidates.append(
+                    (path.stem, relative, metadata.st_size, metadata.st_dev, metadata.st_ino)
+                )
                 if len(candidates) > limit:
                     raise SnapshotRepositoryError("snapshot range consumer limit exceeded")
                 total_bytes += metadata.st_size
@@ -460,8 +481,13 @@ class SnapshotRepository:
                     raise SnapshotRepositoryError("snapshot range byte budget exceeded")
 
         results: list[PortfolioSnapshot] = []
-        for expected_id, relative, _size in candidates:
-            item = self.read_path(relative)
+        actual_bytes = 0
+        for expected_id, relative, _size, expected_dev, expected_ino in candidates:
+            raw = self._read_anchored(relative, expected_file_identity=(expected_dev, expected_ino))
+            actual_bytes += len(raw)
+            if actual_bytes > max_bytes:
+                raise SnapshotRepositoryError("snapshot range actual read byte budget exceeded")
+            item = self._snapshot_from_private_bytes(relative, raw)
             if item.snapshot_id != expected_id:
                 raise SnapshotRepositoryError("snapshot path and body identity disagree")
             if start <= item.as_of <= end:

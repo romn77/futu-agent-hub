@@ -273,10 +273,12 @@ class PerformanceAttributionReport:
     schema_version: str
     attribution_id: str
     as_of: datetime
+    analysis_now: datetime
     period: Mapping[str, Any]
     base_currency: str
     source_snapshot_ids: tuple[str, ...]
     source_snapshot_digests: Mapping[str, str]
+    source_snapshot_quality: tuple[Mapping[str, Any], ...]
     coverage: Mapping[str, int]
     mode: str
     confidence: str
@@ -332,6 +334,11 @@ class PerformanceAttributionReport:
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(
             self,
+            "source_snapshot_quality",
+            tuple(_deep_freeze(dict(item)) for item in self.source_snapshot_quality),
+        )
+        object.__setattr__(
+            self,
             "quality_reasons",
             tuple(_deep_freeze(dict(item)) for item in self.quality_reasons),
         )
@@ -344,6 +351,7 @@ class PerformanceAttributionReport:
         payload = self.to_dict()
         lines = [
             f"Performance attribution {safe(self.attribution_id)}",
+            f"Analysis now: {self.analysis_now.isoformat()}",
             f"Period: {payload['period']['requested_start']} to {payload['period']['requested_end']} (UTC dates)",
             f"Source snapshots: {', '.join(safe(item) for item in self.source_snapshot_ids)}",
             f"Mode / confidence: {self.mode} / {self.confidence}",
@@ -356,6 +364,7 @@ class PerformanceAttributionReport:
             f"IRR: N/A ({self.irr_status})",
             f"Coverage: {safe(json.dumps(payload['coverage'], sort_keys=True))}",
             f"Snapshot digests: {safe(json.dumps(payload['source_snapshot_digests'], sort_keys=True))}",
+            f"Snapshot quality: {safe(json.dumps(payload['source_snapshot_quality'], sort_keys=True))}",
             f"Sector contributions: {safe(json.dumps(payload['sector_contributions'], ensure_ascii=False, sort_keys=True))}",
             f"Region contributions: {safe(json.dumps(payload['region_contributions'], ensure_ascii=False, sort_keys=True))}",
             f"Theme full contributions: {safe(json.dumps(payload['theme_full_contributions'], ensure_ascii=False, sort_keys=True))}",
@@ -409,6 +418,7 @@ class PerformanceAttributionReport:
             "# Performance attribution",
             "",
             f"- attribution_id: `{md(self.attribution_id)}`",
+            f"- Analysis now: `{md(self.analysis_now.isoformat())}`",
             f"- Period: {payload['period']['requested_start']} to {payload['period']['requested_end']} (inclusive UTC dates)",
             f"- Selected snapshots: `{md(self.source_snapshot_ids[0])}` to `{md(self.source_snapshot_ids[-1])}`",
             f"- Mode / confidence: {self.mode} / {self.confidence}",
@@ -421,6 +431,7 @@ class PerformanceAttributionReport:
             f"- IRR: N/A ({self.irr_status})",
             f"- Coverage: {md(json.dumps(payload['coverage'], sort_keys=True))}",
             f"- Source snapshot digests: {md(json.dumps(payload['source_snapshot_digests'], sort_keys=True))}",
+            f"- Source snapshot quality: {md(json.dumps(payload['source_snapshot_quality'], sort_keys=True))}",
             f"- Authoritative JSON: `{md(json_artifact)}`"
             if json_artifact
             else "- Authoritative JSON: current output",
@@ -545,9 +556,15 @@ def _validated_snapshots(snapshots: Sequence[PortfolioSnapshot]) -> tuple[Portfo
             validated.append(snapshot_from_document(item.to_dict()))
         except Exception as exc:
             raise AttributionInputError("snapshot history contains invalid semantics") from exc
-    ordered = tuple(sorted(validated, key=lambda item: (item.as_of, item.snapshot_id)))
-    if len({item.snapshot_id for item in ordered}) != len(ordered):
-        raise AttributionInputError("snapshot interval contains duplicate identities")
+    by_id: dict[str, PortfolioSnapshot] = {}
+    for item in validated:
+        existing = by_id.get(item.snapshot_id)
+        if existing is not None and existing.to_dict() != item.to_dict():
+            raise AttributionInputError("snapshot interval contains conflicting duplicate identity")
+        by_id[item.snapshot_id] = item
+    ordered = tuple(sorted(by_id.values(), key=lambda item: (item.as_of, item.snapshot_id)))
+    if len({item.as_of for item in ordered}) != len(ordered):
+        raise AttributionInputError("snapshot interval contains conflicting same as-of timestamp")
     return ordered
 
 
@@ -627,30 +644,70 @@ def _snapshot_digest(snapshot: PortfolioSnapshot) -> str:
 
 
 def _contributions(
-    start: PortfolioSnapshot, end: PortfolioSnapshot
+    snapshots: Sequence[PortfolioSnapshot],
+    *,
+    consume: Any | None = None,
 ) -> tuple[tuple[SymbolContribution, ...], list[dict[str, str]]]:
-    before, after = _group_positions(start), _group_positions(end)
+    """Reconstruct every economic identity across every selected valuation."""
+
+    if len(snapshots) < 2:
+        raise AttributionInputError("snapshot contribution trajectory requires two valuations")
+    grouped = tuple(_group_positions(snapshot) for snapshot in snapshots)
     reasons: list[dict[str, str]] = []
     output: list[SymbolContribution] = []
-    for identity in sorted(set(before) | set(after)):
-        start_rows, end_rows = before.get(identity), after.get(identity)
-        all_rows = (start_rows or ()) + (end_rows or ())
+    identities = sorted(set().union(*(set(item) for item in grouped)))
+    if len(identities) > MAX_ATTRIBUTION_POSITIONS:
+        raise AttributionInputError("performance trajectory identity budget exceeded")
+    for identity in identities:
+        if consume is not None:
+            consume()
+        rows_by_snapshot = tuple(item.get(identity, ()) for item in grouped)
+        if consume is not None:
+            for rows in rows_by_snapshot:
+                consume()
+                for _row in rows:
+                    consume()
+        all_rows = tuple(row for rows in rows_by_snapshot for row in rows)
+        start_rows, end_rows = rows_by_snapshot[0], rows_by_snapshot[-1]
         market, symbol = identity.split(".", 1)
         classification = _classification(all_rows)
         evidence = {
-            "start_snapshot_id": start.snapshot_id,
-            "end_snapshot_id": end.snapshot_id,
-            "start_present": start_rows is not None,
-            "end_present": end_rows is not None,
-            "start_rows": len(start_rows or ()),
-            "end_rows": len(end_rows or ()),
+            "start_snapshot_id": snapshots[0].snapshot_id,
+            "end_snapshot_id": snapshots[-1].snapshot_id,
+            "start_present": bool(start_rows),
+            "end_present": bool(end_rows),
+            "start_rows": len(start_rows),
+            "end_rows": len(end_rows),
+            "trajectory": tuple(
+                {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "as_of": snapshot.as_of,
+                    "present": bool(rows),
+                    "legs": tuple(
+                        {
+                            "account_ref": row.account_ref,
+                            "quantity": row.quantity,
+                            "cumulative_realized_pnl_base": row.realized_pl_base,
+                            "cumulative_unrealized_pnl_base": row.unrealized_pl_base,
+                            "currency": row.currency,
+                            "fx_to_base": row.fx_to_base,
+                            "sector": row.sector,
+                            "region": row.region,
+                            "themes": tuple(sorted(row.themes)),
+                            "quality_notes": tuple(row.data_quality_notes),
+                        }
+                        for row in sorted(rows, key=lambda item: item.account_ref)
+                    ),
+                }
+                for snapshot, rows in zip(snapshots, rows_by_snapshot)
+            ),
         }
-        if start_rows is None or end_rows is None:
+        if any(not rows for rows in rows_by_snapshot):
             reasons.append(
                 {
-                    "code": "POSITION_ENDPOINT_MISSING",
+                    "code": "TRAJECTORY_POSITION_DISCONTINUITY",
                     "scope": identity,
-                    "detail": "position opened or closed inside the interval; trades/corporate actions are not authoritative",
+                    "detail": "position presence is discontinuous across selected snapshots and lacks authoritative reconciliation",
                 }
             )
             output.append(
@@ -660,7 +717,7 @@ def _contributions(
                     symbol,
                     tuple(sorted({item.account_ref for item in all_rows})),
                     "UNAVAILABLE",
-                    "ENDPOINT_POSITION_MISSING",
+                    "TRAJECTORY_POSITION_DISCONTINUITY",
                     None,
                     None,
                     None,
@@ -669,12 +726,13 @@ def _contributions(
                 )
             )
             continue
-        if {item.account_ref for item in start_rows} != {item.account_ref for item in end_rows}:
+        account_sets = tuple({item.account_ref for item in rows} for rows in rows_by_snapshot)
+        if any(accounts != account_sets[0] for accounts in account_sets[1:]):
             reasons.append(
                 {
-                    "code": "ACCOUNT_LEGS_CHANGED",
+                    "code": "TRAJECTORY_ACCOUNT_LEGS_CHANGED",
                     "scope": identity,
-                    "detail": "account-level position legs differ across endpoints; transfer or closure is ambiguous",
+                    "detail": "account-level position legs reset or transfer inside the selected trajectory",
                 }
             )
             output.append(
@@ -684,7 +742,39 @@ def _contributions(
                     symbol,
                     tuple(sorted({item.account_ref for item in all_rows})),
                     "UNAVAILABLE",
-                    "ACCOUNT_LEGS_CHANGED",
+                    "TRAJECTORY_ACCOUNT_LEGS_CHANGED",
+                    None,
+                    None,
+                    None,
+                    *(classification or ("UNKNOWN", "UNKNOWN", ())),
+                    evidence,
+                )
+            )
+            continue
+        financial_provenance = {
+            (
+                row.account_ref,
+                row.currency,
+                row.fx_to_base,
+            )
+            for row in all_rows
+        }
+        if len(financial_provenance) != len(account_sets[0]):
+            reasons.append(
+                {
+                    "code": "TRAJECTORY_FX_DISCONTINUITY",
+                    "scope": identity,
+                    "detail": "currency or FX evidence changes across account legs inside the trajectory",
+                }
+            )
+            output.append(
+                SymbolContribution(
+                    identity,
+                    market,
+                    symbol,
+                    tuple(sorted({item.account_ref for item in all_rows})),
+                    "UNAVAILABLE",
+                    "TRAJECTORY_FX_DISCONTINUITY",
                     None,
                     None,
                     None,
@@ -719,11 +809,14 @@ def _contributions(
                 )
             )
             continue
-        start_realized = _sum_optional(start_rows, "realized_pl_base")
-        end_realized = _sum_optional(end_rows, "realized_pl_base")
-        start_unrealized = _sum_optional(start_rows, "unrealized_pl_base")
-        end_unrealized = _sum_optional(end_rows, "unrealized_pl_base")
-        if None in (start_realized, end_realized, start_unrealized, end_unrealized):
+        cumulative = tuple(
+            (
+                _sum_optional(rows, "realized_pl_base"),
+                _sum_optional(rows, "unrealized_pl_base"),
+            )
+            for rows in rows_by_snapshot
+        )
+        if any(None in values for values in cumulative):
             reasons.append(
                 {
                     "code": "PNL_FIELDS_INCOMPLETE",
@@ -747,8 +840,47 @@ def _contributions(
                 )
             )
             continue
-        realized = end_realized - start_realized
-        unrealized = end_unrealized - start_unrealized
+        discontinuous = False
+        for (before_realized, before_unrealized), (
+            after_realized,
+            after_unrealized,
+        ) in zip(cumulative, cumulative[1:]):
+            if consume is not None:
+                consume()
+            if after_realized < before_realized or after_unrealized < before_unrealized:
+                discontinuous = True
+        if discontinuous:
+            reasons.append(
+                {
+                    "code": "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY",
+                    "scope": identity,
+                    "detail": "cumulative realized or unrealized P&L regresses inside the selected trajectory",
+                }
+            )
+            output.append(
+                SymbolContribution(
+                    identity,
+                    market,
+                    symbol,
+                    tuple(sorted({item.account_ref for item in all_rows})),
+                    "UNAVAILABLE",
+                    "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY",
+                    None,
+                    None,
+                    None,
+                    *classification,
+                    evidence,
+                )
+            )
+            continue
+        realized = sum(
+            (after[0] - before[0] for before, after in zip(cumulative, cumulative[1:])),
+            Decimal(0),
+        )
+        unrealized = sum(
+            (after[1] - before[1] for before, after in zip(cumulative, cumulative[1:])),
+            Decimal(0),
+        )
         output.append(
             SymbolContribution(
                 identity,
@@ -756,7 +888,7 @@ def _contributions(
                 symbol,
                 tuple(sorted({item.account_ref for item in all_rows})),
                 "AVAILABLE",
-                "SNAPSHOT_CUMULATIVE_PNL_DELTA",
+                "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA",
                 realized + unrealized,
                 realized,
                 unrealized,
@@ -777,9 +909,14 @@ def _aggregate(
         labels = getattr(item, attribute)
         if isinstance(labels, str):
             labels = (labels,)
-        labels = tuple(labels) or ("UNKNOWN",)
-        allocation = item.pnl_base / Decimal(len(labels)) if split else item.pnl_base
-        for label in labels:
+        labels = tuple(sorted(labels)) or ("UNKNOWN",)
+        if split:
+            allocation = item.pnl_base / Decimal(len(labels))
+            allocations = [allocation for _ in labels[:-1]]
+            allocations.append(item.pnl_base - sum(allocations, Decimal(0)))
+        else:
+            allocations = [item.pnl_base for _ in labels]
+        for label, allocation in zip(labels, allocations):
             totals[label] = totals.get(label, Decimal(0)) + allocation
     return dict(sorted(totals.items()))
 
@@ -992,6 +1129,11 @@ def _reconstructed_contributions(
             "end_present": True,
             "start_rows": 0,
             "end_rows": len(rows),
+            "ending_quantity": sum((item.quantity for item in rows), Decimal(0)),
+            "ending_quantity_by_account": {
+                item.account_ref: item.quantity
+                for item in sorted(rows, key=lambda row: row.account_ref)
+            },
         }
         method = "RECONSTRUCTION_EVIDENCE_INCOMPLETE"
         amount: Decimal | None = None
@@ -1016,7 +1158,7 @@ def _reconstructed_contributions(
                 }
             )
         else:
-            quantity = sum((item.quantity for item in rows), Decimal(0))
+            quantity = Decimal(evidence["ending_quantity"])
             first_price, last_price = price.aligned_points[0], price.aligned_points[-1]
             amount = quantity * (last_price.adjusted_close - first_price.adjusted_close)
             method = "PRICE_QUANTITY_GROSS_UNREALIZED_ESTIMATE"
@@ -1108,7 +1250,19 @@ def _trade_attribution_evidence(
     unmatched_open_lot = any(
         item.identity not in current_identities for item in trade_history.open_lots
     )
-    if observed_codes & fatal_codes or unmatched_open_lot:
+    expected_open_quantities = {
+        (item.account_ref, _identity(item)): item.quantity for item in snapshot.positions
+    }
+    observed_open_quantities: dict[tuple[str, str], Decimal] = {}
+    for item in trade_history.open_lots:
+        key = (item.account_ref, item.identity)
+        observed_open_quantities[key] = (
+            observed_open_quantities.get(key, Decimal(0)) + item.quantity
+        )
+    open_lots_reconcile = not use_contributions or (
+        observed_open_quantities == expected_open_quantities
+    )
+    if observed_codes & fatal_codes or unmatched_open_lot or not open_lots_reconcile:
         return TradeAttributionEvidence(
             "UNAVAILABLE",
             "trade history contains incomplete contexts, opening inventory, nontrade events, or order/fill conflicts",
@@ -1132,6 +1286,9 @@ def _merge_trade_fifo_contributions(
         return tuple(contributions), []
     trips = tuple(trade_evidence.review["round_trips"])
     open_identities = {item["identity"] for item in trade_evidence.review["open_lots"]}
+    open_by_identity: dict[str, list[tuple[int, Mapping[str, Any]]]] = {}
+    for index, lot in enumerate(trade_evidence.review["open_lots"]):
+        open_by_identity.setdefault(str(lot["identity"]), []).append((index, lot))
     by_identity: dict[str, list[tuple[int, Mapping[str, Any]]]] = {}
     for index, trip in enumerate(trips):
         by_identity.setdefault(str(trip["identity"]), []).append((index, trip))
@@ -1244,6 +1401,59 @@ def _merge_trade_fifo_contributions(
                 realized_pnl_base=realized,
                 evidence=evidence,
             )
+    for identity, indexed_lots in sorted(open_by_identity.items()):
+        existing = output.get(identity)
+        if existing is None:
+            continue
+        evidence = dict(existing.evidence)
+        evidence.update(
+            {
+                "trade_review_id": trade_evidence.review["review_id"],
+                "trade_review_digest": trade_evidence.review_digest,
+                "trade_round_trip_indexes": evidence.get("trade_round_trip_indexes", ()),
+                "realized_local_by_currency": evidence.get("realized_local_by_currency", {}),
+                "open_lot_indexes": tuple(index for index, _lot in indexed_lots),
+                "price_fill_consistency": "CORPORATE_ACTION_EVIDENCE_AVAILABLE_FORWARD_ADJUSTED",
+            }
+        )
+        price_close = evidence.get("aligned_end_close")
+        base_currency = trade_evidence.review["base_currency"]
+        if price_close is None or any(lot["currency"] != base_currency for _, lot in indexed_lots):
+            output[identity] = replace(
+                existing,
+                status="UNAVAILABLE",
+                method="TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
+                pnl_base=None,
+                realized_pnl_base=None,
+                unrealized_pnl_base=None,
+                evidence=evidence,
+            )
+            reasons.append(
+                {
+                    "code": "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
+                    "scope": identity,
+                    "detail": "open-lot currency or ending price evidence cannot authorize gross unrealized P&L",
+                }
+            )
+            continue
+        unrealized = sum(
+            (
+                (Decimal(price_close) - Decimal(lot["price"])) * Decimal(lot["quantity"])
+                for _, lot in indexed_lots
+            ),
+            Decimal(0),
+        )
+        realized = existing.realized_pnl_base or Decimal(0)
+        evidence["open_lot_unrealized_base"] = unrealized
+        output[identity] = replace(
+            existing,
+            status="ESTIMATED",
+            method="TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE",
+            pnl_base=realized + unrealized,
+            realized_pnl_base=realized,
+            unrealized_pnl_base=unrealized,
+            evidence=evidence,
+        )
     for identity, item in tuple(output.items()):
         if item.pnl_base is None or item.realized_pnl_base is not None:
             continue
@@ -1367,6 +1577,7 @@ def analyze_performance(
     price_provider: PriceProvider | None = None,
     trade_history: TradeReview | None = None,
     trade_unavailable_reason: str | None = None,
+    analysis_now: datetime | None = None,
 ) -> PerformanceAttributionReport:
     if trade_history is not None and trade_unavailable_reason is not None:
         raise AttributionInputError(
@@ -1375,6 +1586,12 @@ def analyze_performance(
     interval = select_snapshot_interval(snapshots, start=start, end=end)
     selected = interval.snapshots
     first = selected[0]
+    analysis_now = analysis_now or selected[-1].as_of
+    if analysis_now.tzinfo is None or analysis_now.utcoffset() is None:
+        raise AttributionInputError("analysis_now must be timezone-aware")
+    analysis_now = analysis_now.astimezone(timezone.utc)
+    if any(item.as_of.astimezone(timezone.utc) > analysis_now for item in selected):
+        raise AttributionInputError("FUTURE_SNAPSHOT")
     if any(item.base_currency != first.base_currency for item in selected):
         raise AttributionInputError("snapshot base currency changes inside the period")
     if any(item.trd_env != first.trd_env for item in selected):
@@ -1390,10 +1607,7 @@ def analyze_performance(
         unavailable_reason=trade_unavailable_reason,
     )
     requested_identities = tuple(
-        sorted(
-            set(_group_positions(selected[-1]))
-            | (set(_group_positions(first)) if len(selected) > 1 else set())
-        )
+        sorted(set().union(*(set(_group_positions(snapshot)) for snapshot in selected)))
     )
     prices = _align_price_evidence(
         _price_evidence(
@@ -1401,7 +1615,7 @@ def analyze_performance(
             provider=price_provider,
             start=start,
             end=end,
-            end_instant=selected[-1].as_of,
+            end_instant=min(selected[-1].as_of.astimezone(timezone.utc), analysis_now),
         ),
         start=start,
         end=end,
@@ -1419,7 +1633,7 @@ def analyze_performance(
             ]
         reasons.extend(trade_reasons)
     else:
-        contributions, reasons = _contributions(first, selected[-1])
+        contributions, reasons = _contributions(selected)
     if trade_evidence.status == "UNAVAILABLE" and (
         trade_history is not None or trade_unavailable_reason in TRADE_SOURCE_UNAVAILABLE_CODES
     ):
@@ -1434,6 +1648,32 @@ def analyze_performance(
                 "scope": "trade_evidence",
                 "detail": trade_evidence.reason
                 or "authoritative normalized trade history is unavailable",
+            }
+        )
+    source_snapshot_quality = tuple(
+        {
+            "snapshot_id": snapshot.snapshot_id,
+            "status": snapshot.data_quality.status,
+            "warnings": tuple(snapshot.data_quality.warnings),
+            "missing_fields": tuple(snapshot.data_quality.missing_fields),
+            "source_errors": tuple(snapshot.data_quality.source_errors),
+        }
+        for snapshot in selected
+    )
+    source_quality_complete = all(
+        item.data_quality.status == "COMPLETE"
+        and not item.data_quality.warnings
+        and not item.data_quality.missing_fields
+        and not item.data_quality.source_errors
+        and all(not position.data_quality_notes for position in item.positions)
+        for item in selected
+    )
+    if not source_quality_complete:
+        reasons.append(
+            {
+                "code": "SOURCE_DATA_QUALITY_INCOMPLETE",
+                "scope": "source_snapshots",
+                "detail": "all relevant snapshot financial, FX, classification, and position quality evidence must be COMPLETE",
             }
         )
     if not interval.continuous:
@@ -1486,6 +1726,7 @@ def analyze_performance(
         and interval.end_date_covered
         and fx_consistent
         and prices_complete
+        and source_quality_complete
     )
     total = (
         sum((item.pnl_base for item in available if item.pnl_base is not None), Decimal(0))
@@ -1539,7 +1780,7 @@ def analyze_performance(
     )
     nav_change = selected[-1].nav_base - first.nav_base
     field_population_complete = len(exact) == len(contributions) and bool(contributions)
-    if flow_covers_endpoints and total is not None:
+    if len(selected) >= 2 and flow_covers_endpoints and total is not None:
         expected_net_pnl = nav_change - (external_flow or Decimal(0))
         if field_population_complete:
             residual = expected_net_pnl - total
@@ -1654,7 +1895,7 @@ def analyze_performance(
     }
     limitations = [
         "IRR is not calculated.",
-        "Snapshot P&L attribution uses cumulative realized/unrealized base-field deltas; fees, FX timing, transfers and corporate actions require authoritative source coverage.",
+        "Exact snapshot P&L attribution sums adjacent cumulative realized/unrealized base-field deltas across the full selected trajectory; fees, FX timing, transfers and corporate actions require authoritative source coverage.",
     ]
     if mode == "RECONSTRUCTED":
         limitations.append(
@@ -1666,7 +1907,7 @@ def analyze_performance(
             )
         else:
             limitations.append(
-                "Authoritative normalized trade history is unavailable; reconstruction covers current holdings only and excludes realized P&L and exited positions."
+                "Authoritative normalized trade history is unavailable; price-only reconstruction covers current holdings, while all other trajectory identities remain explicit but unavailable; realized P&L and exited-position reconstruction are excluded."
             )
     if return_status != "AVAILABLE":
         limitations.append(
@@ -1676,14 +1917,17 @@ def analyze_performance(
         "1.0",
         "pending",
         selected[-1].as_of,
+        analysis_now,
         period,
         first.base_currency,
         tuple(item.snapshot_id for item in selected),
         {item.snapshot_id: _snapshot_digest(item) for item in selected},
+        source_snapshot_quality,
         {
             "source_snapshots": len(selected),
             "source_position_rows": sum(len(item.positions) for item in selected),
             "canonical_identities": len(contributions),
+            "trajectory_identities": len(requested_identities),
             "available_contributions": len(available),
             "unavailable_contributions": len(contributions) - len(available),
             "price_requested": len(requested_identities),
@@ -1730,10 +1974,11 @@ def analyze_performance(
         "COMPLETE" if not reasons else "PARTIAL",
         tuple(reasons),
         (
-            "symbol_pnl = delta(cumulative_realized_pl_base) + delta(cumulative_unrealized_pl_base)",
+            "symbol_pnl = sum over every adjacent snapshot leg of delta(cumulative_realized_pl_base) + delta(cumulative_unrealized_pl_base)",
             "reconstructed_gross_unrealized_pnl_base = ending_quantity * (aligned_ending_adjusted_close - aligned_beginning_adjusted_close) * ending_fx_to_base; only base-currency FX=1 is authorized",
             "fifo_realized_gross_local = sum(matched_quantity * (sell_price - buy_price)) by account, canonical identity, and currency; base-currency fills convert exactly 1:1 and non-base fills require transaction-date FX",
-            "theme_split_pnl = symbol_pnl / number_of_themes; UNKNOWN receives the full amount when no theme exists",
+            "fifo_open_lot_unrealized_gross_base = sum((aligned_ending_close - lot_cost) * open_lot_quantity) for authoritative base-currency lots whose total exactly matches ending snapshot account legs",
+            "theme_split_pnl divides across sorted themes with the final theme receiving symbol_pnl minus prior shares, preserving exact Decimal equality; UNKNOWN receives the full amount when no theme exists",
             "TWR = product((ending_NAV - external_flows_in_subperiod) / beginning_NAV) - 1; flows are adjusted at subperiod end",
         ),
         tuple(limitations),
