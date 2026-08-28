@@ -54,7 +54,7 @@ from .service import ConfigError, generate_snapshot
 from .settings import Settings, SettingsError, discover_futuapi_skill, resolve_output_path
 from .snapshot import UnsafeAggregationError
 from .snapshot_io import InvalidSnapshot
-from .trade_history import FutuTradeHistoryService
+from .trade_history import FutuTradeHistoryService, HistoryBudgetLimit
 from .trade_review import TradePolicyConfigError, TradeReviewInputError, load_trade_policy
 from .performance import (
     AttributionInputError,
@@ -549,10 +549,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         portfolio_snapshot=snapshots[-1],
                     )
                     trade_unavailable_reason = None
-                except (AccountAliasError, TradeReviewInputError, FutuReadError):
-                    trade_unavailable_reason = (
-                        "bounded pinned trade history acquisition or stable alias authority failed"
-                    )
+                except TimeoutError:
+                    trade_unavailable_reason = "TRADE_SOURCE_TIMEOUT"
+                except HistoryBudgetLimit:
+                    trade_unavailable_reason = "TRADE_SOURCE_BUDGET_EXCEEDED"
+                except FutuReadError:
+                    trade_unavailable_reason = "TRADE_SOURCE_READ_FAILED"
+                except TradeReviewInputError:
+                    trade_unavailable_reason = "TRADE_SOURCE_CONTRACT_INVALID"
+                except AccountAliasError:
+                    trade_unavailable_reason = "TRADE_ALIAS_AUTHORITY_UNAVAILABLE"
             report = analyze_performance(
                 snapshots,
                 start=start,

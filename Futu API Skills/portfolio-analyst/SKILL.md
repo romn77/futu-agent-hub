@@ -297,6 +297,8 @@ snapshot cumulative-field path never adds FIFO results, preventing double counti
 trade history the LOW-confidence result explicitly excludes realized P&L and exited positions.
 The current Phase 3 adapter reports corporate-action evidence as unsupported, so live CLI history is
 retained as structured unavailable evidence rather than authorizing FIFO contribution claims.
+Timeout, budget, source-read, normalized-contract, and stable-alias acquisition failures are
+sanitized to fixed trade-source reason codes; independent price/snapshot attribution continues.
 Top contributors and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires
 at least two common aligned price
 points for every authoritative contributed symbol and describes P&L-field authority only.

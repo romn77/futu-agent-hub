@@ -2272,7 +2272,21 @@ def validate_performance_document(
             }
             for item in contributions
         )
-        if reconstruction_without_realized and payload["trade_evidence"]["review"] is None:
+        from .performance import TRADE_SOURCE_UNAVAILABLE_CODES
+
+        trade_source_failed = (
+            payload["trade_evidence"]["review"] is None
+            and payload["trade_evidence"]["reason"] in TRADE_SOURCE_UNAVAILABLE_CODES
+        )
+        if trade_source_failed:
+            expected_reasons.append(
+                {
+                    "code": "TRADE_HISTORY_UNAVAILABLE",
+                    "scope": "trade_evidence",
+                    "detail": payload["trade_evidence"]["reason"],
+                }
+            )
+        elif reconstruction_without_realized and payload["trade_evidence"]["review"] is None:
             expected_reasons.append(
                 {
                     "code": "RECONSTRUCTED_REALIZED_AND_EXITED_UNAVAILABLE",

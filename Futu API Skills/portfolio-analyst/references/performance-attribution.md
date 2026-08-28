@@ -50,6 +50,13 @@ The present Phase 3 adapter marks corporate-action evidence as unsupported, so i
 is retained as structured evidence but cannot authorize FIFO contributions until that coverage is
 made authoritative.
 
+Bounded acquisition failures never expose source exception text. The CLI records one canonical
+reason in `trade_evidence.reason`: `TRADE_SOURCE_TIMEOUT`, `TRADE_SOURCE_BUDGET_EXCEEDED`,
+`TRADE_SOURCE_READ_FAILED`, `TRADE_SOURCE_CONTRACT_INVALID`, or
+`TRADE_ALIAS_AUTHORITY_UNAVAILABLE`. These failures leave independent price/snapshot attribution
+available, add a structured `TRADE_HISTORY_UNAVAILABLE` quality reason, and do not change return
+authority rules. Unexpected programming errors are not swallowed by this degradation boundary.
+
 Validated normalized fills are FIFO matched by account and canonical identity. Fully in-period
 closed lots contribute gross pre-fee realized P&L, including symbols absent from the ending
 snapshot. Current symbols combine that realized amount with the adjusted-close unrealized estimate.

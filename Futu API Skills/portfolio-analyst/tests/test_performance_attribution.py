@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from portfolio_analyst.identity import snapshot_identity
-from portfolio_analyst.account_alias import AccountAliasStore
+from portfolio_analyst.account_alias import AccountAliasError, AccountAliasStore
+from portfolio_analyst.futu_adapter import FutuReadError
 from portfolio_analyst.models import FxRateEvidence
 from portfolio_analyst.performance import (
     AttributionInputError,
@@ -24,6 +25,8 @@ from portfolio_analyst.snapshot_repository import SnapshotRepository
 from portfolio_analyst.snapshot_repository import SnapshotRepositoryError
 from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst.trade_review import build_trade_review
+from portfolio_analyst.trade_history import HistoryBudgetLimit
+from portfolio_analyst.trade_review import TradeReviewInputError
 from portfolio_analyst import cli
 from test_risk_analysis import reconciled_snapshot, snapshot as make_snapshot
 
@@ -705,6 +708,28 @@ def test_snapshot_cumulative_pnl_path_never_double_counts_fifo_trade_evidence():
     validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
+def test_trade_source_timeout_does_not_invalidate_exact_snapshot_pnl_authority():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+        trade_unavailable_reason="TRADE_SOURCE_TIMEOUT",
+    )
+
+    assert report.mode == "ACCURATE_PNL"
+    assert report.confidence == "HIGH"
+    assert report.quality_status == "PARTIAL"
+    assert report.return_status == "UNAVAILABLE"
+    assert report.portfolio_return is None
+    assert report.trade_evidence.reason == "TRADE_SOURCE_TIMEOUT"
+    assert any(item["code"] == "TRADE_HISTORY_UNAVAILABLE" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
 def test_embedded_normalized_trade_evidence_is_semantically_bound_after_rehash():
     current = _after_us_close(_pnl_start())
     payload = analyze_performance(
@@ -1200,6 +1225,93 @@ def test_performance_cli_collects_pinned_trade_history_with_existing_stable_alia
     assert payload["trade_evidence"]["status"] == "COMPLETE"
     assert payload["trade_evidence"]["used_for_contributions"] is True
     assert any(item["identity"] == "US.DDD" for item in payload["symbol_contributions"])
+
+
+@pytest.mark.parametrize(
+    ("source_error", "expected_reason"),
+    [
+        (TimeoutError("secret timeout detail"), "TRADE_SOURCE_TIMEOUT"),
+        (HistoryBudgetLimit("secret budget detail"), "TRADE_SOURCE_BUDGET_EXCEEDED"),
+        (FutuReadError("secret adapter detail"), "TRADE_SOURCE_READ_FAILED"),
+        (TradeReviewInputError("secret contract detail"), "TRADE_SOURCE_CONTRACT_INVALID"),
+        (AccountAliasError("secret alias detail"), "TRADE_ALIAS_AUTHORITY_UNAVAILABLE"),
+    ],
+)
+def test_performance_cli_structured_trade_acquisition_errors_degrade_without_leaking_detail(
+    monkeypatch, tmp_path, capsys, source_error, expected_reason
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    current = _after_us_close(_pnl_start())
+    SnapshotRepository(home).save(current)
+    AccountAliasStore(home).load_or_create()
+
+    class FakeAdapter:
+        def read_private_json(self, name, arguments, *, timeout=30):
+            del timeout
+            assert name == "get_kline"
+            return {
+                "code": arguments[0],
+                "ktype": "1d",
+                "source": "history",
+                "data": [
+                    {"time": "2026-08-26 00:00:00", "close": "100"},
+                    {"time": "2026-08-27 00:00:00", "close": "110"},
+                ],
+            }
+
+    class FailingTradeService:
+        def __init__(self, adapter, *, aliaser):
+            del adapter, aliaser
+
+        def review(self, **kwargs):
+            del kwargs
+            raise source_error
+
+    monkeypatch.setenv("PORTFOLIO_AGENT_HOME", str(home))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: Path("/pinned/futuapi"))
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: FakeAdapter())
+    monkeypatch.setattr(cli, "FutuTradeHistoryService", FailingTradeService)
+
+    assert (
+        cli.main(
+            [
+                "performance",
+                "--from",
+                "2026-08-26",
+                "--to",
+                "2026-08-27",
+                "--json",
+                "--no-save",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr()
+    assert "INTERNAL_ERROR" not in output.err
+    assert "secret" not in output.out and "secret" not in output.err
+    payload = json.loads(output.out)
+    assert payload["trade_evidence"] == {
+        "status": "UNAVAILABLE",
+        "reason": expected_reason,
+        "review_digest": None,
+        "review": None,
+        "used_for_contributions": False,
+    }
+    assert payload["mode"] == "RECONSTRUCTED"
+    assert payload["confidence"] == "LOW"
+    assert payload["quality_status"] == "PARTIAL"
+    assert payload["return_status"] == "UNAVAILABLE"
+    assert any(
+        item
+        == {
+            "code": "TRADE_HISTORY_UNAVAILABLE",
+            "scope": "trade_evidence",
+            "detail": expected_reason,
+        }
+        for item in payload["quality_reasons"]
+    )
+    validate_performance_document(payload, source_snapshots=(current,))
 
 
 def test_markdown_and_terminal_renderers_escape_untrusted_classification():

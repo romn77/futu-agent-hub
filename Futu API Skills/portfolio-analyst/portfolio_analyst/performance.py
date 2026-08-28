@@ -31,6 +31,15 @@ MAX_PRICE_WALL_SECONDS = 30.0
 MAX_CONSECUTIVE_PRICE_FAILURES = 3
 MAX_ATTRIBUTION_PERIOD_DAYS = 366
 MAX_CONTINUOUS_GAP_SECONDS = 36 * 60 * 60
+TRADE_SOURCE_UNAVAILABLE_CODES = frozenset(
+    {
+        "TRADE_SOURCE_TIMEOUT",
+        "TRADE_SOURCE_BUDGET_EXCEEDED",
+        "TRADE_SOURCE_READ_FAILED",
+        "TRADE_SOURCE_CONTRACT_INVALID",
+        "TRADE_ALIAS_AUTHORITY_UNAVAILABLE",
+    }
+)
 
 
 class AttributionInputError(ValueError):
@@ -1411,7 +1420,9 @@ def analyze_performance(
         reasons.extend(trade_reasons)
     else:
         contributions, reasons = _contributions(first, selected[-1])
-    if trade_history is not None and trade_evidence.status == "UNAVAILABLE":
+    if trade_evidence.status == "UNAVAILABLE" and (
+        trade_history is not None or trade_unavailable_reason in TRADE_SOURCE_UNAVAILABLE_CODES
+    ):
         reasons = [
             item
             for item in reasons
