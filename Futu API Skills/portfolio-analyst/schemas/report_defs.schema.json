@@ -59,7 +59,7 @@
         "medium_threshold": {"$ref": "#/$defs/unitDecimal"}, "high_threshold": {"$ref": "#/$defs/unitDecimal"}, "adjusted_prices": {"const": true},
         "coverage": {"$ref": "#/$defs/countCoverage"}, "date_cutoffs": {"type": "object", "maxProperties": 200, "propertyNames": {"$ref": "#/$defs/positionIdentity"}, "additionalProperties": {"type": "string", "maxLength": 10, "format": "date"}}, "matrix": {"$ref": "#/$defs/matrix"},
         "pairs": {"type": "array", "maxItems": 19900, "items": {"$ref": "#/$defs/correlationPair"}}, "inverse_pairs": {"type": "array", "maxItems": 19900, "items": {"$ref": "#/$defs/correlationPair"}}, "clusters": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/cluster"}},
-        "notes": {"type": "array", "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}
+        "notes": {"type": "array", "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 65536}}
       }
     },
     "policyCheck": {"type": "object", "maxProperties": 3, "additionalProperties": false, "required": ["measured", "threshold", "breached"], "properties": {"measured": {"$ref": "#/$defs/decimal"}, "threshold": {"$ref": "#/$defs/unitDecimal"}, "breached": {"type": "boolean"}}},

@@ -11,7 +11,7 @@
     "source_snapshot_id": {"type": "string", "maxLength": 80, "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
     "coverage": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/coverage"},
     "data_quality_status": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/qualityStatus"},
-    "data_quality_notes": {"type": "array", "maxItems": 40000, "items": {"type": "string", "minLength": 1, "maxLength": 4096}},
+    "data_quality_notes": {"type": "array", "maxItems": 40000, "items": {"type": "string", "minLength": 1, "maxLength": 65536}},
     "overall_risk": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/severity"},
     "concentration": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration"},
     "exposures": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/exposures"},

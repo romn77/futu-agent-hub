@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
+from decimal import Decimal
 import json
 from pathlib import Path
 
@@ -8,14 +10,15 @@ import pytest
 
 import portfolio_analyst.schema as schema_module
 from portfolio_analyst.reporting import build_portfolio_report, portfolio_report_identity
-from portfolio_analyst.risk import analyze_risk
+from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.risk import RiskBudget, analyze_risk
 from portfolio_analyst.schema import (
     ReportSemanticError,
     validate_portfolio_report_document,
     validate_risk_document,
 )
 
-from test_risk_analysis import snapshot
+from test_risk_analysis import _position, snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -139,3 +142,48 @@ def test_packaging_explicitly_limits_packages_and_exposes_cli_entrypoint():
 
     assert '[project.scripts]\nportfolio-analyst = "portfolio_analyst.cli:main"' in pyproject
     assert '[tool.setuptools]\npackages = ["portfolio_analyst"]' in pyproject
+
+
+def test_missing_history_note_at_producer_symbol_bound_validates_in_risk_and_portfolio():
+    base = snapshot()
+    positions = tuple(
+        _position(
+            f"S{index:03d}" + "A" * 252,
+            "0.0045",
+            sector="TECH",
+            region="US",
+            themes=("AI",),
+        )
+        for index in range(200)
+    )
+    source = replace(
+        base,
+        snapshot_id="",
+        positions=positions,
+        long_exposure_base=Decimal("900"),
+        gross_exposure_base=Decimal("900"),
+        net_exposure_base=Decimal("900"),
+        exposures={
+            "sector": {"TECH": Decimal("0.9")},
+            "region": {"US": Decimal("0.9")},
+            "theme": {"AI": Decimal("0.9")},
+            "asset_class": {"EQUITY": Decimal("0.9")},
+        },
+    )
+    source = replace(source, snapshot_id=snapshot_identity(source))
+
+    class MissingPrices:
+        def history(self, symbol, *, market, lookback, as_of):
+            del symbol, market, lookback, as_of
+            return None
+
+    risk = analyze_risk(
+        source,
+        price_provider=MissingPrices(),
+        budget=RiskBudget(max_history_symbols=200, max_pair_operations=19_900),
+    )
+    note = next(item for item in risk.correlation.notes if item.startswith("Missing or invalid"))
+    assert 52_000 < len(note) < 65_536
+
+    validate_risk_document(risk.to_dict())
+    validate_portfolio_report_document(build_portfolio_report(source, risk).to_dict())
