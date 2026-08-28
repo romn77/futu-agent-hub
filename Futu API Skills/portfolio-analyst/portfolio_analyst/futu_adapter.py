@@ -10,12 +10,18 @@ import tempfile
 import threading
 from datetime import date
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
 from typing import Sequence
 
 from .child_environment import controlled_child_environment, validate_account_id
-from .skill_trust import audited_command, audited_command_names, load_audited_skill
+from .skill_trust import (
+    audited_command,
+    audited_command_names,
+    load_audited_skill,
+    load_option_quote_capability,
+)
 
 try:
     import resource
@@ -91,7 +97,7 @@ _COMMAND_OPTION_SCHEMA = MappingProxyType(
 class FutuAdapter:
     """Execute only fixed read-only scripts from an audited futuapi Skill."""
 
-    READ_ONLY_COMMANDS = audited_command_names()
+    READ_ONLY_COMMANDS = audited_command_names() | frozenset({"get_option_quote"})
     DENY_TERMS = frozenset(
         {
             "place_order",
@@ -128,6 +134,7 @@ class FutuAdapter:
     )
     REDACTION = "[REDACTED]"
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+    MAX_OPTION_RESPONSE_BYTES = 256 * 1024
     _TEXT_ACCOUNT_NUMERIC_IDENTIFIER = re.compile(
         r"(?ix)"
         r"(?P<label>"
@@ -177,6 +184,8 @@ class FutuAdapter:
         normalized = name.lower()
         if any(term in normalized for term in self.DENY_TERMS):
             raise UnsafeFutuCommand(f"write-capable Futu command is forbidden: {name}")
+        if name == "get_option_quote":
+            return self._validate_option_quote_request(tuple(map(str, arguments)))
         if audited_command(name) is None:
             raise UnsafeFutuCommand(f"Futu command is not in the read-only allowlist: {name}")
         option_names = (
@@ -231,6 +240,41 @@ class FutuAdapter:
             normalized.append(value)
             index += 1
         return FutuRequest(name, tuple(normalized), tuple(sensitive_values))
+
+    def _validate_option_quote_request(self, arguments: tuple[str, ...]) -> FutuRequest:
+        capability, _detail = load_option_quote_capability(self.skill_dir)
+        if capability is None:
+            raise UnsafeFutuCommand("option quote capability is unavailable")
+        if len(arguments) != 2 or arguments[1] != "--json":
+            raise UnsafeFutuCommand("option quote requires one canonical leg and --json")
+        try:
+            legs = json.loads(
+                arguments[0],
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise UnsafeFutuCommand("option quote legs JSON is invalid") from None
+        if not isinstance(legs, list) or len(legs) != 1 or not isinstance(legs[0], dict):
+            raise UnsafeFutuCommand("option quote requires exactly one leg")
+        leg = legs[0]
+        if set(leg) != {"code", "action", "quantity"}:
+            raise UnsafeFutuCommand("option quote leg fields are outside the command policy")
+        code = leg["code"]
+        if (
+            not isinstance(code, str)
+            or re.fullmatch(r"(?:US|HK)\.[A-Z0-9][A-Z0-9.-]{0,63}", code) is None
+        ):
+            raise UnsafeFutuCommand("option quote identity is outside the command policy")
+        if leg["action"] != "BUY" or type(leg["quantity"]) is not float or leg["quantity"] != 1.0:
+            raise UnsafeFutuCommand("option quote permits only BUY quantity 1.0")
+        canonical = json.dumps(
+            [{"code": code, "action": "BUY", "quantity": 1.0}],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if arguments[0] != canonical:
+            raise UnsafeFutuCommand("option quote legs JSON is not canonical")
+        return FutuRequest("get_option_quote", (canonical, "--json"))
 
     @staticmethod
     def _validate_trade_history_request(name: str, arguments: tuple[str, ...]) -> FutuRequest:
@@ -391,7 +435,11 @@ class FutuAdapter:
         candidates = [completed.stdout, *reversed(completed.stdout.splitlines())]
         for candidate in candidates:
             try:
-                payload = json.loads(candidate)
+                payload = (
+                    json.loads(candidate, parse_float=Decimal, parse_int=Decimal)
+                    if name == "get_option_quote"
+                    else json.loads(candidate)
+                )
             except (json.JSONDecodeError, TypeError):
                 continue
             if isinstance(payload, dict):
@@ -435,17 +483,29 @@ class FutuAdapter:
         if audited is None:
             raise ValueError(f"audited futuapi Skill required: {detail}")
         command_record = audited_command(request.command)
-        assert command_record is not None
+        option_capability = None
+        if request.command == "get_option_quote":
+            option_capability, _detail = load_option_quote_capability(self.skill_dir)
+            if option_capability is None:
+                raise UnsafeFutuCommand("option quote capability is unavailable")
+            command_path = option_capability.file.relative_path
+        else:
+            assert command_record is not None
+            command_path = command_record.script_path
         with tempfile.TemporaryDirectory(prefix="portfolio-futu-") as temporary:
             snapshot_root = Path(temporary) / "futuapi"
             for record, content in audited.files:
                 destination = snapshot_root / record.relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(content)
+            if option_capability is not None:
+                destination = snapshot_root / option_capability.file.relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(option_capability.content)
             command = [
                 self.python_executable,
                 "-s",
-                str(snapshot_root / command_record.script_path),
+                str(snapshot_root / command_path),
                 *request.arguments,
             ]
             try:
@@ -466,11 +526,16 @@ class FutuAdapter:
                             if not chunk:
                                 return
                             with lock:
-                                remaining = self.MAX_RESPONSE_BYTES - state["size"]
+                                response_budget = (
+                                    self.MAX_OPTION_RESPONSE_BYTES
+                                    if request.command == "get_option_quote"
+                                    else self.MAX_RESPONSE_BYTES
+                                )
+                                remaining = response_budget - state["size"]
                                 if remaining > 0:
                                     chunks[name].append(chunk[:remaining])
                                 state["size"] += len(chunk)
-                                if state["size"] > self.MAX_RESPONSE_BYTES:
+                                if state["size"] > response_budget:
                                     state["overflow"] = True
                                     process.terminate()
                                     return
@@ -544,7 +609,12 @@ class FutuAdapter:
                                 if value is not None
                             )
                         )
-                        if captured_size > self.MAX_RESPONSE_BYTES:
+                        response_budget = (
+                            self.MAX_OPTION_RESPONSE_BYTES
+                            if request.command == "get_option_quote"
+                            else self.MAX_RESPONSE_BYTES
+                        )
+                        if captured_size > response_budget:
                             raise FutuReadError(
                                 "audited Futu read exceeded the bounded response budget"
                             )

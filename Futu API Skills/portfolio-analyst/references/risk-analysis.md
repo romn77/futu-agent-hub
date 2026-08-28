@@ -157,9 +157,11 @@ aliases and explicitly inherit that quality warning.
 
 The comprehensive report contains data range/quality, NAV/cash/count/top holdings, exactly three
 largest review risks, concentration/exposure/correlation evidence, hypothetical simulation
-directions, gaps, and explicit unavailable placeholders for lifecycle (Phase 4), performance
-(Phase 5), and options (Phase 6). A simulation direction is hypothetical evidence work, never an
-order or an independent buy/sell conclusion.
+directions, gaps, and the complete Phase 6 option-risk subreport. The option subreport can degrade
+to `PARTIAL`/`UNAVAILABLE` without changing Phase 2 findings or overall-risk policy. Phase 2 still
+fails closed for signed portfolios; standalone `options` analysis does not bypass that rule in
+`analyze`. A simulation direction is hypothetical evidence work, never an order or an independent
+buy/sell conclusion. See [option-risk.md](option-risk.md) for the separate raw-Greek contract.
 
 Both human risk output and comprehensive Markdown repeat `source_snapshot_id`, `as_of`, complete
 coverage, data-quality status and notes. Every one of the three findings includes type, severity,
@@ -171,5 +173,7 @@ Markdown escapes every untrusted label, note, finding, link/HTML metacharacter, 
 terminal output strips ANSI/control/newline injection. Matrix details remain authoritative in
 the JSON representation, and Markdown records the matrix SHA-256 digest. Saved bundles name
 `portfolio_report.json`; no-save Markdown does not claim that an artifact exists. Portfolio JSON
-embeds the complete risk report, and runtime validation requires every duplicated risk field to
-match exactly.
+embeds both the complete risk report and complete option-risk report. Runtime validation requires
+duplicated risk fields to match exactly and independently reconstructs the option source selection,
+quote evidence, legs, per-Greek coverage/aggregates, expiry buckets, quality reasons, status, and
+content identity from the embedded immutable snapshot.

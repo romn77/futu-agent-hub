@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moomoo-portfolio-analyst"
-version = "0.5.0"
+version = "0.6.0"
 description = "Read-only portfolio analysis commands backed by the official Futu API Skill"
 requires-python = ">=3.10"
 dependencies = ["jsonschema>=4.20", "PyYAML>=6.0"]
@@ -21,4 +21,4 @@ line-length = 100
 target-version = "py310"
 
 [tool.setuptools.data-files]
-schemas = ["schemas/portfolio_snapshot.schema.json", "schemas/report_defs.schema.json", "schemas/risk_report.schema.json", "schemas/portfolio_report.schema.json", "schemas/trade_review.schema.json", "schemas/rebalance_request.schema.json", "schemas/rebalance_result.schema.json", "schemas/position_lifecycle.schema.json", "schemas/lifecycle_record.schema.json", "schemas/journal_event.schema.json", "schemas/performance_attribution.schema.json"]
+schemas = ["schemas/portfolio_snapshot.schema.json", "schemas/report_defs.schema.json", "schemas/risk_report.schema.json", "schemas/option_risk.schema.json", "schemas/portfolio_report.schema.json", "schemas/trade_review.schema.json", "schemas/rebalance_request.schema.json", "schemas/rebalance_result.schema.json", "schemas/position_lifecycle.schema.json", "schemas/lifecycle_record.schema.json", "schemas/journal_event.schema.json", "schemas/performance_attribution.schema.json"]

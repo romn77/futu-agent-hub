@@ -315,7 +315,7 @@ def test_comprehensive_report_reuses_snapshot_identity_and_has_required_placehol
     assert len(payload["largest_risks"]) == 3
     assert payload["lifecycle"]["status"] == "UNAVAILABLE_UNTIL_PHASE_4"
     assert payload["performance"]["status"] == "UNAVAILABLE_UNTIL_PHASE_5"
-    assert payload["options"]["status"] == "NOT_RUN_PHASE_6"
+    assert payload["options"]["status"] == "NOT_APPLICABLE"
     markdown = report.to_markdown()
     assert "NAV basis" in markdown
     assert "US.AAA: 0.4" in markdown

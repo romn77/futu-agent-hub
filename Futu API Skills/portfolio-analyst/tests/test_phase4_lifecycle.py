@@ -698,6 +698,8 @@ def test_analyze_saved_bundle_is_complete_manifested_and_transactional(
         "risk_report.json",
         "lifecycle_report.json",
         "lifecycle_report.md",
+        "option_risk.json",
+        "option_risk.md",
         "portfolio_report.json",
         "portfolio_report.md",
     }

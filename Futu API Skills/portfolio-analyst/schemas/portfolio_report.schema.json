@@ -22,7 +22,7 @@
     "correlation": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/correlation"},
     "lifecycle": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_4"}}}, {"$ref": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json"}]},
     "performance": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_5"}}},
-    "options": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "NOT_RUN_PHASE_6"}}},
+    "options": {"$ref": "https://portfolio-analyst.local/schemas/option_risk.schema.json"},
     "hypothetical_simulation_candidates": {"type": "array", "items": {"type": "string", "pattern": "^Hypothetical only:", "minLength": 20}},
     "data_gaps": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "risk_report": {"$ref": "https://portfolio-analyst.local/schemas/risk_report.schema.json"}

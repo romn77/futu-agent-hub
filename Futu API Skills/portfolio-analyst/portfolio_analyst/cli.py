@@ -36,7 +36,11 @@ from .schema import (
     validate_portfolio_report_document,
     validate_rebalance_result_document,
     validate_risk_document,
+    validate_option_risk_document,
 )
+from .option_quote import FutuOptionQuoteProvider
+from .option_risk import OptionRiskInputError, analyze_option_risk
+from .skill_trust import validate_option_quote_capability
 from .journal_repository import JournalError, JournalRepository
 from .lifecycle import (
     MAX_HISTORY_SNAPSHOTS,
@@ -146,6 +150,18 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
         analysis.add_argument("--output", help="relative output path under data home")
         analysis.add_argument("--no-save", action="store_true")
         analysis.add_argument("--verbose", action="store_true")
+    options = subparsers.add_parser(
+        "options", help="inventory raw option Greeks from one immutable snapshot"
+    )
+    option_source = options.add_mutually_exclusive_group(required=True)
+    option_source.add_argument("--latest", action="store_true", help="use latest valid snapshot")
+    option_source.add_argument(
+        "--snapshot", help="relative immutable snapshot path under data home"
+    )
+    options.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS)
+    options.add_argument("--output", help="relative output directory under data home")
+    options.add_argument("--no-save", action="store_true")
+    options.add_argument("--verbose", action="store_true")
     simulate = subparsers.add_parser("simulate", help="run a non-executable rebalance simulation")
     source = simulate.add_mutually_exclusive_group(required=True)
     source.add_argument("--latest", action="store_true", help="use latest valid saved snapshot")
@@ -265,7 +281,15 @@ def _requires_secure_platform_mutation(args: argparse.Namespace) -> bool:
 
     if args.command == "snapshot":
         return bool(args.save and not args.no_save)
-    if args.command in {"doctor", "risk", "analyze", "simulate", "trades", "performance"}:
+    if args.command in {
+        "doctor",
+        "risk",
+        "analyze",
+        "options",
+        "simulate",
+        "trades",
+        "performance",
+    }:
         return bool(args.output and not args.no_save)
     if args.command == "lifecycle":
         return args.lifecycle_action == "init" or bool(
@@ -614,16 +638,64 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             print(rendered if args.as_json else report.to_human())
             return 0
 
+        if args.command == "options":
+            source_snapshot = _load_selected_snapshot(
+                settings.data_home, latest=args.latest, relative_path=args.snapshot
+            )
+            option_provider = None
+            skill_dir = discover_futuapi_skill()
+            if skill_dir is not None and validate_option_quote_capability(skill_dir).valid:
+                option_provider = FutuOptionQuoteProvider(FutuAdapter(skill_dir))
+            option_report = analyze_option_risk(
+                source_snapshot,
+                quote_provider=option_provider,
+            )
+            payload = option_report.to_dict()
+            validate_option_risk_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                output = Path(args.output)
+                resolve_output_path(settings.data_home, output / "option_risk.json")
+                artifact_files = {
+                    "portfolio_snapshot.json": json.dumps(
+                        source_snapshot.to_dict(), ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "option_risk.json": rendered + "\n",
+                    "option_risk.md": option_report.to_markdown(),
+                }
+                SnapshotStore(settings.data_home).save_bundle(
+                    output,
+                    {
+                        **artifact_files,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=source_snapshot.snapshot_id,
+                            as_of=source_snapshot.to_dict()["as_of"],
+                            report_id=option_report.to_dict()["option_risk_id"],
+                            files=artifact_files,
+                        ),
+                    },
+                )
+            print(
+                rendered if args.as_json else option_report.to_markdown(),
+                end="\n" if args.as_json else "",
+            )
+            return 0
+
         if args.command in {"risk", "analyze"}:
             source_snapshot = _load_selected_snapshot(
                 settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
             history_provider = None
+            option_provider = None
             skill_dir = discover_futuapi_skill()
             if skill_dir is not None:
                 from .price_history import FutuAdjustedPriceProvider
 
-                history_provider = FutuAdjustedPriceProvider(FutuAdapter(skill_dir))
+                adapter = FutuAdapter(skill_dir)
+                history_provider = FutuAdjustedPriceProvider(adapter)
+                if validate_option_quote_capability(skill_dir).valid:
+                    option_provider = FutuOptionQuoteProvider(adapter)
             risk = analyze_risk(
                 source_snapshot,
                 lookback=args.lookback,
@@ -667,7 +739,14 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                     source_snapshot, "lifecycle configuration unavailable or invalid"
                 )
             validate_lifecycle_document(lifecycle_report.to_dict())
-            report = build_portfolio_report(source_snapshot, risk, lifecycle_report)
+            option_report = analyze_option_risk(
+                source_snapshot,
+                quote_provider=option_provider,
+            )
+            validate_option_risk_document(option_report.to_dict())
+            report = build_portfolio_report(
+                source_snapshot, risk, lifecycle_report, options=option_report
+            )
             payload = report.to_dict()
             validate_portfolio_report_document(payload)
             rendered = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -689,6 +768,11 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                     "lifecycle_report.md": lifecycle_report.to_markdown(
                         json_artifact="lifecycle_report.json"
                     ),
+                    "option_risk.json": json.dumps(
+                        option_report.to_dict(), ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "option_risk.md": option_report.to_markdown(),
                     "portfolio_report.json": rendered + "\n",
                     "portfolio_report.md": report.to_markdown(
                         json_artifact="portfolio_report.json"
@@ -876,6 +960,8 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
     except UnsupportedRiskError as exc:
         return _emit_error(args, "UNSUPPORTED_PORTFOLIO", str(exc))
     except RiskInputError as exc:
+        return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
+    except OptionRiskInputError as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except SnapshotAlreadyExists as exc:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))

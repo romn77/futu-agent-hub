@@ -62,6 +62,11 @@ _AUDITED_COMMANDS = (
     ),
 )
 _AUDITED_COMMAND_NAMES = frozenset(command.name for command in _AUDITED_COMMANDS)
+OPTION_QUOTE_SHA256 = "0ea054b6b8f6f37938885041b7257653627941408462fc9c3c53d0395d4c8fd8"
+_OPTION_QUOTE_FILE = AuditedFile(
+    Path("scripts/quote/get_option_quote.py"),
+    OPTION_QUOTE_SHA256,
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,13 @@ class SkillValidation:
     @property
     def valid(self) -> bool:
         return self.root is not None
+
+
+@dataclass(frozen=True)
+class OptionQuoteCapability:
+    root: Path
+    file: AuditedFile
+    content: bytes
 
 
 def audited_files() -> tuple[AuditedFile, ...]:
@@ -173,3 +185,36 @@ def validate_futuapi_skill(candidate: Path) -> SkillValidation:
 
     audited, detail = load_audited_skill(candidate)
     return SkillValidation(audited.root if audited is not None else None, detail)
+
+
+def load_option_quote_capability(
+    candidate: Path,
+) -> tuple[OptionQuoteCapability | None, str]:
+    """Load the separately pinned option quote script without widening core trust."""
+
+    audited, detail = load_audited_skill(candidate)
+    if audited is None:
+        return None, detail
+    source = audited.root / _OPTION_QUOTE_FILE.relative_path
+    try:
+        resolved = source.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, f"optional audited file is missing: {_OPTION_QUOTE_FILE.relative_path}"
+    if not resolved.is_relative_to(audited.root) or not resolved.is_file():
+        return None, f"optional audited file is unsafe: {_OPTION_QUOTE_FILE.relative_path}"
+    try:
+        with resolved.open("rb") as handle:
+            content = canonicalize_bytes(handle.read())
+    except OSError as exc:
+        return None, f"optional audited file could not be read: {type(exc).__name__}"
+    if hashlib.sha256(content).hexdigest() != _OPTION_QUOTE_FILE.sha256:
+        return None, f"optional audited content digest mismatch: {_OPTION_QUOTE_FILE.relative_path}"
+    return (
+        OptionQuoteCapability(audited.root, _OPTION_QUOTE_FILE, content),
+        "audited option quote capability identity matched",
+    )
+
+
+def validate_option_quote_capability(candidate: Path) -> SkillValidation:
+    capability, detail = load_option_quote_capability(candidate)
+    return SkillValidation(capability.root if capability is not None else None, detail)

@@ -273,6 +273,9 @@ def _validate(payload: dict[str, Any], name: str) -> None:
         _schema_path("position_lifecycle.schema.json").read_text(encoding="utf-8")
     )
     trade_schema = json.loads(_schema_path("trade_review.schema.json").read_text(encoding="utf-8"))
+    option_risk_schema = json.loads(
+        _schema_path("option_risk.schema.json").read_text(encoding="utf-8")
+    )
     registry = Registry().with_resources(
         [
             (definitions["$id"], Resource.from_contents(definitions)),
@@ -287,6 +290,7 @@ def _validate(payload: dict[str, Any], name: str) -> None:
             ),
             (lifecycle_schema["$id"], Resource.from_contents(lifecycle_schema)),
             (trade_schema["$id"], Resource.from_contents(trade_schema)),
+            (option_risk_schema["$id"], Resource.from_contents(option_risk_schema)),
         ]
     )
     validator = jsonschema.Draft202012Validator(
@@ -666,6 +670,164 @@ def validate_risk_document(payload: dict[str, Any]) -> None:
     _validate_report_semantics(payload)
 
 
+_OPTION_VALIDATION_MAX_NODES = 1_000_000
+_OPTION_VALIDATION_MAX_BYTES = 64 * 1024 * 1024
+_OPTION_VALIDATION_MAX_OPERATIONS = 2_000_000
+_OPTION_VALIDATION_WALL_SECONDS = 10.0
+
+
+def _preflight_option_risk_shape(payload: object) -> None:
+    started = time.monotonic()
+    nodes = 0
+    string_bytes = 0
+    operations = 0
+    stack: list[tuple[object, int]] = [(payload, 0)]
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        operations += 1
+        if (
+            nodes > _OPTION_VALIDATION_MAX_NODES
+            or operations > _OPTION_VALIDATION_MAX_OPERATIONS
+            or depth > 64
+        ):
+            raise ReportSemanticError("option risk validation shape budget exceeded")
+        if operations % 1024 == 0 and time.monotonic() - started > _OPTION_VALIDATION_WALL_SECONDS:
+            raise ReportSemanticError("option risk validation wall budget exceeded")
+        if isinstance(value, dict):
+            if len(value) > 64:
+                raise ReportSemanticError("option risk validation map budget exceeded")
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ReportSemanticError("option risk validation requires string keys")
+                string_bytes += len(key.encode("utf-8"))
+                stack.append((item, depth + 1))
+        elif isinstance(value, list):
+            if len(value) > 10_000:
+                raise ReportSemanticError("option risk validation array budget exceeded")
+            stack.extend((item, depth + 1) for item in value)
+        elif isinstance(value, str):
+            size = len(value.encode("utf-8"))
+            if size > 1024 * 1024:
+                raise ReportSemanticError("option risk validation string budget exceeded")
+            string_bytes += size
+        if string_bytes > _OPTION_VALIDATION_MAX_BYTES:
+            raise ReportSemanticError("option risk validation document budget exceeded")
+
+
+def _option_datetime(value: str, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise ReportSemanticError(f"option risk {label} is invalid") from None
+    if parsed.tzinfo is None:
+        raise ReportSemanticError(f"option risk {label} must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
+    from .option_risk import analyze_option_risk
+    from .snapshot_io import InvalidSnapshot, snapshot_from_document
+
+    try:
+        snapshot = snapshot_from_document(payload["provenance"]["source_snapshot"])
+    except (InvalidSnapshot, ValueError, TypeError, KeyError) as exc:
+        raise ReportSemanticError("embedded option source snapshot is invalid") from exc
+    canonical_snapshot = snapshot.to_dict()
+    canonical_digest = hashlib.sha256(
+        json.dumps(
+            canonical_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        canonical_snapshot != payload["provenance"]["source_snapshot"]
+        or snapshot.snapshot_id != payload["source_snapshot_id"]
+        or canonical_snapshot["as_of"] != payload["as_of"]
+        or snapshot.base_currency != payload["base_currency"]
+        or canonical_digest != payload["source_snapshot_digest"]
+    ):
+        raise ReportSemanticError("option source snapshot binding is inconsistent")
+
+    evidence = payload["quote_evidence"]
+    analysis_now = _option_datetime(payload["analysis_now"], "analysis_now")
+    clock_values = [analysis_now]
+    for item in evidence:
+        started = _option_datetime(item["request_started_at"], "request_started_at")
+        finished = _option_datetime(item["request_finished_at"], "request_finished_at")
+        if started < analysis_now or finished < started:
+            raise ReportSemanticError("option quote request window is inconsistent")
+        if item["outcome"] in {"CIRCUIT_OPEN", "WALL_BUDGET_OMITTED"}:
+            if finished != started:
+                raise ReportSemanticError("unattempted option quote window must be instantaneous")
+            clock_values.append(started)
+        elif item["outcome"] not in {"SOURCE_UNAVAILABLE"}:
+            clock_values.extend((started, finished))
+
+    iterator = iter(clock_values)
+
+    def replay_clock() -> datetime:
+        try:
+            return next(iterator)
+        except StopIteration:
+            raise ReportSemanticError("option quote clock evidence is incomplete") from None
+
+    class ReplayProvider:
+        def __init__(self) -> None:
+            self.by_identity = {item["identity"]: item for item in evidence}
+
+        def quote(self, identity: str, *, timeout: float) -> object:
+            if timeout != 5.0 or identity not in self.by_identity:
+                raise ReportSemanticError("option quote replay request is inconsistent")
+            item = self.by_identity[identity]
+            if item["outcome"] == "FAILED":
+                raise RuntimeError("recorded source failure")
+            if item["outcome"] != "SUCCESS" or item["response"] is None:
+                raise ReportSemanticError("option quote outcome and response are inconsistent")
+            response = item["response"]
+            return {
+                "data": [
+                    {
+                        "code": identity,
+                        **response["greeks"],
+                        "option_type": response["option_type"],
+                        "expire_time": response["expiry"],
+                        "strike_price": response["strike"],
+                        "implied_volatility": response["implied_volatility"],
+                    }
+                ]
+            }
+
+    outcomes = {item["outcome"] for item in evidence}
+    provider: Any
+    if "SOURCE_UNAVAILABLE" in outcomes:
+        if outcomes != {"SOURCE_UNAVAILABLE"}:
+            raise ReportSemanticError("option source unavailable evidence cannot be mixed")
+        provider = None
+    else:
+        provider = ReplayProvider()
+    expected = analyze_option_risk(snapshot, quote_provider=provider, clock=replay_clock).to_dict()
+    try:
+        next(iterator)
+    except StopIteration:
+        pass
+    else:
+        raise ReportSemanticError("option quote clock evidence contains unused values")
+    return expected
+
+
+def validate_option_risk_document(payload: dict[str, Any]) -> None:
+    _preflight_option_risk_shape(payload)
+    _validate(payload, "option_risk.schema.json")
+    try:
+        expected = _replay_option_risk(payload)
+    except ReportSemanticError:
+        raise
+    except Exception as exc:
+        raise ReportSemanticError(f"option risk semantic validation failed: {exc}") from exc
+    if payload != expected:
+        raise ReportSemanticError("option risk report does not match reconstructed evidence")
+
+
 def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
     _validate(payload, "portfolio_report.schema.json")
     _validate_report_semantics(payload)
@@ -697,6 +859,14 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             or lifecycle["as_of"] != payload["as_of"]
         ):
             raise ReportSemanticError("lifecycle and risk modules reference different snapshots")
+    options = payload["options"]
+    validate_option_risk_document(options)
+    if (
+        options["source_snapshot_id"] != payload["source_snapshot_id"]
+        or options["as_of"] != payload["as_of"]
+        or options["base_currency"] != payload["base_currency"]
+    ):
+        raise ReportSemanticError("options and risk modules reference different snapshots")
 
 
 _LIFECYCLE_MAX_BYTES = 128 * 1024 * 1024

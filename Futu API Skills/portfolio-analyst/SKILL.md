@@ -1,9 +1,9 @@
 ---
 name: portfolio-analyst
-description: Read-only portfolio snapshots, risk, trade review, lifecycle, performance attribution, and non-executable rebalance simulation using the official futuapi Skill.
+description: Read-only portfolio snapshots, risk, raw option Greeks, trade review, lifecycle, performance attribution, and non-executable rebalance simulation using the official futuapi Skill.
 allowed-tools: Bash Read
 metadata:
-  version: 0.5.0
+  version: 0.6.0
 ---
 
 # Portfolio Analyst
@@ -123,7 +123,7 @@ transactionally saves `portfolio_report.json` and `portfolio_report.md` together
 `--no-save` always wins and the default remains side-effect free. Reports preserve one
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
 order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
-correlation, optional user-policy, unavailable-data, and Phase 6 option-risk placeholder contracts.
+correlation, optional user-policy, unavailable-data, and integrated option-risk contracts.
 Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` identity and metadata
 agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather
 than distorting Top-N, HHI, P&L, role, or correlation evidence. Risk aggregation reapplies the
@@ -139,6 +139,43 @@ position; only history requests and correlation pairs are budgeted. Correlation 
 market-local completed-close cutoffs under the versioned `REGULAR_SESSIONS_V1` approximation, so a
 later close on the same UTC date is excluded. It is not a full exchange calendar; exceptional
 sessions remain fail-closed/partial when bars are absent or inconsistent.
+
+Inventory recognized option legs from the same immutable snapshot:
+
+```bash
+python scripts/portfolio.py options --snapshot snapshots/FILE.json --json --no-save
+python scripts/portfolio.py options --latest --output reports/option-risk
+```
+
+Only nonzero positions whose canonical `security_type` is exactly `OPTION` are included. A nonzero
+`UNKNOWN` security type prevents `NOT_APPLICABLE`; labels and option codes are never parsed to infer
+type, direction, multiplier, or underlying. US and HK contracts may use the separately
+SHA-256-pinned official `quote/get_option_quote.py` capability. That optional pin is isolated from
+the core `futuapi` pins: a missing or changed option script makes live option quotes structurally
+unavailable without disabling accounts, portfolio, K-line, trade history, or doctor behavior.
+
+Each unique supported contract is requested sequentially once as the canonical single leg
+`BUY`/`1.0` read shape solely to obtain a unit quote. Snapshot quantity remains the authoritative
+signed position direction. Reports label every Delta, Gamma, Vega, Theta, and Rho value
+`RAW_CONTRACT_UNITS_NO_MULTIPLIER`; leg exposure is signed snapshot quantity times the raw unit
+Greek. Aggregate net and `gross_abs` totals are emitted only with complete full-population coverage.
+Option net/gross market value and gross/NAV always cover the entire recognized source population,
+including unsupported or quote-budget-omitted contracts. Expiry buckets keep calendar DTE by
+market-local snapshot date and mark expired contracts explicitly.
+
+The live quote budget is 30 unique supported contracts, selected by gross absolute base market
+value descending then identity ascending, with 5 seconds per call, a 30-second total wall bound,
+and a consecutive-failure circuit breaker. Request start/finish windows are recorded, but quote
+freshness remains `UNVERIFIED` because the official response supplies no trusted quote timestamp.
+Missing fields remain unavailable and never become zero. SDK/OpenD/timeouts/quote-shape failures
+degrade the option subreport while `analyze` continues to preserve Phase 2's exactly-three findings
+and overall-risk policy; Phase 2's signed-portfolio fail-closed rule is unchanged.
+
+The option report does not contain bid/ask, portfolio pricing, max profit/loss, breakeven,
+probability, margin, scenario P/L, money/beta/underlying-share delta, inferred multiplier or
+underlying, or trading advice. `options --output DIRECTORY` transactionally writes
+`option_risk.json`, `option_risk.md`, the source snapshot, and a digest manifest; default and
+`--no-save` runs write nothing. See [references/option-risk.md](references/option-risk.md).
 
 Review observed trading activity over an explicit, bounded period:
 

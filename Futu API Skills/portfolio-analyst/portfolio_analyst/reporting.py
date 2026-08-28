@@ -11,6 +11,7 @@ from .models import PortfolioSnapshot, _deep_freeze, _json_value
 from .rendering import markdown_text
 from .risk import RiskReport, aggregate_economic_positions
 from .lifecycle import LifecycleReport
+from .option_risk import OptionRiskReport, analyze_option_risk
 
 
 @dataclass(frozen=True)
@@ -273,6 +274,36 @@ class PortfolioReport:
                         ),
                     ]
                 )
+        options = data["options"]
+        lines.extend(
+            [
+                "",
+                "## Raw option Greeks",
+                "",
+                f"- source_snapshot_id: `{md(options['source_snapshot_id'])}`",
+                f"- Status: {options['status']}",
+                f"- Unit: {options['provenance']['greek_unit']}",
+                f"- Freshness: {options['provenance']['quote_freshness']}",
+                f"- Option legs: {options['coverage']['option_legs']}",
+                f"- Unique contracts: {options['coverage']['unique_contracts']}",
+                f"- Net market value: {options['source_population']['net_market_value_base']} {data['base_currency']}",
+                f"- Gross market value: {options['source_population']['gross_market_value_base']} {data['base_currency']}",
+                f"- Gross/NAV: {options['source_population']['gross_to_nav']}",
+            ]
+        )
+        for name in ("delta", "gamma", "vega", "theta", "rho"):
+            aggregate = options["greek_aggregates"][name]
+            lines.append(
+                f"- {name.title()}: {aggregate['status']}; net={aggregate['net']}; "
+                f"gross_abs={aggregate['gross_abs']}; "
+                f"coverage={aggregate['coverage']['available_legs']}/"
+                f"{aggregate['coverage']['total_legs']}"
+            )
+        lines.extend(
+            [
+                "- Limitations: " + "; ".join(md(item) for item in options["limitations"]),
+            ]
+        )
         return "\n".join(lines) + "\n"
 
 
@@ -280,6 +311,7 @@ def build_portfolio_report(
     snapshot: PortfolioSnapshot,
     risk: RiskReport,
     lifecycle: LifecycleReport | None = None,
+    options: OptionRiskReport | None = None,
 ) -> PortfolioReport:
     if risk.source_snapshot_id != snapshot.snapshot_id or risk.as_of != snapshot.as_of:
         raise ValueError("risk and portfolio report inputs must reference the same snapshot")
@@ -287,6 +319,15 @@ def build_portfolio_report(
         lifecycle.source_snapshot_id != snapshot.snapshot_id or lifecycle.as_of != snapshot.as_of
     ):
         raise ValueError("lifecycle and portfolio report inputs must reference the same snapshot")
+    if options is None:
+        options = analyze_option_risk(snapshot, quote_provider=None)
+    option_payload = options.to_dict()
+    if (
+        option_payload["source_snapshot_id"] != snapshot.snapshot_id
+        or option_payload["as_of"] != snapshot.to_dict()["as_of"]
+        or option_payload["base_currency"] != snapshot.base_currency
+    ):
+        raise ValueError("option risk and portfolio report inputs must reference the same snapshot")
     economic_positions = aggregate_economic_positions(snapshot)
     top_holdings = sorted(
         economic_positions, key=lambda position: (-abs(position.weight), position.identity)
@@ -324,7 +365,7 @@ def build_portfolio_report(
             {"status": "UNAVAILABLE_UNTIL_PHASE_4"} if lifecycle is None else lifecycle.to_dict()
         ),
         "performance": {"status": "UNAVAILABLE_UNTIL_PHASE_5"},
-        "options": {"status": "NOT_RUN_PHASE_6"},
+        "options": option_payload,
         "hypothetical_simulation_candidates": [
             finding.simulation_direction
             for finding in risk.top_risks
