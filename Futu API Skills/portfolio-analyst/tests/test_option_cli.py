@@ -2,6 +2,10 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+from dataclasses import replace
+from datetime import datetime, timezone
+
+import pytest
 
 from portfolio_analyst import cli
 from portfolio_analyst.persistence import SnapshotStore
@@ -9,6 +13,20 @@ from portfolio_analyst.settings import Settings
 from portfolio_analyst.skill_trust import audited_files
 
 from test_option_risk import _position, _snapshot
+
+
+def _future_snapshot():
+    source = _snapshot((_position("A260116C1"),))
+    future = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    body = replace(
+        source,
+        as_of=future,
+        fx_evidence=tuple(replace(item, effective_at=future) for item in source.fx_evidence),
+        snapshot_id="",
+    )
+    from portfolio_analyst.identity import snapshot_identity
+
+    return replace(body, snapshot_id=snapshot_identity(body))
 
 
 def _save(home: Path, positions) -> None:
@@ -154,4 +172,18 @@ def test_tampered_optional_quote_digest_degrades_options_without_disabling_core(
     assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "UNAVAILABLE"
-    assert "QUOTE_SOURCE_UNAVAILABLE" in {item["code"] for item in payload["quality_reasons"]}
+    assert "QUOTE_CAPABILITY_UNAVAILABLE" in {item["code"] for item in payload["quality_reasons"]}
+
+
+@pytest.mark.parametrize("command", ["options", "analyze"])
+def test_future_snapshot_cli_commands_fail_closed(monkeypatch, tmp_path, capsys, command):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    SnapshotStore(home).save(
+        "snapshots/future.json", json.dumps(_future_snapshot().to_dict()) + "\n"
+    )
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: None)
+
+    assert cli.main([command, "--snapshot", "snapshots/future.json", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "FUTURE_SNAPSHOT"

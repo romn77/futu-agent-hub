@@ -1,4 +1,7 @@
 from copy import deepcopy
+from dataclasses import replace
+from datetime import timedelta
+import hashlib
 import json
 from pathlib import Path
 
@@ -6,6 +9,7 @@ import jsonschema
 import pytest
 
 from portfolio_analyst.option_risk import analyze_option_risk
+from portfolio_analyst.identity import snapshot_identity
 from portfolio_analyst.reporting import build_portfolio_report
 from portfolio_analyst.risk import analyze_risk
 from portfolio_analyst.schema import ReportSemanticError, validate_option_risk_document
@@ -14,6 +18,7 @@ from test_option_risk import Clock, Provider, _position, _snapshot
 
 
 SCHEMA = Path(__file__).parents[1] / "schemas" / "option_risk.schema.json"
+SNAPSHOT_SCHEMA = Path(__file__).parents[1] / "schemas" / "portfolio_snapshot.schema.json"
 
 
 def _payload():
@@ -21,9 +26,27 @@ def _payload():
         _snapshot(
             (_position("A260116C1"), _position("B260116P1", quantity="-2", market_value="-50"))
         ),
-        quote_provider=Provider(rows={"US.B260116P1": {"option_type": "PUT"}}),
+        quote_provider=Provider(
+            rows={
+                "US.A260116C1": {"implied_volatility": "0.2"},
+                "US.B260116P1": {"option_type": "PUT"},
+            }
+        ),
         clock=Clock(),
     ).to_dict()
+
+
+def _rehash(payload):
+    body = {key: value for key, value in payload.items() if key != "option_risk_id"}
+    payload["option_risk_id"] = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()[:20]
 
 
 def test_option_risk_schema_is_draft_202012_strict_and_runtime_valid():
@@ -37,6 +60,36 @@ def test_option_risk_schema_is_draft_202012_strict_and_runtime_valid():
     payload["unexpected"] = True
     with pytest.raises(jsonschema.ValidationError):
         validate_option_risk_document(payload)
+
+
+def test_embedded_snapshot_schema_is_recursively_collection_and_string_bounded():
+    missing = []
+
+    def visit(node, path="$"):
+        if not isinstance(node, dict):
+            return
+        node_type = node.get("type")
+        if node_type == "object":
+            if "maxProperties" not in node:
+                missing.append(f"{path}:maxProperties")
+            if isinstance(node.get("additionalProperties"), dict) and "propertyNames" not in node:
+                missing.append(f"{path}:propertyNames")
+        if node_type == "array" and "maxItems" not in node:
+            missing.append(f"{path}:maxItems")
+        if node_type == "string" or (isinstance(node_type, list) and "string" in node_type):
+            if "maxLength" not in node:
+                missing.append(f"{path}:maxLength")
+        for key in ("properties", "$defs"):
+            for name, child in node.get(key, {}).items():
+                visit(child, f"{path}/{key}/{name}")
+        for key in ("items", "additionalProperties"):
+            visit(node.get(key), f"{path}/{key}")
+        for index, child in enumerate(node.get("oneOf", [])):
+            visit(child, f"{path}/oneOf/{index}")
+
+    for schema_path in (SCHEMA, SNAPSHOT_SCHEMA):
+        visit(json.loads(schema_path.read_text(encoding="utf-8")), schema_path.name)
+    assert missing == []
 
 
 @pytest.mark.parametrize(
@@ -65,6 +118,86 @@ def test_runtime_rejects_derived_source_quote_and_identity_tampering(mutate):
     mutate(payload)
 
     with pytest.raises((ReportSemanticError, jsonschema.ValidationError)):
+        validate_option_risk_document(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda body: body["implied_volatility_coverage"].__setitem__("available_legs", 0),
+        lambda body: body["implied_volatility_coverage"].__setitem__("status", "UNAVAILABLE"),
+        lambda body: body["quality_reasons"].append(
+            {
+                "code": "IMPLIED_VOLATILITY_COVERAGE_INCOMPLETE",
+                "scope": "implied_volatility",
+                "detail": "forged",
+            }
+        ),
+        lambda body: body["limitations"].__setitem__(3, "forged IV interpretation"),
+    ],
+)
+def test_runtime_rejects_rehashed_iv_coverage_and_limitation_tampering(mutate):
+    payload = deepcopy(_payload())
+    mutate(payload)
+    _rehash(payload)
+
+    with pytest.raises((ReportSemanticError, jsonschema.ValidationError)):
+        validate_option_risk_document(payload)
+
+
+@pytest.mark.parametrize("seconds", [6, 34])
+def test_runtime_rejects_rehashed_quote_windows_over_hard_limits(seconds):
+    payload = deepcopy(_payload())
+    started = payload["quote_evidence"][0]["request_started_at"]
+    from datetime import datetime
+
+    instant = datetime.fromisoformat(started.replace("Z", "+00:00")) + timedelta(seconds=seconds)
+    payload["quote_evidence"][0]["request_finished_at"] = instant.isoformat().replace("+00:00", "Z")
+    _rehash(payload)
+
+    with pytest.raises(ReportSemanticError, match="window"):
+        validate_option_risk_document(payload)
+
+
+def test_runtime_rejects_rehashed_failure_class_and_byte_count_tampering():
+    payload = deepcopy(_payload())
+    payload["quote_evidence"][0]["reason_code"] = "QUOTE_SOURCE_UNAVAILABLE"
+    payload["quote_evidence"][0]["status"] = "FAILURE"
+    payload["quote_evidence"][0]["response"] = None
+    payload["quote_evidence"][0]["source_response"] = None
+    payload["quote_evidence"][0]["response_byte_count"] = 0
+    _rehash(payload)
+    with pytest.raises(ReportSemanticError):
+        validate_option_risk_document(payload)
+
+    payload = deepcopy(_payload())
+    payload["quote_evidence"][0]["response_byte_count"] += 1
+    _rehash(payload)
+    with pytest.raises(ReportSemanticError, match="byte"):
+        validate_option_risk_document(payload)
+
+
+def test_runtime_rejects_future_embedded_snapshot_even_when_rehashed():
+    payload = deepcopy(_payload())
+    source = _snapshot((_position("A260116C1"),))
+    future_as_of = source.as_of + timedelta(days=2)
+    future = replace(
+        source,
+        as_of=future_as_of,
+        fx_evidence=tuple(replace(item, effective_at=future_as_of) for item in source.fx_evidence),
+        snapshot_id="",
+    )
+    future = replace(future, snapshot_id=snapshot_identity(future))
+    source_body = future.to_dict()
+    payload["provenance"]["source_snapshot"] = source_body
+    payload["source_snapshot_id"] = future.snapshot_id
+    payload["source_snapshot_digest"] = hashlib.sha256(
+        json.dumps(source_body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    payload["as_of"] = source_body["as_of"]
+    _rehash(payload)
+
+    with pytest.raises(ReportSemanticError, match="follows analysis_now"):
         validate_option_risk_document(payload)
 
 

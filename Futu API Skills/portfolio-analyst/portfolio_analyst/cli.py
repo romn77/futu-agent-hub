@@ -642,6 +642,8 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             source_snapshot = _load_selected_snapshot(
                 settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
+            if source_snapshot.as_of > frozen_now:
+                raise OptionRiskInputError("FUTURE_SNAPSHOT")
             option_provider = None
             skill_dir = discover_futuapi_skill()
             if skill_dir is not None and validate_option_quote_capability(skill_dir).valid:
@@ -649,6 +651,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             option_report = analyze_option_risk(
                 source_snapshot,
                 quote_provider=option_provider,
+                analysis_now=frozen_now,
             )
             payload = option_report.to_dict()
             validate_option_risk_document(payload)
@@ -686,6 +689,8 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             source_snapshot = _load_selected_snapshot(
                 settings.data_home, latest=args.latest, relative_path=args.snapshot
             )
+            if args.command == "analyze" and source_snapshot.as_of > frozen_now:
+                raise OptionRiskInputError("FUTURE_SNAPSHOT")
             history_provider = None
             option_provider = None
             skill_dir = discover_futuapi_skill()
@@ -742,6 +747,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             option_report = analyze_option_risk(
                 source_snapshot,
                 quote_provider=option_provider,
+                analysis_now=frozen_now,
             )
             validate_option_risk_document(option_report.to_dict())
             report = build_portfolio_report(
@@ -962,6 +968,8 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
     except RiskInputError as exc:
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except OptionRiskInputError as exc:
+        if str(exc) == "FUTURE_SNAPSHOT":
+            return _emit_error(args, "FUTURE_SNAPSHOT", "selected snapshot is future-dated")
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except SnapshotAlreadyExists as exc:
         return _emit_error(args, "SNAPSHOT_EXISTS", str(exc))

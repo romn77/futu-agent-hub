@@ -161,15 +161,21 @@ signed position direction. Reports label every Delta, Gamma, Vega, Theta, and Rh
 Greek. Aggregate net and `gross_abs` totals are emitted only with complete full-population coverage.
 Option net/gross market value and gross/NAV always cover the entire recognized source population,
 including unsupported or quote-budget-omitted contracts. Expiry buckets keep calendar DTE by
-market-local snapshot date and mark expired contracts explicitly.
+market-local snapshot date and mark expired contracts explicitly. Implied volatility is retained
+only as an independently covered raw vendor value: it is not aggregated and has no inferred
+high/low interpretation.
 
 The live quote budget is 30 unique supported contracts, selected by gross absolute base market
 value descending then identity ascending, with 5 seconds per call, a 30-second total wall bound,
-and a consecutive-failure circuit breaker. Request start/finish windows are recorded, but quote
+and a consecutive-failure circuit breaker. A daemon worker enforces those bounds even when a
+provider ignores its timeout; runtime replay rejects request windows over 5 seconds or an operation
+window over 30 seconds. Request start/finish windows are recorded, but quote
 freshness remains `UNVERIFIED` because the official response supplies no trusted quote timestamp.
 Missing fields remain unavailable and never become zero. SDK/OpenD/timeouts/quote-shape failures
 degrade the option subreport while `analyze` continues to preserve Phase 2's exactly-three findings
-and overall-risk policy; Phase 2's signed-portfolio fail-closed rule is unchanged.
+and overall-risk policy; Phase 2's signed-portfolio fail-closed rule is unchanged. `options` and
+`analyze` freeze one trusted UTC instant and reject a later snapshot as input error
+`FUTURE_SNAPSHOT`; a future-dated report cannot self-authorize through replay.
 
 The option report does not contain bid/ask, portfolio pricing, max profit/loss, breakeven,
 probability, margin, scenario P/L, money/beta/underlying-share delta, inferred multiplier or

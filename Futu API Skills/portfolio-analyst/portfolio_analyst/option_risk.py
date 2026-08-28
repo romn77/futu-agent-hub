@@ -4,15 +4,27 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
+import math
+import queue
+import threading
+import time
 from typing import Any, Callable, Mapping, Protocol
 from zoneinfo import ZoneInfo
 
 from .models import PortfolioSnapshot, _deep_freeze, _json_value
-from .option_quote import GREEKS, RAW_GREEK_UNIT, OptionQuote, parse_option_quote_response
+from .futu_adapter import FutuReadError
+from .option_quote import (
+    GREEKS,
+    RAW_GREEK_UNIT,
+    OptionQuote,
+    OptionQuoteError,
+    OptionQuoteProviderError,
+    parse_option_quote_response,
+)
 from .skill_trust import OPTION_QUOTE_SHA256
 
 
@@ -24,6 +36,9 @@ CIRCUIT_BREAKER_FAILURES = 3
 MAX_SINGLE_RESPONSE_BYTES = 256 * 1024
 MAX_TOTAL_RESPONSE_BYTES = 4 * 1024 * 1024
 _MARKET_TIMEZONES = {"US": ZoneInfo("America/New_York"), "HK": ZoneInfo("Asia/Hong_Kong")}
+_QUOTE_EVIDENCE_FIELDS = frozenset(
+    {"code", *GREEKS, "option_type", "expire_time", "strike_price", "implied_volatility"}
+)
 
 
 class OptionRiskInputError(ValueError):
@@ -49,18 +64,68 @@ def _canonical_bytes(value: object) -> bytes:
 
 
 def _bounded_response_bytes(value: object) -> bytes:
-    def encode_unknown(item: object) -> str:
+    def normalize(item: object) -> object:
         if isinstance(item, Decimal):
             return str(item)
-        raise TypeError("option response contains a non-JSON value")
+        if isinstance(item, float) and not math.isfinite(item):
+            return str(item)
+        if isinstance(item, dict):
+            return {key: normalize(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [normalize(child) for child in item]
+        return item
 
     return json.dumps(
-        value,
+        normalize(value),
         ensure_ascii=False,
+        sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
-        default=encode_unknown,
     ).encode("utf-8")
+
+
+def _normalized_source_response(value: object) -> object:
+    if not isinstance(value, dict) or set(value) != {"data"}:
+        return {"contract_invalid": True}
+    rows = value["data"]
+    if not isinstance(rows, list):
+        return {"data": None}
+    return {
+        "data": [
+            {key: item[key] for key in sorted(item) if key in _QUOTE_EVIDENCE_FIELDS}
+            if isinstance(item, dict)
+            else None
+            for item in rows
+        ]
+    }
+
+
+def _bounded_provider_call(
+    provider: OptionQuoteProvider, identity: str, *, timeout: float
+) -> object:
+    results: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            value = provider.quote(identity, timeout=timeout)
+        except BaseException as exc:
+            results.put((False, exc))
+        else:
+            results.put((True, value))
+
+    worker = threading.Thread(
+        target=invoke,
+        daemon=True,
+        name="portfolio-option-quote",
+    )
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError("bounded option quote request timed out")
+    ok, value = results.get_nowait()
+    if not ok:
+        raise value  # type: ignore[misc]
+    return value
 
 
 def _reason(code: str, scope: str, detail: str) -> dict[str, str]:
@@ -107,6 +172,11 @@ class OptionRiskReport:
                 f"- {name.title()}: {item['status']}; net={item['net']}; gross_abs={item['gross_abs']}; "
                 f"coverage={item['coverage']['available_legs']}/{item['coverage']['total_legs']}"
             )
+        iv = data["implied_volatility_coverage"]
+        lines.append(
+            "- Implied volatility (raw vendor value, nonaggregated): "
+            f"{iv['status']}; coverage={iv['available_legs']}/{iv['total_legs']}"
+        )
         lines.extend(["", "## Limitations", "", *[f"- {item}" for item in data["limitations"]]])
         return "\n".join(lines) + "\n"
 
@@ -118,6 +188,12 @@ def _identity(position: object) -> str:
 def _safe_clock(clock: Callable[[], datetime]) -> datetime:
     value = clock()
     if not isinstance(value, datetime) or value.tzinfo is None:
+        raise OptionRiskInputError("trusted option analysis clock must be timezone-aware")
+    return value.astimezone(timezone.utc)
+
+
+def _trusted_analysis_now(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
         raise OptionRiskInputError("trusted option analysis clock must be timezone-aware")
     return value.astimezone(timezone.utc)
 
@@ -180,6 +256,25 @@ def _collect_quotes(
     quotes: dict[str, OptionQuote] = {}
     consecutive_failures = 0
     total_bytes = 0
+    operation_started = time.monotonic()
+    trusted_deadline = analysis_now + timedelta(seconds=TOTAL_WALL_SECONDS)
+
+    def unavailable_evidence(
+        base: dict[str, Any], instant: datetime, reason_code: str
+    ) -> dict[str, Any]:
+        return {
+            **base,
+            "request_started_at": _utc_text(instant),
+            "request_finished_at": _utc_text(instant),
+            "status": "OMITTED"
+            if reason_code in {"QUOTE_CIRCUIT_OPEN", "QUOTE_TOTAL_BUDGET_EXCEEDED"}
+            else "FAILURE",
+            "reason_code": reason_code,
+            "response_byte_count": 0,
+            "source_response": None,
+            "response": None,
+        }
+
     for contract in sorted(
         (item for item in contracts if item["selection_status"] == "SELECTED"),
         key=lambda item: item["selection_rank"],
@@ -192,66 +287,116 @@ def _collect_quotes(
             "freshness": "UNVERIFIED",
         }
         if provider is None:
-            instant = _utc_text(analysis_now)
             evidence.append(
-                {
-                    **base,
-                    "request_started_at": instant,
-                    "request_finished_at": instant,
-                    "outcome": "SOURCE_UNAVAILABLE",
-                    "response": None,
-                }
+                unavailable_evidence(base, analysis_now, "QUOTE_CAPABILITY_UNAVAILABLE")
             )
             continue
         started = _safe_clock(clock)
+        trusted_elapsed = (started - analysis_now).total_seconds()
+        real_elapsed = time.monotonic() - operation_started
+        if trusted_elapsed < 0:
+            raise OptionRiskInputError("trusted option quote clock moved before analysis_now")
+        if trusted_elapsed >= TOTAL_WALL_SECONDS or real_elapsed >= TOTAL_WALL_SECONDS:
+            evidence.append(
+                unavailable_evidence(
+                    base, min(started, trusted_deadline), "QUOTE_TOTAL_BUDGET_EXCEEDED"
+                )
+            )
+            continue
         if consecutive_failures >= CIRCUIT_BREAKER_FAILURES:
-            instant = _utc_text(started)
-            evidence.append(
-                {
-                    **base,
-                    "request_started_at": instant,
-                    "request_finished_at": instant,
-                    "outcome": "CIRCUIT_OPEN",
-                    "response": None,
-                }
-            )
+            evidence.append(unavailable_evidence(base, started, "QUOTE_CIRCUIT_OPEN"))
             continue
-        if (started - analysis_now).total_seconds() >= TOTAL_WALL_SECONDS:
-            instant = _utc_text(started)
-            evidence.append(
-                {
-                    **base,
-                    "request_started_at": instant,
-                    "request_finished_at": instant,
-                    "outcome": "WALL_BUDGET_OMITTED",
-                    "response": None,
-                }
-            )
-            continue
-        outcome = "SUCCESS"
-        response = None
+
+        remaining = min(
+            PER_CALL_TIMEOUT_SECONDS,
+            TOTAL_WALL_SECONDS - trusted_elapsed,
+            TOTAL_WALL_SECONDS - real_elapsed,
+        )
+        status = "SUCCESS"
+        reason_code: str | None = None
+        response: dict[str, object] | None = None
+        source_response: object | None = None
+        response_byte_count = 0
+        quote: OptionQuote | None = None
+        call_started = time.monotonic()
         try:
-            raw = provider.quote(identity, timeout=PER_CALL_TIMEOUT_SECONDS)
-            encoded = _bounded_response_bytes(raw)
-            if len(encoded) > MAX_SINGLE_RESPONSE_BYTES:
-                raise ValueError("single response budget exceeded")
-            total_bytes += len(encoded)
-            if total_bytes > MAX_TOTAL_RESPONSE_BYTES:
-                raise ValueError("total response budget exceeded")
+            raw = _bounded_provider_call(provider, identity, timeout=remaining)
+            raw_encoded = _bounded_response_bytes(raw)
+            if len(raw_encoded) > MAX_SINGLE_RESPONSE_BYTES:
+                response_byte_count = MAX_SINGLE_RESPONSE_BYTES + 1
+                raise OverflowError("single")
+            source_response = json.loads(_bounded_response_bytes(_normalized_source_response(raw)))
+            normalized_bytes = _bounded_response_bytes(source_response)
+            response_byte_count = len(normalized_bytes)
+            if total_bytes + response_byte_count > MAX_TOTAL_RESPONSE_BYTES:
+                raise OverflowError("total")
+            total_bytes += response_byte_count
             quote = parse_option_quote_response(identity, raw)
             response = quote.to_dict()
+        except TimeoutError:
+            status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
+        except FutuReadError:
+            status, reason_code = "FAILURE", "QUOTE_SOURCE_READ_FAILED"
+        except OptionQuoteProviderError as exc:
+            status, reason_code = "FAILURE", exc.reason_code
+            if reason_code == "QUOTE_RESPONSE_TOO_LARGE":
+                response_byte_count = MAX_SINGLE_RESPONSE_BYTES + 1
+        except OverflowError as exc:
+            status = "FAILURE"
+            reason_code = (
+                "QUOTE_RESPONSE_TOO_LARGE"
+                if str(exc) == "single"
+                else "QUOTE_TOTAL_BUDGET_EXCEEDED"
+            )
+        except (OptionQuoteError, TypeError, ValueError):
+            status, reason_code = "FAILURE", "QUOTE_RESPONSE_CONTRACT_INVALID"
+        except Exception:
+            status, reason_code = "FAILURE", "QUOTE_SOURCE_UNAVAILABLE"
+        observed_finished = _safe_clock(clock)
+        trusted_duration = (observed_finished - started).total_seconds()
+        trusted_total = (observed_finished - analysis_now).total_seconds()
+        real_total = time.monotonic() - operation_started
+        real_duration = time.monotonic() - call_started
+        if observed_finished < started:
+            raise OptionRiskInputError("trusted option quote clock moved backwards")
+        call_deadline = min(started + timedelta(seconds=PER_CALL_TIMEOUT_SECONDS), trusted_deadline)
+        if trusted_total > TOTAL_WALL_SECONDS or real_total > TOTAL_WALL_SECONDS:
+            reason_code = (
+                "QUOTE_SOURCE_TIMEOUT"
+                if call_deadline < trusted_deadline
+                else "QUOTE_TOTAL_BUDGET_EXCEEDED"
+            )
+            status = "FAILURE"
+            quote = response = source_response = None
+            response_byte_count = 0
+        elif trusted_duration > PER_CALL_TIMEOUT_SECONDS or real_duration > remaining + 0.01:
+            status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
+            quote = response = source_response = None
+            response_byte_count = 0
+        finished = (
+            min(observed_finished, call_deadline)
+            if reason_code
+            in {
+                "QUOTE_SOURCE_TIMEOUT",
+                "QUOTE_TOTAL_BUDGET_EXCEEDED",
+            }
+            else observed_finished
+        )
+        if status == "SUCCESS" and quote is not None:
             quotes[identity] = quote
             consecutive_failures = 0
-        except Exception:
-            outcome = "FAILED"
+        else:
+            response = None
             consecutive_failures += 1
-        finished = _safe_clock(clock)
         evidence.append(
             {
                 **base,
                 "request_started_at": _utc_text(started),
                 "request_finished_at": _utc_text(finished),
-                "outcome": outcome,
+                "status": status,
+                "reason_code": reason_code,
+                "response_byte_count": response_byte_count,
+                "source_response": source_response,
                 "response": response,
             }
         )
@@ -262,28 +407,28 @@ def analyze_option_risk(
     snapshot: PortfolioSnapshot,
     *,
     quote_provider: OptionQuoteProvider | None = None,
+    analysis_now: datetime | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> OptionRiskReport:
     if len(snapshot.positions) > MAX_SOURCE_POSITIONS:
         raise OptionRiskInputError("option source position hard cap exceeded")
-    analysis_now = _safe_clock(clock)
+    analysis_now = (
+        _safe_clock(clock) if analysis_now is None else _trusted_analysis_now(analysis_now)
+    )
+    if snapshot.as_of > analysis_now:
+        raise OptionRiskInputError("FUTURE_SNAPSHOT")
     option_legs, contracts = _selection(snapshot)
     unknown_count = sum(
         1
         for position in snapshot.positions
         if position.quantity != 0 and position.security_type == "UNKNOWN"
     )
-    future = snapshot.as_of > analysis_now
     quote_evidence: list[dict[str, Any]] = []
     quotes: dict[str, OptionQuote] = {}
-    if option_legs and not future:
+    if option_legs:
         quote_evidence, quotes = _collect_quotes(contracts, quote_provider, clock, analysis_now)
 
     reasons: list[dict[str, str]] = []
-    if future:
-        reasons.append(
-            _reason("FUTURE_SNAPSHOT", "snapshot", "snapshot as_of follows trusted analysis_now")
-        )
     if unknown_count:
         reasons.append(
             _reason(
@@ -306,21 +451,25 @@ def analyze_option_risk(
                 "contracts beyond the deterministic 30-contract quote budget were omitted",
             )
         )
-    outcomes = {item["outcome"] for item in quote_evidence}
-    if "SOURCE_UNAVAILABLE" in outcomes:
-        reasons.append(
-            _reason("QUOTE_SOURCE_UNAVAILABLE", "live_source", "option quote provider unavailable")
-        )
-    if "FAILED" in outcomes:
-        reasons.append(_reason("QUOTE_REQUEST_FAILED", "live_source", "one or more quotes failed"))
-    if "CIRCUIT_OPEN" in outcomes:
-        reasons.append(
-            _reason("QUOTE_CIRCUIT_OPEN", "live_source", "source failure circuit breaker opened")
-        )
-    if "WALL_BUDGET_OMITTED" in outcomes:
-        reasons.append(
-            _reason("QUOTE_WALL_BUDGET", "quote_budget", "total quote wall budget was exhausted")
-        )
+    failure_details = {
+        "QUOTE_CAPABILITY_UNAVAILABLE": ("live_source", "option quote capability unavailable"),
+        "QUOTE_SOURCE_TIMEOUT": ("live_source", "option quote source timed out"),
+        "QUOTE_SOURCE_READ_FAILED": ("live_source", "audited option quote read failed"),
+        "QUOTE_SOURCE_UNAVAILABLE": ("live_source", "option quote source unavailable"),
+        "QUOTE_RESPONSE_CONTRACT_INVALID": (
+            "quote_response",
+            "option quote response contract invalid",
+        ),
+        "QUOTE_RESPONSE_TOO_LARGE": ("quote_budget", "single quote response exceeded 256 KiB"),
+        "QUOTE_TOTAL_BUDGET_EXCEEDED": (
+            "quote_budget",
+            "total quote wall or response budget was exhausted",
+        ),
+        "QUOTE_CIRCUIT_OPEN": ("live_source", "source failure circuit breaker opened"),
+    }
+    for code in sorted({item["reason_code"] for item in quote_evidence if item["reason_code"]}):
+        scope, detail = failure_details[code]
+        reasons.append(_reason(code, scope, detail))
     if snapshot.data_quality.status != "COMPLETE":
         reasons.append(
             _reason(
@@ -331,8 +480,7 @@ def analyze_option_risk(
         )
 
     full_population_authority = (
-        not future
-        and unknown_count == 0
+        unknown_count == 0
         and not unsupported
         and not budget_omitted
         and snapshot.data_quality.status == "COMPLETE"
@@ -382,6 +530,29 @@ def analyze_option_risk(
                     f"{len(available)} of {len(option_legs)} option legs have {name}",
                 )
             )
+
+    iv_available = sum(1 for item in leg_exposures if item["implied_volatility"] is not None)
+    if not option_legs:
+        iv_status = "NOT_APPLICABLE"
+    elif full_population_authority and iv_available == len(option_legs):
+        iv_status = "COMPLETE"
+    elif iv_available:
+        iv_status = "PARTIAL"
+    else:
+        iv_status = "UNAVAILABLE"
+    implied_volatility_coverage = {
+        "status": iv_status,
+        "available_legs": iv_available,
+        "total_legs": len(option_legs),
+    }
+    if option_legs and iv_available != len(option_legs):
+        reasons.append(
+            _reason(
+                "IMPLIED_VOLATILITY_COVERAGE_INCOMPLETE",
+                "implied_volatility",
+                f"{iv_available} of {len(option_legs)} option legs have implied volatility",
+            )
+        )
 
     expiry_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for leg in leg_exposures:
@@ -438,12 +609,8 @@ def analyze_option_risk(
     any_greek = any(
         value is not None for item in leg_exposures for value in item["greeks"].values()
     )
-    if future:
-        status = "FUTURE_SNAPSHOT"
-    elif not option_legs:
+    if not option_legs:
         status = "PARTIAL" if unknown_count else "NOT_APPLICABLE"
-    elif not any_greek and unsupported:
-        status = "PARTIAL"
     elif not any_greek:
         status = "UNAVAILABLE"
     elif all(item["status"] == "COMPLETE" for item in greek_aggregates.values()):
@@ -454,7 +621,7 @@ def analyze_option_risk(
         "COMPLETE"
         if status in {"COMPLETE", "NOT_APPLICABLE"}
         else "UNAVAILABLE"
-        if status in {"UNAVAILABLE", "FUTURE_SNAPSHOT"}
+        if status == "UNAVAILABLE"
         else "PARTIAL"
     )
     net_mv = sum((item["market_value_base"] for item in option_legs), Decimal(0))
@@ -462,11 +629,10 @@ def analyze_option_risk(
     snapshot_body = snapshot.to_dict()
     quote_capability = (
         "NOT_ACCESSED"
-        if not option_legs
-        or future
-        or not any(item["selection_status"] == "SELECTED" for item in contracts)
+        if not option_legs or not any(item["selection_status"] == "SELECTED" for item in contracts)
         else "UNAVAILABLE"
         if quote_provider is None
+        or any(item["reason_code"] == "QUOTE_CAPABILITY_UNAVAILABLE" for item in quote_evidence)
         else "AVAILABLE"
     )
     payload: dict[str, Any] = {
@@ -512,6 +678,7 @@ def analyze_option_risk(
         "quote_evidence": quote_evidence,
         "leg_exposures": leg_exposures,
         "greek_aggregates": greek_aggregates,
+        "implied_volatility_coverage": implied_volatility_coverage,
         "option_type_buckets": type_buckets,
         "expiry_buckets": expiry_buckets,
         "quality_reasons": sorted(reasons, key=lambda item: (item["code"], item["scope"])),
@@ -526,6 +693,8 @@ def analyze_option_risk(
             "Greeks are raw contract units with no contract multiplier.",
             "No multiplier, underlying identity, or underlying-share exposure is inferred.",
             "Quote freshness is UNVERIFIED; only request start and finish windows are recorded.",
+            "Implied volatility is a raw vendor value and is not aggregated.",
+            "Implied volatility has no high/low interpretation and inherits UNVERIFIED quote freshness.",
             "No bid/ask, portfolio pricing, max profit/loss, breakeven, probability, margin, scenario P/L, beta, money delta, or trading advice is provided.",
             "DTE is calendar-day difference, not trading days.",
         ],

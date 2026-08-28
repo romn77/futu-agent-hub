@@ -23,7 +23,8 @@ fail before a subprocess starts.
 Supported unique contracts are sorted by gross absolute base market value descending and identity
 ascending. The first 30 are requested sequentially, once each even when held in several accounts.
 Each call is bounded to 5 seconds and 256 KiB; total response bytes are bounded to 4 MiB and total
-wall time to 30 seconds. Three consecutive source failures open the circuit. Remaining contracts
+wall time to 30 seconds. A daemon worker applies the remaining per-call/total deadline even if the
+provider ignores its own timeout. Three consecutive source failures open the circuit. Remaining contracts
 stay in structural metrics and are marked budget-omitted, circuit-open, or unsupported.
 
 ## Raw units and calculations
@@ -41,7 +42,9 @@ underlying-share delta, money delta, or beta conversion is guessed.
 Delta, Gamma, Vega, Theta, and Rho are parsed independently as finite Decimal values. Missing,
 nonfinite, or malformed values remain unavailable and are never filled with zero. A partial sum is
 not published as a portfolio total. Valid response metadata may retain `CALL`/`PUT`, expiry, strike,
-and implied volatility; invalid metadata is omitted. Expiry buckets aggregate the same expiry and
+and implied volatility; invalid metadata is omitted. Implied volatility has its own total/available
+leg coverage and status. It remains a nonaggregated raw vendor value with no high/low
+interpretation, and inherits the quote's `UNVERIFIED` freshness. Expiry buckets aggregate the same expiry and
 record calendar-day DTE separately for every represented market, using the snapshot `as_of` in the
 market's local timezone. Negative DTE is explicitly expired; trading days are not inferred.
 
@@ -50,22 +53,27 @@ market's local timezone. Negative DTE is explicitly expired; trading days are no
 - `NOT_APPLICABLE`: every nonzero security type is known and none is `OPTION`.
 - `COMPLETE`: the snapshot is complete, all recognized contracts are supported and within budget,
   and all five Greeks cover every option leg.
-- `PARTIAL`: unknown types, unsupported markets, budget omissions, incomplete snapshot quality, or
-  incomplete Greek coverage leave some authoritative evidence but not a complete portfolio total.
-- `UNAVAILABLE`: recognized supported options exist but no Greek is available, including missing
-  capability, SDK/OpenD, timeout, source, or response-shape failures.
-- `FUTURE_SNAPSHOT`: snapshot `as_of` follows the trusted analysis clock; no quote is requested.
+- `PARTIAL`: at least one Greek is available, but unknown types, unsupported markets, budget
+  omissions, incomplete snapshot quality, or incomplete Greek coverage prevent a complete total.
+- `UNAVAILABLE`: an option is recognized but no Greek is available, including an unsupported-only
+  population or missing capability, SDK/OpenD, timeout, source, or response-contract failures.
+
+A snapshot later than the single trusted UTC analysis instant is rejected as input error
+`FUTURE_SNAPSHOT`; no future-dated option report is produced or accepted by runtime replay.
 
 The official response has no trusted server quote time. Every request therefore records trusted
 client `request_started_at` and `request_finished_at` bounds while freshness is always
-`UNVERIFIED`.
+`UNVERIFIED`. Evidence uses finite stable reason codes for capability, timeout, audited read,
+source, response-contract, single/total byte budget, total wall budget, and circuit failures; raw
+exception text is never serialized. Runtime validation recomputes canonical response byte counts,
+failure progression, the circuit, request order, and both wall limits.
 
 ## Output, validation, and non-goals
 
 `options` defaults to no persistence. `--output DIRECTORY` atomically publishes
 `portfolio_snapshot.json`, `option_risk.json`, `option_risk.md`, and a manifest last, without
 replacement. The JSON embeds the authoritative snapshot. Runtime validation applies the complete
-snapshot schema/identity/financial semantics, then reconstructs source selection, quote ordering,
+bounded snapshot schema/identity/financial semantics, then reconstructs source selection, quote ordering,
 legs, every Greek and coverage count, aggregates, expiry/type buckets, quality reasons, status,
 snapshot digest, and the 20-character SHA-256 report identity. Shape, document, operation, and wall
 budgets are independent of live acquisition budgets.

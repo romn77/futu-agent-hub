@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import time
 
 import pytest
 
@@ -17,6 +18,8 @@ from portfolio_analyst.models import (
 )
 from portfolio_analyst.option_risk import analyze_option_risk
 from portfolio_analyst.option_risk import OptionRiskInputError
+from portfolio_analyst.futu_adapter import FutuReadError
+from portfolio_analyst.option_quote import OptionQuoteProviderError
 
 
 AS_OF = datetime(2026, 1, 10, 15, tzinfo=timezone.utc)
@@ -225,29 +228,28 @@ def test_missing_one_greek_is_partial_and_never_publishes_partial_total():
     assert report["leg_exposures"][0]["greeks"]["rho"] is None
 
 
-def test_unsupported_market_is_partial_without_quote_and_preserves_structure():
+def test_unsupported_market_is_unavailable_without_quote_and_preserves_structure():
     source = _snapshot((_position("BAD", market="SG", market_value="250"),))
     provider = Provider()
 
     report = analyze_option_risk(source, quote_provider=provider, clock=Clock()).to_dict()
 
     assert provider.calls == []
-    assert report["status"] == "PARTIAL"
+    assert report["status"] == "UNAVAILABLE"
     assert report["source_population"]["gross_market_value_base"] == "250"
     assert report["coverage"]["unsupported_contracts"] == 1
     assert report["provenance"]["quote_capability"] == "NOT_ACCESSED"
     assert "UNSUPPORTED_MARKET" in {item["code"] for item in report["quality_reasons"]}
 
 
-def test_future_snapshot_stops_before_quote():
+def test_future_snapshot_is_rejected_before_quote():
     source = _snapshot((_position("AAPL260116C00150000"),))
     provider = Provider()
 
-    report = analyze_option_risk(
-        source, quote_provider=provider, clock=Clock(start=AS_OF - timedelta(seconds=1))
-    ).to_dict()
-
-    assert report["status"] == "FUTURE_SNAPSHOT"
+    with pytest.raises(OptionRiskInputError, match="^FUTURE_SNAPSHOT$"):
+        analyze_option_risk(
+            source, quote_provider=provider, clock=Clock(start=AS_OF - timedelta(seconds=1))
+        )
     assert provider.calls == []
 
 
@@ -270,7 +272,11 @@ def test_empty_multirow_and_wrong_identity_are_contract_failures_not_fabricated_
 
     assert report["status"] == "UNAVAILABLE"
     assert report["coverage"]["quoted_contracts"] == 0
-    assert all(item["outcome"] == "FAILED" for item in report["quote_evidence"])
+    assert all(item["status"] == "FAILURE" for item in report["quote_evidence"])
+    assert all(
+        item["reason_code"] == "QUOTE_RESPONSE_CONTRACT_INVALID"
+        for item in report["quote_evidence"]
+    )
     assert all(item["net"] is None for item in report["greek_aggregates"].values())
 
 
@@ -281,12 +287,12 @@ def test_three_consecutive_source_failures_open_circuit_for_remaining_contracts(
     report = analyze_option_risk(source, quote_provider=provider, clock=Clock()).to_dict()
 
     assert len(provider.calls) == 3
-    assert [item["outcome"] for item in report["quote_evidence"]] == [
-        "FAILED",
-        "FAILED",
-        "FAILED",
-        "CIRCUIT_OPEN",
-        "CIRCUIT_OPEN",
+    assert [item["reason_code"] for item in report["quote_evidence"]] == [
+        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_CIRCUIT_OPEN",
+        "QUOTE_CIRCUIT_OPEN",
     ]
     assert "QUOTE_CIRCUIT_OPEN" in {item["code"] for item in report["quality_reasons"]}
 
@@ -329,6 +335,62 @@ def test_each_greek_has_independent_coverage_and_nan_does_not_erase_other_greeks
     assert report["greek_aggregates"]["vega"]["coverage"]["available_legs"] == 2
     assert report["greek_aggregates"]["rho"]["coverage"]["available_legs"] == 1
     assert report["greek_aggregates"]["vega"]["net"] == "4"
+
+
+def test_nonfinite_numeric_greek_does_not_erase_other_fields_and_replays():
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(rows={"US.A": {"delta": float("nan"), "gamma": "0.25"}}),
+        clock=Clock(),
+    ).to_dict()
+
+    assert report["leg_exposures"][0]["greeks"]["delta"] is None
+    assert report["leg_exposures"][0]["greeks"]["gamma"] == "0.25"
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_quote_evidence_never_serializes_forbidden_pricing_or_probability_fields():
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(
+            rows={
+                "US.A": {
+                    "price": "9.99",
+                    "bid_price": "9.98",
+                    "prob_of_profit": "0.5",
+                    "max_profit": "999",
+                }
+            }
+        ),
+        clock=Clock(),
+    ).to_dict()
+
+    serialized = str(report)
+    assert "bid_price" not in serialized
+    assert "prob_of_profit" not in serialized
+    assert "max_profit" not in serialized
+    assert "'price'" not in serialized
+
+
+def test_implied_volatility_has_independent_nonaggregated_coverage():
+    source = _snapshot((_position("A"), _position("B")))
+    provider = Provider(rows={"US.A": {"implied_volatility": "0.25"}})
+
+    report = analyze_option_risk(source, quote_provider=provider, clock=Clock()).to_dict()
+
+    assert report["implied_volatility_coverage"] == {
+        "status": "PARTIAL",
+        "available_legs": 1,
+        "total_legs": 2,
+    }
+    assert [item["implied_volatility"] for item in report["leg_exposures"]] == ["0.25", None]
+    assert "IMPLIED_VOLATILITY_COVERAGE_INCOMPLETE" in {
+        item["code"] for item in report["quality_reasons"]
+    }
+    assert any("raw vendor value" in item for item in report["limitations"])
+    assert any("not aggregated" in item for item in report["limitations"])
 
 
 def test_expired_bucket_uses_snapshot_market_local_calendar_date():
@@ -388,10 +450,99 @@ def test_total_wall_budget_omits_later_quotes_and_runtime_can_rebuild_it():
     report = analyze_option_risk(source, quote_provider=provider, clock=clock).to_dict()
 
     assert len(provider.calls) == 1
-    assert [item["outcome"] for item in report["quote_evidence"]] == [
-        "SUCCESS",
-        "WALL_BUDGET_OMITTED",
+    assert [item["reason_code"] for item in report["quote_evidence"]] == [
+        "QUOTE_SOURCE_TIMEOUT",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
     ]
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_timeout_ignoring_provider_is_bounded_by_daemon_worker(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "PER_CALL_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(option_risk, "TOTAL_WALL_SECONDS", 0.04)
+
+    class IgnoringProvider:
+        def quote(self, identity, *, timeout):
+            del identity, timeout
+            time.sleep(0.2)
+            return Provider().quote("US.A", timeout=5.0)
+
+    started = time.monotonic()
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=IgnoringProvider(),
+        clock=lambda: datetime.now(timezone.utc),
+    ).to_dict()
+
+    assert time.monotonic() - started < 0.15
+    assert report["quote_evidence"][0]["status"] == "FAILURE"
+    assert report["quote_evidence"][0]["reason_code"] == "QUOTE_SOURCE_TIMEOUT"
+    assert report["coverage"]["quoted_contracts"] == 0
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason_code"),
+    [
+        (FutuReadError("sensitive source details"), "QUOTE_SOURCE_READ_FAILED"),
+        (TimeoutError("source detail"), "QUOTE_SOURCE_TIMEOUT"),
+        (RuntimeError("source detail"), "QUOTE_SOURCE_UNAVAILABLE"),
+    ],
+)
+def test_source_failures_use_stable_codes_without_exception_text(failure, reason_code):
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(failures={"US.A": failure}),
+        clock=Clock(),
+    ).to_dict()
+
+    evidence = report["quote_evidence"][0]
+    assert evidence["status"] == "FAILURE"
+    assert evidence["reason_code"] == reason_code
+    assert "sensitive" not in str(evidence)
+    assert "source detail" not in str(evidence)
+    assert evidence["response_byte_count"] == 0
+
+
+def test_single_and_total_response_byte_budgets_are_stable_failures(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    single = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(rows={"US.A": {"padding": "x" * (256 * 1024)}}),
+        clock=Clock(),
+    ).to_dict()
+    assert single["quote_evidence"][0]["reason_code"] == "QUOTE_RESPONSE_TOO_LARGE"
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 900)
+    rows = {f"US.{name}": {"delta": "1" * 500} for name in ("A", "B", "C")}
+    total = analyze_option_risk(
+        _snapshot(tuple(_position(name) for name in ("A", "B", "C"))),
+        quote_provider=Provider(rows=rows),
+        clock=Clock(),
+    ).to_dict()
+    assert [item["reason_code"] for item in total["quote_evidence"]] == [
+        None,
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+    ]
+
+
+@pytest.mark.parametrize(
+    "reason_code", ["QUOTE_CAPABILITY_UNAVAILABLE", "QUOTE_RESPONSE_TOO_LARGE"]
+)
+def test_adapter_boundary_failures_produce_runtime_replayable_reports(reason_code):
+    provider = Provider(failures={"US.A": OptionQuoteProviderError(reason_code)})
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)), quote_provider=provider, clock=Clock()
+    ).to_dict()
+
+    assert report["quote_evidence"][0]["reason_code"] == reason_code
+    if reason_code == "QUOTE_CAPABILITY_UNAVAILABLE":
+        assert report["provenance"]["quote_capability"] == "UNAVAILABLE"
     from portfolio_analyst.schema import validate_option_risk_document
 
     validate_option_risk_document(report)

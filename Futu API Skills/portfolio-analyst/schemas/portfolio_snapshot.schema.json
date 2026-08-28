@@ -3,6 +3,7 @@
   "$id": "https://portfolio-analyst.local/schemas/portfolio_snapshot.schema.json",
   "title": "Portfolio Snapshot 1.0",
   "type": "object",
+  "maxProperties": 32,
   "additionalProperties": false,
   "required": [
     "schema_version", "snapshot_id", "as_of", "source", "source_version", "trd_env",
@@ -12,16 +13,16 @@
   ],
   "properties": {
     "schema_version": {"const": "1.0"},
-    "snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
-    "as_of": {"type": "string", "format": "date-time"},
+    "snapshot_id": {"type": "string", "maxLength": 80, "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
+    "as_of": {"type": "string", "maxLength": 64, "format": "date-time"},
     "source": {"const": "futuapi"},
-    "source_version": {"type": "string", "minLength": 1},
+    "source_version": {"type": "string", "minLength": 1, "maxLength": 256},
     "trd_env": {"enum": ["REAL", "SIMULATE"]},
-    "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
-    "fx_evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/fxEvidence"}},
-    "accounts": {"type": "array", "items": {"$ref": "#/$defs/account"}},
-    "cash_balances": {"type": "array", "items": {"$ref": "#/$defs/cash"}},
-    "positions": {"type": "array", "items": {"$ref": "#/$defs/position"}},
+    "base_currency": {"type": "string", "maxLength": 3, "pattern": "^[A-Z]{3}$"},
+    "fx_evidence": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"$ref": "#/$defs/fxEvidence"}},
+    "accounts": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/account"}},
+    "cash_balances": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/cash"}},
+    "positions": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/position"}},
     "nav_base": {"$ref": "#/$defs/decimal"},
     "cash_base": {"$ref": "#/$defs/decimal"},
     "cash_weight": {"$ref": "#/$defs/decimal"},
@@ -31,6 +32,7 @@
     "net_exposure_base": {"$ref": "#/$defs/decimal"},
     "exposures": {
       "type": "object",
+      "maxProperties": 4,
       "required": ["sector", "region", "theme", "asset_class"],
       "additionalProperties": false,
       "properties": {
@@ -43,67 +45,67 @@
     "data_quality": {"$ref": "#/$defs/dataQuality"}
   },
   "$defs": {
-    "decimal": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "decimal": {"type": "string", "maxLength": 512, "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
     "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
     "fxEvidence": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "maxProperties": 5, "additionalProperties": false,
       "required": ["source_currency", "target_currency", "rate", "source", "effective_at"],
       "properties": {
-        "source_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
-        "target_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "source_currency": {"type": "string", "maxLength": 3, "pattern": "^[A-Z]{3}$"},
+        "target_currency": {"type": "string", "maxLength": 3, "pattern": "^[A-Z]{3}$"},
         "rate": {"$ref": "#/$defs/decimal"},
-        "source": {"type": "string", "minLength": 1},
-        "effective_at": {"type": "string", "format": "date-time"}
+        "source": {"type": "string", "minLength": 1, "maxLength": 256},
+        "effective_at": {"type": "string", "maxLength": 64, "format": "date-time"}
       }
     },
     "account": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "maxProperties": 9, "additionalProperties": false,
       "required": ["account_ref", "trd_env", "account_type", "account_role", "markets", "status", "context_type", "security_firm", "alias_provenance"],
       "properties": {
-        "account_ref": {"type": "string", "not": {"pattern": "^[0-9]+$"}},
-        "trd_env": {"type": "string"}, "account_type": {"type": "string"},
-        "account_role": {"type": "string"}, "markets": {"type": "array", "items": {"type": "string"}},
-        "status": {"type": "string"}, "context_type": {"type": "string"}, "security_firm": {"type": "string"},
+        "account_ref": {"type": "string", "maxLength": 128, "not": {"pattern": "^[0-9]+$"}},
+        "trd_env": {"type": "string", "maxLength": 16}, "account_type": {"type": "string", "maxLength": 64},
+        "account_role": {"type": "string", "maxLength": 64}, "markets": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 16}},
+        "status": {"type": "string", "maxLength": 64}, "context_type": {"type": "string", "maxLength": 32}, "security_firm": {"type": "string", "maxLength": 64},
         "alias_provenance": {"enum": ["STABLE", "EPHEMERAL"]}
       }
     },
     "cash": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "maxProperties": 7, "additionalProperties": false,
       "required": ["account_ref", "currency", "amount_local", "fx_to_base", "amount_base", "weight", "data_quality_notes"],
       "properties": {
-        "account_ref": {"type": "string"}, "currency": {"type": "string"},
+        "account_ref": {"type": "string", "maxLength": 128}, "currency": {"type": "string", "maxLength": 3},
         "amount_local": {"$ref": "#/$defs/decimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
         "amount_base": {"$ref": "#/$defs/decimal"}, "weight": {"$ref": "#/$defs/decimal"},
-        "data_quality_notes": {"type": "array", "items": {"type": "string"}}
+        "data_quality_notes": {"type": "array", "maxItems": 256, "items": {"type": "string", "maxLength": 512}}
       }
     },
     "position": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "maxProperties": 32, "additionalProperties": false,
       "required": ["account_ref", "symbol", "name", "market", "security_type", "currency", "currency_provenance", "quantity", "can_sell_quantity", "average_cost_local", "last_price_local", "market_value_local", "unrealized_pl_local", "realized_pl_local", "fx_to_base", "market_value_base", "unrealized_pl_base", "realized_pl_base", "weight", "sector", "industry", "region", "themes", "asset_class", "position_role", "data_quality_notes"],
       "properties": {
-        "account_ref": {"type": "string"}, "symbol": {"type": "string"}, "name": {"type": "string"},
-        "market": {"type": "string"}, "security_type": {"type": "string"}, "currency": {"type": "string"}, "currency_provenance": {"enum": ["AUDITED_SOURCE", "USER_CONFIG"]},
+        "account_ref": {"type": "string", "maxLength": 128}, "symbol": {"type": "string", "maxLength": 256}, "name": {"type": "string", "maxLength": 1024},
+        "market": {"type": "string", "maxLength": 8}, "security_type": {"type": "string", "maxLength": 32}, "currency": {"type": "string", "maxLength": 3}, "currency_provenance": {"enum": ["AUDITED_SOURCE", "USER_CONFIG"]},
         "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/decimal"},
         "average_cost_local": {"$ref": "#/$defs/decimal"}, "last_price_local": {"$ref": "#/$defs/decimal"},
         "market_value_local": {"$ref": "#/$defs/decimal"}, "unrealized_pl_local": {"$ref": "#/$defs/nullableDecimal"},
         "realized_pl_local": {"$ref": "#/$defs/nullableDecimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
         "market_value_base": {"$ref": "#/$defs/decimal"}, "unrealized_pl_base": {"$ref": "#/$defs/nullableDecimal"}, "realized_pl_base": {"$ref": "#/$defs/nullableDecimal"},
-        "weight": {"$ref": "#/$defs/decimal"}, "sector": {"type": "string"}, "industry": {"type": "string"},
-        "region": {"type": "string"}, "themes": {"type": "array", "items": {"type": "string"}},
-        "asset_class": {"type": "string"}, "position_role": {"type": ["string", "null"]},
-        "data_quality_notes": {"type": "array", "items": {"type": "string"}}
+        "weight": {"$ref": "#/$defs/decimal"}, "sector": {"type": "string", "maxLength": 256}, "industry": {"type": "string", "maxLength": 256},
+        "region": {"type": "string", "maxLength": 256}, "themes": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}},
+        "asset_class": {"type": "string", "maxLength": 256}, "position_role": {"type": ["string", "null"], "maxLength": 128},
+        "data_quality_notes": {"type": "array", "maxItems": 256, "items": {"type": "string", "maxLength": 512}}
       }
     },
-    "exposureMap": {"type": "object", "additionalProperties": {"$ref": "#/$defs/decimal"}},
+    "exposureMap": {"type": "object", "maxProperties": 10000, "propertyNames": {"maxLength": 256}, "additionalProperties": {"$ref": "#/$defs/decimal"}},
     "dataQuality": {
-      "type": "object", "additionalProperties": false,
+      "type": "object", "maxProperties": 5, "additionalProperties": false,
       "required": ["status", "warnings", "missing_fields", "source_errors", "coverage"],
       "properties": {
         "status": {"enum": ["COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"]},
-        "warnings": {"type": "array", "items": {"type": "string"}},
-        "missing_fields": {"type": "array", "items": {"type": "string"}},
-        "source_errors": {"type": "array", "items": {"type": "string"}},
-        "coverage": {"type": "object", "additionalProperties": {"type": ["integer", "string"]}}
+        "warnings": {"type": "array", "maxItems": 10000, "items": {"type": "string", "maxLength": 512}},
+        "missing_fields": {"type": "array", "maxItems": 10000, "items": {"type": "string", "maxLength": 256}},
+        "source_errors": {"type": "array", "maxItems": 10000, "items": {"type": "string", "maxLength": 512}},
+        "coverage": {"type": "object", "maxProperties": 10000, "propertyNames": {"maxLength": 256}, "additionalProperties": {"type": ["integer", "string"], "maxLength": 512}}
       }
     }
   }

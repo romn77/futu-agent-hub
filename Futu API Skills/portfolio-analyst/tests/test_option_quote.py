@@ -8,8 +8,12 @@ from decimal import Decimal
 import pytest
 
 from portfolio_analyst import futu_adapter
-from portfolio_analyst.futu_adapter import FutuAdapter, UnsafeFutuCommand
-from portfolio_analyst.option_quote import OptionQuoteError, parse_option_quote_response
+from portfolio_analyst.futu_adapter import FutuAdapter, FutuReadError, UnsafeFutuCommand
+from portfolio_analyst.option_quote import (
+    OptionQuoteError,
+    OptionQuoteProviderError,
+    parse_option_quote_response,
+)
 from portfolio_analyst.option_quote import FutuOptionQuoteProvider
 from portfolio_analyst.skill_trust import (
     OPTION_QUOTE_SHA256,
@@ -222,6 +226,34 @@ def test_futu_option_provider_emits_only_canonical_read_request():
             5.0,
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason_code"),
+    [
+        (subprocess.TimeoutExpired("quote", 5), "QUOTE_SOURCE_TIMEOUT"),
+        (FutuReadError("audited Futu read failed"), "QUOTE_SOURCE_READ_FAILED"),
+        (
+            FutuReadError("audited Futu read exceeded the bounded response budget"),
+            "QUOTE_RESPONSE_TOO_LARGE",
+        ),
+        (
+            UnsafeFutuCommand("option quote capability is unavailable"),
+            "QUOTE_CAPABILITY_UNAVAILABLE",
+        ),
+    ],
+)
+def test_futu_option_provider_maps_adapter_failures_to_stable_codes(failure, reason_code):
+    class Adapter:
+        def read_private_json(self, *args, **kwargs):
+            del args, kwargs
+            raise failure
+
+    with pytest.raises(OptionQuoteProviderError) as caught:
+        FutuOptionQuoteProvider(Adapter()).quote("US.X", timeout=5.0)
+
+    assert caught.value.reason_code == reason_code
+    assert str(caught.value) == reason_code
 
 
 def test_adapter_parses_option_numbers_directly_as_decimal(monkeypatch, tmp_path):

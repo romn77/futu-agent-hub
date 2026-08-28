@@ -7,7 +7,9 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Mapping
+import subprocess
 
+from .futu_adapter import FutuReadError, UnsafeFutuCommand
 from .models import _decimal_text
 
 
@@ -17,6 +19,16 @@ RAW_GREEK_UNIT = "RAW_CONTRACT_UNITS_NO_MULTIPLIER"
 
 class OptionQuoteError(ValueError):
     """A quote response did not prove one requested option identity."""
+
+    reason_code = "QUOTE_RESPONSE_CONTRACT_INVALID"
+
+
+class OptionQuoteProviderError(RuntimeError):
+    """Stable classification of a failure at the audited quote boundary."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
 
 
 class FutuOptionQuoteProvider:
@@ -33,9 +45,21 @@ class FutuOptionQuoteProvider:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return self.adapter.read_private_json(  # type: ignore[attr-defined]
-            "get_option_quote", (legs, "--json"), timeout=timeout
-        )
+        try:
+            return self.adapter.read_private_json(  # type: ignore[attr-defined]
+                "get_option_quote", (legs, "--json"), timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            raise OptionQuoteProviderError("QUOTE_SOURCE_TIMEOUT") from None
+        except FutuReadError as exc:
+            reason = (
+                "QUOTE_RESPONSE_TOO_LARGE"
+                if "bounded response budget" in str(exc)
+                else "QUOTE_SOURCE_READ_FAILED"
+            )
+            raise OptionQuoteProviderError(reason) from None
+        except (UnsafeFutuCommand, ValueError):
+            raise OptionQuoteProviderError("QUOTE_CAPABILITY_UNAVAILABLE") from None
 
 
 def _finite_decimal(value: object) -> Decimal | None:
