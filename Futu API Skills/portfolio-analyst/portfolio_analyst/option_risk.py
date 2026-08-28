@@ -437,6 +437,7 @@ def _collect_quotes(
             quote = response = source_response = None
             overflow_marker = None
             response_byte_count = 0
+            total_budget_exhausted = False
         if total_wall_failure:
             finished = trusted_deadline
         elif reason_code == "QUOTE_TOTAL_BUDGET_EXCEEDED":
