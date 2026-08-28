@@ -432,7 +432,7 @@ def _collect_quotes(
             response_byte_count = 0
             total_budget_exhausted = True
             total_wall_failure = True
-        elif reason_code != "QUOTE_TOTAL_BUDGET_EXCEEDED" and per_call_deadline_reached:
+        elif per_call_deadline_reached:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
             quote = response = source_response = None
             overflow_marker = None

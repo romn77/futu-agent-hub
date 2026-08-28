@@ -910,6 +910,30 @@ def test_single_and_total_response_byte_budgets_are_stable_failures(monkeypatch)
     ]
 
 
+def test_per_call_timeout_overrides_simultaneous_response_byte_overflow(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 100)
+    analysis_now = AS_OF + timedelta(hours=1)
+
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(analysis_now, analysis_now + timedelta(seconds=5)),
+    ).to_dict()
+
+    evidence = report["quote_evidence"][0]
+    assert evidence["status"] == "FAILURE"
+    assert evidence["reason_code"] == "QUOTE_SOURCE_TIMEOUT"
+    assert evidence["response_byte_count"] == 0
+    assert evidence["source_response"] is None
+    assert evidence["overflow_marker"] is None
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
 def test_first_normalized_total_overflow_uses_marker_and_omits_all_later_calls(monkeypatch):
     from portfolio_analyst import option_risk
 
