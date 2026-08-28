@@ -156,6 +156,8 @@
             "TRADE_FIFO_BASE_FX_UNAVAILABLE",
             "TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE",
             "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
+            "TRADE_FIFO_OPEN_LOT_PRICE_PRE_ENTRY",
+            "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH",
             "RECONSTRUCTION_EVIDENCE_INCOMPLETE",
             "ENDPOINT_POSITION_MISSING",
             "ACCOUNT_LEGS_CHANGED",
@@ -312,6 +314,14 @@
             },
             "open_lot_unrealized_base": {
               "$ref": "#/$defs/decimal"
+            },
+            "open_lot_first_completed_session_dates": {
+              "type": "array",
+              "maxItems": 20000,
+              "items": {
+                "type": "string",
+                "format": "date"
+              }
             },
             "price_fill_consistency": {
               "const": "CORPORATE_ACTION_EVIDENCE_AVAILABLE_FORWARD_ADJUSTED"
@@ -671,7 +681,8 @@
           "status",
           "warnings",
           "missing_fields",
-          "source_errors"
+          "source_errors",
+          "position_quality_notes"
         ],
         "properties": {
           "snapshot_id": {
@@ -709,6 +720,20 @@
             "items": {
               "type": "string",
               "maxLength": 2048
+            }
+          },
+          "position_quality_notes": {
+            "type": "array",
+            "maxItems": 2000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["account_ref", "identity", "notes"],
+              "properties": {
+                "account_ref": {"type": "string", "minLength": 1, "maxLength": 256},
+                "identity": {"type": "string", "pattern": "^[A-Z]{2,8}\\.[A-Za-z0-9._-]{1,64}$"},
+                "notes": {"type": "array", "maxItems": 128, "items": {"type": "string", "maxLength": 2048}}
+              }
             }
           }
         }

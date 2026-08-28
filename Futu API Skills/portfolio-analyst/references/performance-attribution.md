@@ -11,10 +11,15 @@ All selected snapshots must retain the same environment, base currency, account 
 alias provenance. Each snapshot is reconstructed through the strict Phase 1 schema, complete-body
 content identity, and financial semantic validator. The report records every source ID plus a full
 SHA-256 serialization digest, the source `data_quality` status/warnings/missing fields/source
-errors, selected valuation timestamps/NAVs, precise endpoint rules, and gap coverage. A partial,
+errors, plus bounded per-position quality notes keyed by account and canonical identity, selected
+valuation timestamps/NAVs, precise endpoint rules, and gap coverage. Any position note is treated
+as incomplete source quality. Phase 1 rejects duplicate economic legs with the same account and
+canonical identity before a report can be built. A partial,
 stale, reconstructed, unavailable, or error source cannot authorize `ACCURATE_PNL` or HIGH
 confidence. The CLI freezes one trusted `analysis_now`; future snapshots, including later instants
 on the same UTC date, fail with `FUTURE_SNAPSHOT`. Price cutoffs cannot exceed that instant.
+Direct library calls use the real UTC clock when `analysis_now` and an injected clock are absent;
+they never trust the ending snapshot as the current time.
 
 ## P&L authority
 
@@ -47,9 +52,12 @@ movement. Missing, look-ahead, stale/partial-quality, currency-changing, or sour
 downgrades the identity; a normal rate move such as 1.1 to 1.2 does not.
 
 `ACCURATE_PNL` requires at least two snapshots, complete contributions, both endpoint dates,
-continuous snapshots, consistent FX currency-pair source provenance, and at least two adjusted
-closes on one common aligned interval for every authoritative symbol. It claims only exact
-endpoint-field deltas. It does
+continuous snapshots, consistent FX currency-pair source provenance, authoritative full-period
+trade coverage, and at least two adjusted closes on one common aligned interval for every
+authoritative trajectory symbol. Full-period trade coverage is required even when snapshots are
+stable because a symbol can be opened and fully closed between valuations without ever appearing
+in a trajectory. It claims only exact cumulative-field deltas plus fully evidenced closed-only
+FIFO round trips. It does
 not claim transaction-date fee, FX, transfer or corporate-action reconstruction. Otherwise the mode
 is `RECONSTRUCTED` with LOW confidence and explicit unavailable symbols. With one current/end
 snapshot and sufficient common adjusted-close history, current base-currency holdings may carry a
@@ -84,17 +92,22 @@ open-lot unrealized gross base = sum((aligned ending close - lot cost) * lot qua
 
 Open-lot quantities must exactly equal every ending snapshot account/identity leg. Fill prices and
 adjustment/corporate-action semantics must be consistent; otherwise the base contribution is null
-and partial. Thus a lot bought at 109 and ending at 110 contributes 1, regardless of an earlier
+and partial. The aligned ending close must be on or after the lot's first eligible completed market
+session; a fill after market close advances that boundary to the next completed session. Thus a
+lot bought at 109 and ending at 110 contributes 1, regardless of an earlier
 period close of 100. The current-holding period-price-change formula is retained only as a
 separately named LOW-confidence fallback when authoritative trade evidence is unavailable.
 Base-currency fills convert exactly 1:1. Non-base FIFO P&L remains visible in local-currency buckets
 but its base contribution is null without transaction-date FX. Unmatched sells/opening inventory,
 transfers, corporate actions, orphan fills, order/fill quantity mismatches, status conflicts, failed
-contexts, and budget omissions fail closed. Snapshot cumulative-P&L and FIFO reconstruction are
-mutually exclusive authority paths, so fills are never added to exact snapshot deltas. Without
-usable trade history, current-holding-only reconstruction remains LOW confidence and explicitly
-excludes realized P&L and exited positions. A reconstructed report never claims portfolio return or
-TWR.
+contexts, and budget omissions fail closed. A fully closed FIFO round trip whose identity is absent
+from every snapshot trajectory contributes gross pre-fee realized P&L and participates in rankings.
+For an identity present in a trajectory, FIFO realized P&L is never added to snapshot P&L; it must
+exactly reconcile to the cumulative realized delta. A mismatch makes that identity unavailable,
+preventing duplicate counting. Unavailable, timed-out, partial, or corporate-action-unsupported
+trade evidence cannot authorize `ACCURATE_PNL`/HIGH; current-holding-only reconstruction remains
+LOW confidence and explicitly excludes realized P&L and exited positions. A reconstructed report
+never claims portfolio return or TWR.
 
 When complete external-flow coverage exists, the report also reconciles available attributed P&L
 against `ending NAV - beginning NAV - external flows`. A non-zero residual is serialized as
@@ -146,8 +159,9 @@ The strict schema rejects unknown fields and caps every collection. Shape prefli
 schema validation, and operation/wall budgets are consumed while reading every source position and
 reconstructing every trajectory snapshot, leg and adjacent pair. Runtime validation reconstructs
 period gaps, source quality, P&L totals and splits, aggregates, rankings, price row digests/cutoffs,
-embedded Phase 3 trade-review semantics/digest/FIFO and open-lot references/local-currency buckets, flow totals,
-TWR, quality coverage and the complete report ID. Human and Markdown views escape all untrusted
+embedded Phase 3 trade-review semantics/digest/FIFO, open-lot references/local-currency buckets,
+first-eligible-session dates, overlap reconciliation, closed-only identities, flow totals, TWR,
+quality coverage and the complete report ID. Human and Markdown views escape all untrusted
 labels, show raw and aligned price coverage, formulas, source evidence, limitations and unavailable modules.
 
 The CLI range reader first narrows canonical IDs to the requested UTC year/month and whole-second

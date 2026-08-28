@@ -283,6 +283,11 @@ loaded through `SnapshotRepository`, so schema, full-body identity, and Phase 1 
 are revalidated before attribution. The CLI freezes one trusted current instant, rejects later
 same-day snapshots as `FUTURE_SNAPSHOT`, and binds that instant into price cutoffs and the report.
 Every source snapshot's quality status, warnings, missing fields, and errors are embedded and bound.
+Bounded per-position quality notes are also embedded by account and canonical identity; any such
+note prevents an exact/high claim. Phase 1 rejects duplicate economic position legs with the same
+account and canonical identity before attribution begins. Library callers that do not inject
+`analysis_now` use the real UTC clock, never the ending snapshot timestamp, so future snapshots
+also fail closed outside the CLI.
 Accounts, base currency, classifications, account-level legs, and FX source provenance must remain
 consistent. Attribution traverses every adjacent snapshot and retains the union of all trajectory
 identities; a middle-only, missing/opened/closed/transferred/reset leg is `UNAVAILABLE`, never
@@ -302,20 +307,28 @@ stable alias key and pinned audited Skill are available, `performance` also reus
 context-atomic Phase 3 history service. Account-and-symbol FIFO matches can add gross pre-fee
 realized P&L and fully closed symbols. Authoritative open lots compute current unrealized P&L from
 each lot cost to the aligned ending close, and their quantities must exactly match ending account
-legs; the period-price-change estimate is only a separately named no-trade LOW-confidence fallback.
+legs. Each lot's ending close must be on or after its first eligible completed market session
+(the next session when the fill occurs after close); older price rows cannot create pre-entry P&L.
+The period-price-change estimate is only a separately named no-trade LOW-confidence fallback.
 Base-currency fills are exact 1:1. Cross-currency FIFO remains
 in local buckets and base P&L stays null without transaction-date FX. Opening inventory, nontrade
-events, context gaps, orphan fills, quantity mismatches, and status conflicts fail closed. The
-snapshot cumulative-field path never adds FIFO results, preventing double counting. Without usable
-trade history the LOW-confidence result explicitly excludes realized P&L and exited positions.
+events, context gaps, orphan fills, quantity mismatches, and status conflicts fail closed. For
+multi-snapshot attribution, full-period authoritative trade coverage is required even when every
+snapshot trajectory appears continuous because a fully opened-and-closed symbol may never appear
+in a snapshot. Such closed-only FIFO round trips are added as gross pre-fee contributions. For an
+identity present in snapshots, FIFO realized P&L is not added: it must reconcile exactly to the
+snapshot cumulative realized delta or that identity becomes unavailable. Without usable trade
+history the LOW-confidence result explicitly excludes realized P&L and exited positions and can
+never be `ACCURATE_PNL`/HIGH.
 The current Phase 3 adapter reports corporate-action evidence as unsupported, so live CLI history is
 retained as structured unavailable evidence rather than authorizing FIFO contribution claims.
 Timeout, budget, source-read, normalized-contract, and stable-alias acquisition failures are
 sanitized to fixed trade-source reason codes; independent price/snapshot attribution continues.
 Theme splits sort labels and assign the exact Decimal residual to the last label. Top contributors
-and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires
+and detractors are deterministically ranked. `ACCURATE_PNL` additionally requires complete
+authoritative full-period trade coverage and
 at least two common aligned price
-points for every authoritative contributed symbol and describes P&L-field authority only.
+points for every authoritative trajectory symbol. It describes P&L-field/FIFO coverage authority only.
 
 The official cash-flow reader is not in the current digest-pinned adapter allowlist. Therefore the
 CLI truthfully records external-flow evidence as unavailable and leaves `portfolio_return` null.

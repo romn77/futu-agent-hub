@@ -583,6 +583,20 @@ def _latest_complete_market_close_date(snapshot_instant: datetime, market: str) 
     return candidate
 
 
+def _first_completed_market_session_on_or_after(event_instant: datetime, market: str) -> date:
+    """Return the first modeled regular-session close that cannot precede an event."""
+
+    timezone_name, close_time = _MARKET_CLOSE[market]
+    local = event_instant.astimezone(ZoneInfo(timezone_name))
+    candidate = local.date()
+    close = datetime.combine(candidate, close_time, tzinfo=local.tzinfo)
+    if local > close:
+        candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
 def _correlation(
     snapshot: PortfolioSnapshot,
     positions: Sequence[EconomicPosition],

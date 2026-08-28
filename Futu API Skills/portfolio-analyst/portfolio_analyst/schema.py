@@ -1394,7 +1394,14 @@ def validate_performance_document(
 
     verified_fx_changed: bool | None = None
     if source_snapshots is not None:
-        from .performance import _classification, _contributions, _group_positions, _snapshot_digest
+        from .performance import (
+            TradeAttributionEvidence,
+            _classification,
+            _contributions,
+            _group_positions,
+            _merge_multi_snapshot_trade_contributions,
+            _snapshot_digest,
+        )
         from .snapshot_io import snapshot_from_document
 
         try:
@@ -1424,6 +1431,22 @@ def validate_performance_document(
                     "warnings": list(item.data_quality.warnings),
                     "missing_fields": list(item.data_quality.missing_fields),
                     "source_errors": list(item.data_quality.source_errors),
+                    "position_quality_notes": [
+                        {
+                            "account_ref": position.account_ref,
+                            "identity": f"{position.market}.{position.symbol}",
+                            "notes": list(position.data_quality_notes),
+                        }
+                        for position in sorted(
+                            item.positions,
+                            key=lambda position: (
+                                position.account_ref,
+                                position.market,
+                                position.symbol,
+                            ),
+                        )
+                        if position.data_quality_notes
+                    ],
                 }
                 for item in validated_sources
             ]
@@ -1464,6 +1487,20 @@ def validate_performance_document(
                 expected_contributions, _unused_reasons = _contributions(
                     validated_sources, consume=consume
                 )
+                observed_trade = payload["trade_evidence"]
+                if observed_trade["used_for_contributions"]:
+                    expected_contributions, _unused_trade_reasons = (
+                        _merge_multi_snapshot_trade_contributions(
+                            expected_contributions,
+                            TradeAttributionEvidence(
+                                observed_trade["status"],
+                                observed_trade["reason"],
+                                observed_trade["review_digest"],
+                                observed_trade["review"],
+                                True,
+                            ),
+                        )
+                    )
                 if payload["symbol_contributions"] != [
                     _json_value(item) for item in expected_contributions
                 ]:
@@ -1641,6 +1678,7 @@ def validate_performance_document(
             and not item["warnings"]
             and not item["missing_fields"]
             and not item["source_errors"]
+            and not item["position_quality_notes"]
             for item in source_quality
         )
         identities = [item["identity"] for item in contributions]
@@ -1795,7 +1833,7 @@ def validate_performance_document(
                             Decimal(0),
                         )
                         classification = next(iter(classification_values))
-                        if (
+                        if item["method"] != "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH" and (
                             item["status"] != "AVAILABLE"
                             or item["method"] != expected_trajectory_method
                             or decimal(item["realized_pnl_base"]) != expected_realized_trajectory
@@ -1814,11 +1852,18 @@ def validate_performance_document(
                 ):
                     fail("symbol trajectory discontinuity method is inconsistent")
             if item["status"] == "AVAILABLE":
-                if (
-                    any(value is None for value in values)
-                    or item["method"] != "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA"
-                ):
+                if any(value is None for value in values) or item["method"] not in {
+                    "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA",
+                    "TRADE_FIFO_REALIZED_GROSS_PRE_FEE",
+                }:
                     fail("available contribution lacks exact P&L evidence")
+                if item["method"] == "TRADE_FIFO_REALIZED_GROSS_PRE_FEE" and (
+                    trajectory is not None
+                    or item["evidence"]["start_present"]
+                    or item["evidence"]["end_present"]
+                    or not item["evidence"].get("trade_round_trip_indexes")
+                ):
+                    fail("trade-only exact contribution overlaps snapshot trajectory")
                 if decimal(item["pnl_base"]) != decimal(item["realized_pnl_base"]) + decimal(
                     item["unrealized_pnl_base"]
                 ):
@@ -1882,8 +1927,11 @@ def validate_performance_document(
             and period["continuous"]
             and expected_start_covered
             and expected_end_covered
-            and coverage["price_aligned"] == len(contributions)
+            and coverage["price_aligned"]
+            == sum(item["evidence"].get("trajectory") is not None for item in exact)
             and source_quality_complete
+            and payload["trade_evidence"]["status"] == "COMPLETE"
+            and payload["trade_evidence"]["used_for_contributions"]
             and not any(
                 reason["code"] in {"FX_PROVENANCE_CHANGED", "PNL_NAV_RECONCILIATION_MISMATCH"}
                 for reason in payload["quality_reasons"]
@@ -2141,30 +2189,30 @@ def validate_performance_document(
             trade_is_authoritative = not (observed_trade_codes & fatal_trade_codes) and (
                 open_lot_identities <= ending_identities
             )
-            if len(source_ids) == 1:
-                expected_open_quantities = {
-                    (item["account_ref"], contribution["identity"]): decimal(quantity)
-                    for contribution in contributions
-                    if contribution["evidence"]["end_present"]
-                    for item in [
-                        {"account_ref": account_ref}
-                        for account_ref in contribution["evidence"].get(
-                            "ending_quantity_by_account", {}
-                        )
-                    ]
-                    for quantity in [
-                        contribution["evidence"]["ending_quantity_by_account"][item["account_ref"]]
-                    ]
-                }
-                observed_open_quantities: dict[tuple[str, str], Decimal] = {}
-                for lot in trade_review["open_lots"]:
-                    key = (lot["account_ref"], lot["identity"])
-                    observed_open_quantities[key] = observed_open_quantities.get(
-                        key, Decimal(0)
-                    ) + decimal(lot["quantity"])
-                trade_is_authoritative = (
-                    trade_is_authoritative and observed_open_quantities == expected_open_quantities
-                )
+            expected_open_quantities: dict[tuple[str, str], Decimal] = {}
+            for contribution in contributions:
+                evidence = contribution["evidence"]
+                if not evidence["end_present"]:
+                    continue
+                quantities = evidence.get("ending_quantity_by_account")
+                if quantities is None and evidence.get("trajectory"):
+                    quantities = {
+                        leg["account_ref"]: leg["quantity"]
+                        for leg in evidence["trajectory"][-1]["legs"]
+                    }
+                for account_ref, quantity in (quantities or {}).items():
+                    expected_open_quantities[(account_ref, contribution["identity"])] = decimal(
+                        quantity
+                    )
+            observed_open_quantities: dict[tuple[str, str], Decimal] = {}
+            for lot in trade_review["open_lots"]:
+                key = (lot["account_ref"], lot["identity"])
+                observed_open_quantities[key] = observed_open_quantities.get(
+                    key, Decimal(0)
+                ) + decimal(lot["quantity"])
+            trade_is_authoritative = (
+                trade_is_authoritative and observed_open_quantities == expected_open_quantities
+            )
             if (trade_evidence["status"] == "COMPLETE") != trade_is_authoritative:
                 fail("trade evidence authority is not reconstructed from normalized evidence")
             if trade_evidence["status"] == "COMPLETE":
@@ -2172,9 +2220,7 @@ def validate_performance_document(
                     fail("complete trade evidence cannot have an unavailable reason")
             elif trade_evidence["used_for_contributions"] or not trade_evidence["reason"]:
                 fail("unavailable trade evidence cannot authorize contributions")
-            if trade_evidence["used_for_contributions"] != (
-                trade_evidence["status"] == "COMPLETE" and len(source_ids) == 1
-            ):
+            if trade_evidence["used_for_contributions"] != (trade_evidence["status"] == "COMPLETE"):
                 fail("trade contribution authority path is inconsistent")
             expected_trade_orders = len(trade_review["normalized_orders"])
             expected_trade_fills = len(trade_review["normalized_fills"])
@@ -2217,6 +2263,48 @@ def validate_performance_document(
                         item["realized_pnl_base"]
                     ) != sum((decimal(trip["realized_pl_base"]) for trip in trips), Decimal(0)):
                         fail("symbol FIFO realized base P&L does not reconcile")
+                trajectory = evidence.get("trajectory")
+                if trajectory and item["method"] in {
+                    "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA",
+                    "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH",
+                }:
+                    trajectory_realized = Decimal(0)
+                    for previous, current in zip(trajectory, trajectory[1:]):
+                        previous_by_account = {
+                            leg["account_ref"]: decimal(leg["cumulative_realized_pnl_base"])
+                            for leg in previous["legs"]
+                        }
+                        current_by_account = {
+                            leg["account_ref"]: decimal(leg["cumulative_realized_pnl_base"])
+                            for leg in current["legs"]
+                        }
+                        if previous_by_account.keys() != current_by_account.keys():
+                            fail("trade reconciliation crosses discontinuous account legs")
+                        trajectory_realized += sum(
+                            (
+                                current_by_account[account_ref] - previous_by_account[account_ref]
+                                for account_ref in sorted(previous_by_account)
+                            ),
+                            Decimal(0),
+                        )
+                    trade_realized_complete = all(
+                        trip["realized_pl_base"] is not None for trip in trips
+                    )
+                    trade_realized = (
+                        sum(
+                            (decimal(trip["realized_pl_base"]) for trip in trips),
+                            Decimal(0),
+                        )
+                        if trade_realized_complete
+                        else None
+                    )
+                    realized_matches = (
+                        trade_realized_complete and trade_realized == trajectory_realized
+                    )
+                    if (
+                        item["method"] == "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH"
+                    ) == realized_matches:
+                        fail("snapshot and FIFO realized P&L reconciliation is inconsistent")
                 lot_indexes = evidence.get("open_lot_indexes")
                 if lot_indexes is not None:
                     if (
@@ -2234,6 +2322,36 @@ def validate_performance_document(
                         for lot in lots
                     ):
                         fail("symbol FIFO open lots cross identity or account")
+                    from .risk import _first_completed_market_session_on_or_after
+
+                    market = item["identity"].split(".", 1)[0]
+                    expected_first_sessions = [
+                        _first_completed_market_session_on_or_after(
+                            datetime.fromisoformat(lot["opened_at"].replace("Z", "+00:00")),
+                            market,
+                        ).isoformat()
+                        for lot in lots
+                    ]
+                    if evidence.get("open_lot_first_completed_session_dates") != (
+                        expected_first_sessions
+                    ):
+                        fail("FIFO open-lot completed-session dates are inconsistent")
+                    aligned_end_date = evidence.get("aligned_end_date")
+                    price_pre_entry = aligned_end_date is not None and any(
+                        date.fromisoformat(aligned_end_date) < date.fromisoformat(first_session)
+                        for first_session in expected_first_sessions
+                    )
+                    if (
+                        item["method"]
+                        in {
+                            "TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE",
+                            "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
+                            "TRADE_FIFO_OPEN_LOT_PRICE_PRE_ENTRY",
+                        }
+                        and (item["method"] == "TRADE_FIFO_OPEN_LOT_PRICE_PRE_ENTRY")
+                        != price_pre_entry
+                    ):
+                        fail("FIFO open-lot price date authority is inconsistent")
                     if item["method"] == "TRADE_FIFO_OPEN_LOT_UNREALIZED_GROSS_PRE_FEE":
                         if any(lot["currency"] != payload["base_currency"] for lot in lots):
                             fail("FIFO open-lot base currency is inconsistent")
@@ -2504,9 +2622,17 @@ def validate_performance_document(
                 "TRAJECTORY_FX_DISCONTINUITY",
                 "position currency or FX provenance/authority contract changes across account legs inside the trajectory",
             ),
+            "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH": (
+                "TRADE_SNAPSHOT_REALIZED_RECONCILIATION_MISMATCH",
+                "snapshot realized delta does not reconcile to complete normalized FIFO round trips",
+            ),
             "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE": (
                 "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
                 "open-lot currency or ending price evidence cannot authorize gross unrealized P&L",
+            ),
+            "TRADE_FIFO_OPEN_LOT_PRICE_PRE_ENTRY": (
+                "TRADE_FIFO_OPEN_LOT_PRICE_PRE_ENTRY",
+                "aligned ending close precedes an open lot's first eligible completed market session",
             ),
         }
         for item in contributions:
@@ -2546,7 +2672,15 @@ def validate_performance_document(
             payload["trade_evidence"]["review"] is None
             and payload["trade_evidence"]["reason"] in TRADE_SOURCE_UNAVAILABLE_CODES
         )
-        if trade_source_failed:
+        if len(source_ids) >= 2 and payload["trade_evidence"]["status"] == "UNAVAILABLE":
+            expected_reasons.append(
+                {
+                    "code": "TRADE_HISTORY_UNAVAILABLE",
+                    "scope": "trade_evidence",
+                    "detail": payload["trade_evidence"]["reason"],
+                }
+            )
+        elif trade_source_failed:
             expected_reasons.append(
                 {
                     "code": "TRADE_HISTORY_UNAVAILABLE",
@@ -2678,7 +2812,9 @@ def validate_performance_document(
                     "detail": "one or more bounded adjusted-close histories are unavailable",
                 }
             )
-        if contributions and coverage["price_aligned"] < len(exact):
+        if contributions and coverage["price_aligned"] < sum(
+            item["evidence"].get("trajectory") is not None for item in exact
+        ):
             expected_reasons.append(
                 {
                     "code": "PRICE_ALIGNMENT_INCOMPLETE",

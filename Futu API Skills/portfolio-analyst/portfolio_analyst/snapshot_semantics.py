@@ -134,6 +134,13 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
         "theme": {},
         "asset_class": {},
     }
+    economic_legs = [
+        (position.account_ref, position.market, position.symbol) for position in snapshot.positions
+    ]
+    if len(economic_legs) != len(set(economic_legs)):
+        raise SnapshotSemanticError(
+            "duplicate account and canonical identity economic position leg"
+        )
     for position in snapshot.positions:
         rate = fx_rates.get((position.currency, snapshot.base_currency))
         if rate is None:
