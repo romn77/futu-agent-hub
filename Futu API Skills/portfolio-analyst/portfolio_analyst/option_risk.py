@@ -383,7 +383,6 @@ def _collect_quotes(
                 raise _OptionQuoteTotalBudgetEvidence(
                     response_byte_count, hashlib.sha256(normalized_bytes).hexdigest()
                 )
-            total_bytes += response_byte_count
             quote = parse_option_quote_response(identity, raw)
             response = quote.to_dict()
         except _OptionQuoteWorkerTimeout:
@@ -438,6 +437,8 @@ def _collect_quotes(
             overflow_marker = None
             response_byte_count = 0
             total_budget_exhausted = False
+        if source_response is not None:
+            total_bytes += response_byte_count
         if total_wall_failure:
             finished = trusted_deadline
         elif reason_code == "QUOTE_TOTAL_BUDGET_EXCEEDED":

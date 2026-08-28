@@ -964,6 +964,64 @@ def test_byte_overflow_timeout_does_not_omit_the_next_contract(monkeypatch):
     validate_option_risk_document(report)
 
 
+def test_timed_out_response_bytes_do_not_count_against_the_next_contract(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 900)
+    analysis_now = AS_OF + timedelta(hours=1)
+    provider = Provider(rows={f"US.{name}": {"delta": "1" * 500} for name in ("A", "B")})
+
+    report = analyze_option_risk(
+        _snapshot((_position("A", market_value="2"), _position("B", market_value="1"))),
+        quote_provider=provider,
+        analysis_now=analysis_now,
+        clock=SequenceClock(
+            analysis_now,
+            analysis_now + timedelta(seconds=5),
+            analysis_now + timedelta(seconds=5, milliseconds=1),
+            analysis_now + timedelta(seconds=5, milliseconds=2),
+        ),
+    ).to_dict()
+
+    assert [identity for identity, _timeout in provider.calls] == ["US.A", "US.B"]
+    assert [item["reason_code"] for item in report["quote_evidence"]] == [
+        "QUOTE_SOURCE_TIMEOUT",
+        None,
+    ]
+    assert report["quote_evidence"][1]["status"] == "SUCCESS"
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_retained_invalid_contract_response_counts_toward_total_bytes(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    monkeypatch.setattr(option_risk, "MAX_TOTAL_RESPONSE_BYTES", 900)
+    provider = Provider(
+        rows={
+            "US.A": {"code": "US.WRONG", "delta": "1" * 500},
+            "US.B": {"delta": "1" * 500},
+        }
+    )
+
+    report = analyze_option_risk(
+        _snapshot((_position("A", market_value="2"), _position("B", market_value="1"))),
+        quote_provider=provider,
+        clock=Clock(),
+    ).to_dict()
+
+    assert [item["reason_code"] for item in report["quote_evidence"]] == [
+        "QUOTE_RESPONSE_CONTRACT_INVALID",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+    ]
+    assert report["quote_evidence"][0]["source_response"] is not None
+    assert report["quote_evidence"][1]["overflow_marker"] is not None
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
 def test_first_normalized_total_overflow_uses_marker_and_omits_all_later_calls(monkeypatch):
     from portfolio_analyst import option_risk
 
