@@ -4,9 +4,11 @@ from datetime import timedelta
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import unquote, urldefrag, urljoin
 
 import jsonschema
 import pytest
+from referencing import Registry, Resource
 
 from portfolio_analyst.option_risk import analyze_option_risk
 from portfolio_analyst.identity import snapshot_identity
@@ -19,6 +21,20 @@ from test_option_risk import Clock, Provider, _position, _snapshot
 
 SCHEMA = Path(__file__).parents[1] / "schemas" / "option_risk.schema.json"
 SNAPSHOT_SCHEMA = Path(__file__).parents[1] / "schemas" / "portfolio_snapshot.schema.json"
+REPORT_DEFS_SCHEMA = Path(__file__).parents[1] / "schemas" / "report_defs.schema.json"
+
+
+def _schema_validator():
+    documents = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (SCHEMA, SNAPSHOT_SCHEMA, REPORT_DEFS_SCHEMA)
+    ]
+    registry = Registry().with_resources(
+        [(document["$id"], Resource.from_contents(document)) for document in documents]
+    )
+    return jsonschema.Draft202012Validator(
+        documents[0], registry=registry, format_checker=jsonschema.FormatChecker()
+    )
 
 
 def _payload():
@@ -62,33 +78,108 @@ def test_option_risk_schema_is_draft_202012_strict_and_runtime_valid():
         validate_option_risk_document(payload)
 
 
-def test_embedded_snapshot_schema_is_recursively_collection_and_string_bounded():
-    missing = []
+def test_option_schema_alone_rejects_600_digit_leg_greek():
+    payload = _payload()
+    payload["leg_exposures"][0]["greeks"]["delta"] = "1" * 600
 
-    def visit(node, path="$"):
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator().validate(payload)
+
+
+def test_option_schema_alone_rejects_303_character_identity():
+    payload = _payload()
+    payload["leg_exposures"][0]["identity"] = "US." + "A" * 300
+
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator().validate(payload)
+
+
+def test_option_schema_external_ref_graph_is_recursively_bounded():
+    documents = {
+        document["$id"]: document
+        for document in (
+            json.loads(SCHEMA.read_text(encoding="utf-8")),
+            json.loads(SNAPSHOT_SCHEMA.read_text(encoding="utf-8")),
+            json.loads(REPORT_DEFS_SCHEMA.read_text(encoding="utf-8")),
+        )
+    }
+    missing = []
+    visited_refs = set()
+    visited_resources = set()
+    active_refs = set()
+    detected_cycles = set()
+
+    def resolve(reference, base_uri):
+        absolute = urljoin(base_uri, reference)
+        resource_uri, fragment = urldefrag(absolute)
+        target = documents[resource_uri]
+        if fragment:
+            for token in fragment.removeprefix("/").split("/"):
+                token = unquote(token).replace("~1", "/").replace("~0", "~")
+                target = target[token]
+        return resource_uri, fragment, target
+
+    def visit(node, base_uri, path="$"):
         if not isinstance(node, dict):
             return
+        if "$ref" in node:
+            resource_uri, fragment, target = resolve(node["$ref"], base_uri)
+            ref_key = (resource_uri, fragment)
+            if ref_key in active_refs:
+                detected_cycles.add(ref_key)
+            elif ref_key not in visited_refs:
+                visited_refs.add(ref_key)
+                visited_resources.add(resource_uri)
+                active_refs.add(ref_key)
+                visit(target, resource_uri, f"{path}/$ref->{resource_uri}#{fragment}")
+                active_refs.remove(ref_key)
         node_type = node.get("type")
         if node_type == "object":
             if "maxProperties" not in node:
                 missing.append(f"{path}:maxProperties")
             if isinstance(node.get("additionalProperties"), dict) and "propertyNames" not in node:
                 missing.append(f"{path}:propertyNames")
-        if node_type == "array" and "maxItems" not in node:
+        if (
+            node_type == "array"
+            and "maxItems" not in node
+            and not (node.get("items") is False and isinstance(node.get("prefixItems"), list))
+        ):
             missing.append(f"{path}:maxItems")
         if node_type == "string" or (isinstance(node_type, list) and "string" in node_type):
-            if "maxLength" not in node:
+            finite_literal = isinstance(node.get("const"), str) or (
+                isinstance(node.get("enum"), list)
+                and node["enum"]
+                and all(not isinstance(item, str) or len(item) <= 512 for item in node["enum"])
+            )
+            if "maxLength" not in node and not finite_literal:
                 missing.append(f"{path}:maxLength")
-        for key in ("properties", "$defs"):
+        for key in ("properties", "$defs", "patternProperties", "dependentSchemas"):
             for name, child in node.get(key, {}).items():
-                visit(child, f"{path}/{key}/{name}")
-        for key in ("items", "additionalProperties"):
-            visit(node.get(key), f"{path}/{key}")
-        for index, child in enumerate(node.get("oneOf", [])):
-            visit(child, f"{path}/oneOf/{index}")
+                visit(child, base_uri, f"{path}/{key}/{name}")
+        for key in (
+            "items",
+            "additionalProperties",
+            "propertyNames",
+            "contains",
+            "if",
+            "then",
+            "else",
+            "not",
+        ):
+            visit(node.get(key), base_uri, f"{path}/{key}")
+        for key in ("oneOf", "anyOf", "allOf", "prefixItems"):
+            for index, child in enumerate(node.get(key, [])):
+                visit(child, base_uri, f"{path}/{key}/{index}")
 
-    for schema_path in (SCHEMA, SNAPSHOT_SCHEMA):
-        visit(json.loads(schema_path.read_text(encoding="utf-8")), schema_path.name)
+    option_uri = next(uri for uri in documents if uri.endswith("option_risk.schema.json"))
+    visited_resources.add(option_uri)
+    visit(documents[option_uri], option_uri, "option_risk.schema.json")
+    assert {uri.rsplit("/", 1)[-1] for uri in visited_resources} == {
+        "option_risk.schema.json",
+        "portfolio_snapshot.schema.json",
+        "report_defs.schema.json",
+    }
+    assert any(fragment == "/$defs/boundedJson" for _uri, fragment in detected_cycles)
     assert missing == []
 
 

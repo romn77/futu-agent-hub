@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://portfolio-analyst.local/schemas/report_defs.schema.json",
   "$defs": {
-    "decimal": {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
-    "nonnegativeDecimal": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+    "decimal": {"type": "string", "maxLength": 512, "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+    "nonnegativeDecimal": {"type": "string", "maxLength": 512, "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
     "unitDecimal": {"type": "string", "pattern": "^(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$"},
     "signedUnitDecimal": {"type": "string", "pattern": "^-?(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$"},
     "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
     "qualityStatus": {"enum": ["COMPLETE", "PARTIAL", "STALE", "RECONSTRUCTED", "UNAVAILABLE", "ERROR"]},
     "severity": {"enum": ["UNRATED", "LOW", "MEDIUM", "HIGH", "CRITICAL"]},
-    "positionIdentity": {"type": "string", "pattern": "^[A-Z]{2,4}\\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*$"},
+    "positionIdentity": {"type": "string", "maxLength": 261, "pattern": "^[A-Z]{2,4}\\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*$"},
     "label": {"type": "string", "minLength": 1},
     "countCoverage": {"type": "object", "additionalProperties": false, "required": ["requested", "available"], "properties": {"requested": {"type": "integer", "minimum": 0}, "available": {"type": "integer", "minimum": 0}}},
     "coverage": {
