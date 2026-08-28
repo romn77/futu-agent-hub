@@ -735,7 +735,6 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
         PER_CALL_TIMEOUT_SECONDS,
         TOTAL_WALL_SECONDS,
         _OptionQuoteTotalBudgetEvidence,
-        _OptionQuoteTotalWallEvidence,
         _OptionQuoteWorkerTimeout,
         _bounded_response_bytes,
         analyze_option_risk,
@@ -779,6 +778,7 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
     provider_quarantined = False
     consecutive_failures = 0
     attempted: list[dict[str, Any]] = []
+    clocked_total_omissions: set[int] = set()
     for index, item in enumerate(evidence):
         started = _option_datetime(item["request_started_at"], "request_started_at")
         finished = _option_datetime(item["request_finished_at"], "request_finished_at")
@@ -874,6 +874,7 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
                         "option total budget omission lacks deadline evidence"
                     )
                 total_budget_exhausted = True
+                clocked_total_omissions.add(index)
             elif consecutive_failures < CIRCUIT_BREAKER_FAILURES and not provider_quarantined:
                 previous = evidence[index - 1] if index else None
                 if not previous or previous["reason_code"] != "QUOTE_SOURCE_TIMEOUT":
@@ -895,11 +896,13 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
                     if response_bytes > MAX_TOTAL_RESPONSE_BYTES:
                         raise ReportSemanticError("invalid option response exceeds total budget")
                 if reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
-                    expected_finished = min(
-                        started + timedelta(seconds=PER_CALL_TIMEOUT_SECONDS),
-                        acquisition_started + timedelta(seconds=TOTAL_WALL_SECONDS),
-                    )
-                    if source_response is not None or byte_count or finished != expected_finished:
+                    total_deadline = acquisition_started + timedelta(seconds=TOTAL_WALL_SECONDS)
+                    if (
+                        source_response is not None
+                        or byte_count
+                        or finished != total_deadline
+                        or total_duration != TOTAL_WALL_SECONDS
+                    ):
                         raise ReportSemanticError(
                             "option total wall failure lacks deadline evidence"
                         )
@@ -922,8 +925,15 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
     clock_values: list[datetime] = []
     if evidence:
         clock_values.append(acquisition_started)
-    if attempted and not capability_not_accessed:
-        for attempt_index, item in enumerate(attempted):
+    if evidence and not capability_not_accessed:
+        attempt_index = 0
+        for evidence_index, item in enumerate(evidence):
+            if item["status"] == "OMITTED":
+                if evidence_index in clocked_total_omissions:
+                    clock_values.append(
+                        _option_datetime(item["request_started_at"], "request_started_at")
+                    )
+                continue
             started = _option_datetime(item["request_started_at"], "request_started_at")
             finished = _option_datetime(item["request_finished_at"], "request_finished_at")
             if attempt_index == 0:
@@ -932,6 +942,7 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 clock_values.append(started)
             clock_values.append(finished)
+            attempt_index += 1
     iterator = iter(clock_values)
 
     def replay_clock() -> datetime:
@@ -978,7 +989,7 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
             if reason == "QUOTE_RESPONSE_CONTRACT_INVALID":
                 raise OptionQuoteError("recorded response contract failure")
             if reason == "QUOTE_TOTAL_BUDGET_EXCEEDED":
-                raise _OptionQuoteTotalWallEvidence("recorded total wall deadline")
+                return {"data": [{"code": identity}]}
             raise RuntimeError("recorded source unavailable")
 
     reasons = {item["reason_code"] for item in evidence}

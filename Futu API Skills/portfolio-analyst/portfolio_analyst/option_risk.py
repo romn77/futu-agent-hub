@@ -60,10 +60,6 @@ class _OptionQuoteTotalBudgetEvidence(RuntimeError):
         super().__init__("normalized option quote exceeds total evidence budget")
 
 
-class _OptionQuoteTotalWallEvidence(TimeoutError):
-    pass
-
-
 def _utc_text(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -392,9 +388,6 @@ def _collect_quotes(
         except _OptionQuoteWorkerTimeout:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
             provider_quarantined = True
-        except _OptionQuoteTotalWallEvidence:
-            status, reason_code = "FAILURE", "QUOTE_TOTAL_BUDGET_EXCEEDED"
-            total_budget_exhausted = True
         except TimeoutError:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
         except FutuReadError:
@@ -424,16 +417,20 @@ def _collect_quotes(
         if observed_finished < started:
             raise OptionRiskInputError("trusted option quote clock moved backwards")
         call_deadline = min(started + timedelta(seconds=PER_CALL_TIMEOUT_SECONDS), trusted_deadline)
-        if trusted_total >= TOTAL_WALL_SECONDS or real_total >= TOTAL_WALL_SECONDS:
+        total_deadline_reached = (
+            trusted_total >= TOTAL_WALL_SECONDS or real_total >= TOTAL_WALL_SECONDS
+        )
+        per_call_deadline_reached = (
+            trusted_duration >= PER_CALL_TIMEOUT_SECONDS or real_duration >= remaining
+        )
+        if total_deadline_reached and call_deadline == trusted_deadline:
             reason_code = "QUOTE_TOTAL_BUDGET_EXCEEDED"
             status = "FAILURE"
             quote = response = source_response = None
             overflow_marker = None
             response_byte_count = 0
             total_budget_exhausted = True
-        elif reason_code != "QUOTE_TOTAL_BUDGET_EXCEEDED" and (
-            trusted_duration >= PER_CALL_TIMEOUT_SECONDS or real_duration >= remaining
-        ):
+        elif reason_code != "QUOTE_TOTAL_BUDGET_EXCEEDED" and per_call_deadline_reached:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
             quote = response = source_response = None
             overflow_marker = None

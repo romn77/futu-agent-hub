@@ -618,7 +618,7 @@ def test_total_wall_budget_omits_later_quotes_and_runtime_can_rebuild_it():
 
     assert len(provider.calls) == 1
     assert [item["reason_code"] for item in report["quote_evidence"]] == [
-        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+        "QUOTE_SOURCE_TIMEOUT",
         "QUOTE_TOTAL_BUDGET_EXCEEDED",
     ]
     from portfolio_analyst.schema import validate_option_risk_document
@@ -641,6 +641,52 @@ def test_exact_total_deadline_is_a_replayable_total_budget_failure(monkeypatch):
 
     assert report["quote_evidence"][0]["status"] == "FAILURE"
     assert report["quote_evidence"][0]["reason_code"] == "QUOTE_TOTAL_BUDGET_EXCEEDED"
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_seventh_request_reaching_total_deadline_and_eighth_omitted_roundtrip():
+    analysis_now = AS_OF + timedelta(hours=1)
+    instants = [
+        analysis_now,
+        analysis_now + timedelta(seconds=1),
+        analysis_now + timedelta(seconds=5),
+        analysis_now + timedelta(seconds=6),
+        analysis_now + timedelta(seconds=10),
+        analysis_now + timedelta(seconds=11),
+        analysis_now + timedelta(seconds=15),
+        analysis_now + timedelta(seconds=16),
+        analysis_now + timedelta(seconds=20),
+        analysis_now + timedelta(seconds=21),
+        analysis_now + timedelta(seconds=24),
+        analysis_now + timedelta(seconds=25),
+        analysis_now + timedelta(seconds=25),
+        analysis_now + timedelta(seconds=30),
+    ]
+    source = _snapshot(
+        tuple(_position(chr(ord("A") + index), market_value=str(8 - index)) for index in range(8))
+    )
+
+    report = analyze_option_risk(
+        source,
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(*instants),
+    ).to_dict()
+
+    assert [item["status"] for item in report["quote_evidence"]] == [
+        *(["SUCCESS"] * 6),
+        "FAILURE",
+        "OMITTED",
+    ]
+    assert [item["reason_code"] for item in report["quote_evidence"][-2:]] == [
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+        "QUOTE_TOTAL_BUDGET_EXCEEDED",
+    ]
+    assert report["quote_evidence"][6]["request_finished_at"] == (
+        analysis_now + timedelta(seconds=30)
+    ).isoformat().replace("+00:00", "Z")
     from portfolio_analyst.schema import validate_option_risk_document
 
     validate_option_risk_document(report)

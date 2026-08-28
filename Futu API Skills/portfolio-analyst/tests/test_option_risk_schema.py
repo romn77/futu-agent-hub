@@ -16,7 +16,7 @@ from portfolio_analyst.reporting import build_portfolio_report
 from portfolio_analyst.risk import analyze_risk
 from portfolio_analyst.schema import ReportSemanticError, validate_option_risk_document
 
-from test_option_risk import Clock, Provider, _position, _snapshot
+from test_option_risk import AS_OF, Clock, Provider, SequenceClock, _position, _snapshot
 
 
 SCHEMA = Path(__file__).parents[1] / "schemas" / "option_risk.schema.json"
@@ -323,6 +323,35 @@ def test_runtime_rejects_rehashed_failure_class_and_byte_count_tampering():
     _rehash(payload)
     with pytest.raises(ReportSemanticError, match="byte"):
         validate_option_risk_document(payload)
+
+
+def test_runtime_rejects_rehashed_five_second_timeout_as_total_wall_failure():
+    analysis_now = AS_OF + timedelta(hours=1)
+    report = analyze_option_risk(
+        _snapshot((_position("A"),)),
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(analysis_now, analysis_now + timedelta(seconds=5)),
+    ).to_dict()
+    assert report["quote_evidence"][0]["reason_code"] == "QUOTE_SOURCE_TIMEOUT"
+    validate_option_risk_document(report)
+
+    forged = deepcopy(report)
+    forged["quote_evidence"][0]["reason_code"] = "QUOTE_TOTAL_BUDGET_EXCEEDED"
+    source_reason = next(
+        item for item in forged["quality_reasons"] if item["code"] == "QUOTE_SOURCE_TIMEOUT"
+    )
+    source_reason.update(
+        {
+            "code": "QUOTE_TOTAL_BUDGET_EXCEEDED",
+            "scope": "quote_budget",
+            "detail": "total quote wall or response budget was exhausted",
+        }
+    )
+    _rehash(forged)
+
+    with pytest.raises(ReportSemanticError, match="total wall|deadline"):
+        validate_option_risk_document(forged)
 
 
 def test_runtime_rejects_future_embedded_snapshot_even_when_rehashed():
