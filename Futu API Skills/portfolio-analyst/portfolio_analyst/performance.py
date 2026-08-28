@@ -643,6 +643,28 @@ def _snapshot_digest(snapshot: PortfolioSnapshot) -> str:
     ).hexdigest()
 
 
+def _position_fx_contract(snapshot: PortfolioSnapshot, row: Any) -> Mapping[str, Any]:
+    evidence = next(
+        (
+            item
+            for item in snapshot.fx_evidence
+            if item.source_currency == row.currency
+            and item.target_currency == snapshot.base_currency
+        ),
+        None,
+    )
+    if evidence is None:
+        raise AttributionInputError("position FX rate lacks snapshot-bound evidence")
+    return {
+        "currency_provenance": row.currency_provenance,
+        "fx_evidence_rate": evidence.rate,
+        "fx_rate_target_currency": evidence.target_currency,
+        "fx_rate_source": evidence.source,
+        "fx_rate_effective_at": evidence.effective_at,
+        "fx_rate_contract": "SNAPSHOT_AS_OF_NON_LOOKAHEAD_BASE_CONVERSION_V1",
+    }
+
+
 def _contributions(
     snapshots: Sequence[PortfolioSnapshot],
     *,
@@ -687,10 +709,13 @@ def _contributions(
                         {
                             "account_ref": row.account_ref,
                             "quantity": row.quantity,
+                            "cumulative_realized_pnl_local": row.realized_pl_local,
+                            "cumulative_unrealized_pnl_local": row.unrealized_pl_local,
                             "cumulative_realized_pnl_base": row.realized_pl_base,
                             "cumulative_unrealized_pnl_base": row.unrealized_pl_base,
                             "currency": row.currency,
                             "fx_to_base": row.fx_to_base,
+                            **_position_fx_contract(snapshot, row),
                             "sector": row.sector,
                             "region": row.region,
                             "themes": tuple(sorted(row.themes)),
@@ -751,20 +776,52 @@ def _contributions(
                 )
             )
             continue
-        financial_provenance = {
+        quantity_maps = tuple(
+            {item.account_ref: item.quantity for item in rows} for rows in rows_by_snapshot
+        )
+        if any(quantities != quantity_maps[0] for quantities in quantity_maps[1:]):
+            reasons.append(
+                {
+                    "code": "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED",
+                    "scope": identity,
+                    "detail": "account-level quantity changes lack authoritative trade, transfer, or corporate-action reconciliation",
+                }
+            )
+            output.append(
+                SymbolContribution(
+                    identity,
+                    market,
+                    symbol,
+                    tuple(sorted({item.account_ref for item in all_rows})),
+                    "UNAVAILABLE",
+                    "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED",
+                    None,
+                    None,
+                    None,
+                    *(classification or ("UNKNOWN", "UNKNOWN", ())),
+                    evidence,
+                )
+            )
+            continue
+        financial_contracts = {
             (
                 row.account_ref,
                 row.currency,
-                row.fx_to_base,
+                contract["currency_provenance"],
+                contract["fx_rate_target_currency"],
+                contract["fx_rate_source"],
+                contract["fx_rate_contract"],
             )
-            for row in all_rows
+            for snapshot, rows in zip(snapshots, rows_by_snapshot)
+            for row in rows
+            for contract in (_position_fx_contract(snapshot, row),)
         }
-        if len(financial_provenance) != len(account_sets[0]):
+        if len(financial_contracts) != len(account_sets[0]):
             reasons.append(
                 {
                     "code": "TRAJECTORY_FX_DISCONTINUITY",
                     "scope": identity,
-                    "detail": "currency or FX evidence changes across account legs inside the trajectory",
+                    "detail": "position currency or FX provenance/authority contract changes across account legs inside the trajectory",
                 }
             )
             output.append(
@@ -840,39 +897,9 @@ def _contributions(
                 )
             )
             continue
-        discontinuous = False
-        for (before_realized, before_unrealized), (
-            after_realized,
-            after_unrealized,
-        ) in zip(cumulative, cumulative[1:]):
+        for _before, _after in zip(cumulative, cumulative[1:]):
             if consume is not None:
                 consume()
-            if after_realized < before_realized or after_unrealized < before_unrealized:
-                discontinuous = True
-        if discontinuous:
-            reasons.append(
-                {
-                    "code": "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY",
-                    "scope": identity,
-                    "detail": "cumulative realized or unrealized P&L regresses inside the selected trajectory",
-                }
-            )
-            output.append(
-                SymbolContribution(
-                    identity,
-                    market,
-                    symbol,
-                    tuple(sorted({item.account_ref for item in all_rows})),
-                    "UNAVAILABLE",
-                    "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY",
-                    None,
-                    None,
-                    None,
-                    *classification,
-                    evidence,
-                )
-            )
-            continue
         realized = sum(
             (after[0] - before[0] for before, after in zip(cumulative, cumulative[1:])),
             Decimal(0),
@@ -1895,7 +1922,7 @@ def analyze_performance(
     }
     limitations = [
         "IRR is not calculated.",
-        "Exact snapshot P&L attribution sums adjacent cumulative realized/unrealized base-field deltas across the full selected trajectory; fees, FX timing, transfers and corporate actions require authoritative source coverage.",
+        "Exact snapshot P&L attribution sums signed adjacent cumulative realized/unrealized base-field deltas across the full selected trajectory; a decline is a valid detractor, while quantity lifecycle changes, transfers and corporate actions require authoritative reconciliation.",
     ]
     if mode == "RECONSTRUCTED":
         limitations.append(
@@ -1974,7 +2001,8 @@ def analyze_performance(
         "COMPLETE" if not reasons else "PARTIAL",
         tuple(reasons),
         (
-            "symbol_pnl = sum over every adjacent snapshot leg of delta(cumulative_realized_pl_base) + delta(cumulative_unrealized_pl_base)",
+            "symbol_pnl = sum over every adjacent snapshot leg of signed delta(cumulative_realized_pl_base) + signed delta(cumulative_unrealized_pl_base); positive and negative deltas are valid",
+            "snapshot cumulative_pnl_base = cumulative_pnl_local * snapshot_bound_fx_evidence_rate; signed base deltas include valid FX-rate movement when currency, source authority, and non-lookahead contract remain continuous",
             "reconstructed_gross_unrealized_pnl_base = ending_quantity * (aligned_ending_adjusted_close - aligned_beginning_adjusted_close) * ending_fx_to_base; only base-currency FX=1 is authorized",
             "fifo_realized_gross_local = sum(matched_quantity * (sell_price - buy_price)) by account, canonical identity, and currency; base-currency fills convert exactly 1:1 and non-base fills require transaction-date FX",
             "fifo_open_lot_unrealized_gross_base = sum((aligned_ending_close - lot_cost) * open_lot_quantity) for authoritative base-currency lots whose total exactly matches ending snapshot account legs",

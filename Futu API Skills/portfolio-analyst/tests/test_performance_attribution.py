@@ -305,6 +305,105 @@ def test_cross_currency_contribution_uses_reconciled_base_pnl_without_mixing_loc
     assert aaa.pnl_base == Decimal("10")
 
 
+def test_cross_currency_rate_change_is_continuous_and_base_pnl_includes_fx_movement():
+    start = _pnl_start()
+    start_positions = tuple(
+        replace(
+            item,
+            currency="EUR",
+            currency_provenance="AUDITED_SOURCE",
+            fx_to_base=Decimal("1.1"),
+            market_value_base=item.market_value_local * Decimal("1.1"),
+            realized_pl_local=Decimal("0"),
+            realized_pl_base=Decimal("0"),
+            unrealized_pl_local=Decimal("10"),
+            unrealized_pl_base=Decimal("11"),
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in start.positions
+    )
+    start = reconciled_snapshot(start, start_positions)
+    start = _identified(
+        start,
+        fx_evidence=start.fx_evidence
+        + (FxRateEvidence("EUR", "USD", Decimal("1.1"), "AUDITED_FX", start.as_of),),
+    )
+    end_as_of = start.as_of + timedelta(days=1)
+    end_positions = tuple(
+        replace(
+            item,
+            fx_to_base=Decimal("1.2"),
+            market_value_base=item.market_value_local * Decimal("1.2"),
+            unrealized_pl_base=Decimal("12"),
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in start.positions
+    )
+    end = reconciled_snapshot(start, end_positions)
+    end = _identified(
+        end,
+        as_of=end_as_of.replace(hour=22),
+        fx_evidence=tuple(
+            replace(evidence, rate=Decimal("1.2"), effective_at=end_as_of)
+            if evidence.source_currency == "EUR"
+            else evidence
+            for evidence in end.fx_evidence
+        ),
+    )
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
+    assert aaa.status == "AVAILABLE"
+    assert aaa.unrealized_pnl_base == Decimal("1")
+    assert aaa.pnl_base == Decimal("1")
+    assert aaa.evidence["trajectory"][0]["legs"][0]["fx_to_base"] == Decimal("1.1")
+    assert aaa.evidence["trajectory"][1]["legs"][0]["fx_to_base"] == Decimal("1.2")
+    assert aaa.evidence["trajectory"][0]["legs"][0]["fx_evidence_rate"] == Decimal("1.1")
+    assert aaa.evidence["trajectory"][1]["legs"][0]["fx_evidence_rate"] == Decimal("1.2")
+    assert aaa.evidence["trajectory"][0]["legs"][0]["cumulative_unrealized_pnl_local"] == Decimal(
+        "10"
+    )
+    assert aaa.evidence["trajectory"][1]["legs"][0]["cumulative_unrealized_pnl_local"] == Decimal(
+        "10"
+    )
+    assert report.mode == "ACCURATE_PNL"
+    assert not any(item["code"] == "TRAJECTORY_FX_DISCONTINUITY" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
+def test_fx_source_authority_change_is_a_real_trajectory_discontinuity():
+    start = _pnl_start()
+    end = _after_us_close(_endpoint(start))
+    end = _identified(
+        end,
+        fx_evidence=tuple(
+            replace(evidence, source="CHANGED_FX_AUTHORITY") for evidence in end.fx_evidence
+        ),
+    )
+
+    report = analyze_performance(
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
+    assert aaa.status == "UNAVAILABLE"
+    assert aaa.method == "TRAJECTORY_FX_DISCONTINUITY"
+    assert report.mode == "RECONSTRUCTED"
+    assert any(item["code"] == "FX_PROVENANCE_CHANGED" for item in report.quality_reasons)
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
 def test_verified_external_flows_enable_documented_twr_and_internal_transfer_is_excluded():
     start = _pnl_start()
     middle = _endpoint(start, nav="1110", realized="0", unrealized="10")
@@ -489,27 +588,83 @@ def test_zero_current_holding_with_realized_pnl_is_not_silently_dropped():
     validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
-def test_intermediate_cumulative_pnl_regression_is_explicitly_unavailable():
+@pytest.mark.parametrize("pnl_kind", ["realized", "unrealized"])
+def test_negative_cumulative_pnl_delta_is_accurate_and_ranked_as_a_detractor(pnl_kind):
     start = _pnl_start()
-    middle_positions = tuple(
+    start_positions = tuple(
         replace(
             item,
-            realized_pl_local=Decimal("5"),
-            realized_pl_base=Decimal("5"),
-            unrealized_pl_local=Decimal("4"),
-            unrealized_pl_base=Decimal("4"),
+            **{
+                f"{pnl_kind}_pl_local": Decimal("10"),
+                f"{pnl_kind}_pl_base": Decimal("10"),
+            },
         )
         if item.symbol == "AAA"
         else item
         for item in start.positions
     )
-    middle = _identified(
-        reconciled_snapshot(start, middle_positions), as_of=start.as_of + timedelta(hours=12)
+    start = _identified(reconciled_snapshot(start, start_positions), as_of=start.as_of)
+    end_positions = tuple(
+        replace(
+            item,
+            **{
+                f"{pnl_kind}_pl_local": Decimal("-5"),
+                f"{pnl_kind}_pl_base": Decimal("-5"),
+            },
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in start.positions
     )
-    end = _after_us_close(_endpoint(start, realized="2", unrealized="8"))
+    end = _after_us_close(
+        _identified(
+            reconciled_snapshot(start, end_positions),
+            as_of=start.as_of + timedelta(days=1),
+        )
+    )
 
     report = analyze_performance(
-        (start, middle, end),
+        (start, end),
+        start=start.as_of.date(),
+        end=end.as_of.date(),
+        price_provider=_CompleteAlignedPrices(),
+    )
+
+    aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
+    assert aaa.status == "AVAILABLE"
+    assert getattr(aaa, f"{pnl_kind}_pnl_base") == Decimal("-15")
+    other_kind = "unrealized" if pnl_kind == "realized" else "realized"
+    assert getattr(aaa, f"{other_kind}_pnl_base") == Decimal("0")
+    assert aaa.pnl_base == Decimal("-15")
+    assert report.top_detractors[0].identity == "US.AAA"
+    assert report.mode == "ACCURATE_PNL"
+    assert report.confidence == "HIGH"
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
+
+
+def test_unreconciled_quantity_lifecycle_change_remains_unavailable():
+    start = _pnl_start()
+    end_positions = tuple(
+        replace(
+            item,
+            quantity=item.quantity * Decimal("2"),
+            can_sell_quantity=item.can_sell_quantity * Decimal("2"),
+            market_value_local=item.market_value_local * Decimal("2"),
+            market_value_base=item.market_value_base * Decimal("2"),
+        )
+        if item.symbol == "AAA"
+        else item
+        for item in start.positions
+    )
+    end = _after_us_close(
+        _identified(
+            reconciled_snapshot(start, end_positions),
+            as_of=start.as_of + timedelta(days=1),
+        )
+    )
+
+    report = analyze_performance(
+        (start, end),
         start=start.as_of.date(),
         end=end.as_of.date(),
         price_provider=_CompleteAlignedPrices(),
@@ -517,12 +672,12 @@ def test_intermediate_cumulative_pnl_regression_is_explicitly_unavailable():
 
     aaa = next(item for item in report.symbol_contributions if item.identity == "US.AAA")
     assert aaa.status == "UNAVAILABLE"
-    assert aaa.method == "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY"
+    assert aaa.method == "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED"
     assert report.mode == "RECONSTRUCTED"
-    validate_performance_document(report.to_dict(), source_snapshots=(start, middle, end))
+    validate_performance_document(report.to_dict(), source_snapshots=(start, end))
 
 
-def test_embedded_trajectory_reconstructs_without_source_objects_after_report_rehash():
+def test_embedded_trajectory_rejects_forged_fx_authority_change_after_report_rehash():
     start = _pnl_start()
     middle = _identified(start, as_of=start.as_of + timedelta(hours=12))
     end = _after_us_close(_endpoint(start))
@@ -533,7 +688,7 @@ def test_embedded_trajectory_reconstructs_without_source_objects_after_report_re
         price_provider=_CompleteAlignedPrices(),
     ).to_dict()
     aaa = next(item for item in payload["symbol_contributions"] if item["identity"] == "US.AAA")
-    aaa["evidence"]["trajectory"][1]["legs"][0]["cumulative_realized_pnl_base"] = "999"
+    aaa["evidence"]["trajectory"][1]["legs"][0]["fx_rate_source"] = "FORGED_SOURCE"
     payload["attribution_id"] = (
         "pa-"
         + hashlib.sha256(

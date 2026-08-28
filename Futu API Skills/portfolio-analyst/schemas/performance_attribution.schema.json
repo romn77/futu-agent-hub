@@ -163,8 +163,8 @@
             "SNAPSHOT_PNL_FIELDS_INCOMPLETE",
             "TRAJECTORY_POSITION_DISCONTINUITY",
             "TRAJECTORY_ACCOUNT_LEGS_CHANGED",
-            "TRAJECTORY_FX_DISCONTINUITY",
-            "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY"
+            "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED",
+            "TRAJECTORY_FX_DISCONTINUITY"
           ]
         },
         "pnl_base": {
@@ -347,12 +347,20 @@
                       "type": "object",
                       "additionalProperties": false,
                       "required": [
-                        "account_ref",
-                        "quantity",
-                        "cumulative_realized_pnl_base",
+                      "account_ref",
+                      "quantity",
+                      "cumulative_realized_pnl_local",
+                      "cumulative_unrealized_pnl_local",
+                      "cumulative_realized_pnl_base",
                         "cumulative_unrealized_pnl_base",
-                        "currency",
-                        "fx_to_base",
+                      "currency",
+                      "fx_to_base",
+                      "currency_provenance",
+                      "fx_evidence_rate",
+                      "fx_rate_target_currency",
+                      "fx_rate_source",
+                      "fx_rate_effective_at",
+                      "fx_rate_contract",
                         "sector",
                         "region",
                         "themes",
@@ -364,10 +372,16 @@
                           "minLength": 1,
                           "maxLength": 256
                         },
-                        "quantity": {
-                          "$ref": "#/$defs/decimal"
-                        },
-                        "cumulative_realized_pnl_base": {
+                    "quantity": {
+                      "$ref": "#/$defs/decimal"
+                    },
+                    "cumulative_realized_pnl_local": {
+                      "$ref": "#/$defs/nullableDecimal"
+                    },
+                    "cumulative_unrealized_pnl_local": {
+                      "$ref": "#/$defs/nullableDecimal"
+                    },
+                    "cumulative_realized_pnl_base": {
                           "$ref": "#/$defs/nullableDecimal"
                         },
                         "cumulative_unrealized_pnl_base": {
@@ -377,9 +391,31 @@
                           "type": "string",
                           "pattern": "^[A-Z]{3}$"
                         },
-                        "fx_to_base": {
-                          "$ref": "#/$defs/decimal"
-                        },
+                    "fx_to_base": {
+                      "$ref": "#/$defs/decimal"
+                    },
+                    "currency_provenance": {
+                      "enum": ["AUDITED_SOURCE", "USER_CONFIG"]
+                    },
+                    "fx_evidence_rate": {
+                      "$ref": "#/$defs/decimal"
+                    },
+                    "fx_rate_target_currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    },
+                    "fx_rate_source": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "fx_rate_effective_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "fx_rate_contract": {
+                      "const": "SNAPSHOT_AS_OF_NON_LOOKAHEAD_BASE_CONVERSION_V1"
+                    },
                         "sector": {
                           "type": "string",
                           "minLength": 1,

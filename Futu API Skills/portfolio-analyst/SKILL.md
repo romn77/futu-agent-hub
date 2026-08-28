@@ -289,7 +289,12 @@ identities; a middle-only, missing/opened/closed/transferred/reset leg is `UNAVA
 silently netted at the canonical `MARKET.SYMBOL` level.
 
 Symbol P&L uses only complete cumulative realized/unrealized base-field deltas summed across every
-adjacent trajectory pair. Sector,
+adjacent trajectory pair. Positive and negative deltas are equally authoritative; falling values
+produce detractors and do not by themselves imply a reset. Cross-currency legs bind each changing
+rate to its snapshot FX evidence, effective timestamp, base target, position currency provenance,
+and stable source/non-lookahead authority contract. Therefore an audited 1.1 to 1.2 rate movement
+is continuous and its effect remains inside base-P&L delta, while missing, look-ahead, partial/stale,
+currency-changing, or source-changing evidence fails closed. Sector,
 region, theme-full, and additive theme-split totals are Decimal-only and reconcile to the available
 symbol population. With only a current/end snapshot, common aligned adjusted closes can estimate
 base-currency current holdings as `ending quantity * adjusted-close change`. When the existing

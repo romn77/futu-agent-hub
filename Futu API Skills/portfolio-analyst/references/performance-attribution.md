@@ -23,9 +23,12 @@ The identity population is the union across every selected snapshot, not just th
 report embeds an adjacent-snapshot trajectory with presence, account-leg quantity, cumulative
 realized/unrealized base fields, classification, FX and quality evidence. Sector, region and theme
 classifications must agree across every account leg and the full trajectory. A middle-only
-identity, account-leg reset/transfer, cumulative-field regression, FX discontinuity, or incomplete
-field is explicit and unavailable unless complete authoritative trade evidence reconciles it; it
-is never silently dropped or presented as HIGH-confidence snapshot attribution.
+identity, account-leg/quantity lifecycle reset or transfer, FX authority-contract discontinuity, or
+incomplete field is explicit and unavailable unless complete authoritative trade evidence
+reconciles it; it is never silently dropped or presented as HIGH-confidence snapshot attribution.
+Realized and unrealized P&L values are not assumed monotonic: any positive or negative adjacent
+delta is valid evidence and can rank as a contributor or detractor. A numeric decline alone is not
+a reset signal.
 
 For an available symbol:
 
@@ -34,6 +37,14 @@ realized contribution   = sum(delta(cumulative realized P&L base) for every adja
 unrealized contribution = sum(delta(cumulative unrealized P&L base) for every adjacent snapshot pair)
 symbol contribution     = realized contribution + unrealized contribution
 ```
+
+For cross-currency positions, every trajectory leg binds the position currency and provenance to
+the snapshot FX evidence rate, target base currency, source authority, effective timestamp, and
+`SNAPSHOT_AS_OF_NON_LOOKAHEAD_BASE_CONVERSION_V1` contract. The rate value may legitimately change
+between snapshot timestamps. When the per-snapshot evidence remains semantically valid and the
+source/authority contract is continuous, cumulative base-P&L deltas include the resulting FX
+movement. Missing, look-ahead, stale/partial-quality, currency-changing, or source-changing evidence
+downgrades the identity; a normal rate move such as 1.1 to 1.2 does not.
 
 `ACCURATE_PNL` requires at least two snapshots, complete contributions, both endpoint dates,
 continuous snapshots, consistent FX currency-pair source provenance, and at least two adjusted

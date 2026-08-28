@@ -1676,8 +1676,9 @@ def validate_performance_document(
                 ):
                     fail("symbol trajectory endpoints do not bind source valuations")
                 account_sets = []
+                quantity_maps = []
                 classification_values = set()
-                financial_provenance = set()
+                financial_contracts = set()
                 cumulative = []
                 for entry in trajectory:
                     consume()
@@ -1687,6 +1688,9 @@ def validate_performance_document(
                     ] != sorted({leg["account_ref"] for leg in legs}):
                         fail("symbol trajectory presence or account ordering is inconsistent")
                     account_sets.append({leg["account_ref"] for leg in legs})
+                    quantity_maps.append(
+                        {leg["account_ref"]: decimal(leg["quantity"]) for leg in legs}
+                    )
                     realized_values = []
                     unrealized_values = []
                     for leg in legs:
@@ -1696,8 +1700,56 @@ def validate_performance_document(
                         classification_values.add(
                             (leg["sector"], leg["region"], tuple(leg["themes"]))
                         )
-                        financial_provenance.add(
-                            (leg["account_ref"], leg["currency"], decimal(leg["fx_to_base"]))
+                        effective_at = datetime.fromisoformat(
+                            leg["fx_rate_effective_at"].replace("Z", "+00:00")
+                        )
+                        entry_as_of = datetime.fromisoformat(entry["as_of"].replace("Z", "+00:00"))
+                        if (
+                            decimal(leg["fx_to_base"]) <= 0
+                            or abs(decimal(leg["fx_to_base"]) - decimal(leg["fx_evidence_rate"]))
+                            > max(Decimal(1), abs(decimal(leg["fx_evidence_rate"])))
+                            * Decimal("1e-18")
+                            or leg["fx_rate_target_currency"] != payload["base_currency"]
+                            or not leg["fx_rate_source"]
+                            or leg["fx_rate_source"] == "UNKNOWN"
+                            or effective_at.tzinfo is None
+                            or effective_at.utcoffset() is None
+                            or effective_at.astimezone(timezone.utc)
+                            > entry_as_of.astimezone(timezone.utc)
+                        ):
+                            fail("symbol trajectory FX evidence is invalid or looks ahead")
+                        for local_field, base_field in (
+                            (
+                                "cumulative_realized_pnl_local",
+                                "cumulative_realized_pnl_base",
+                            ),
+                            (
+                                "cumulative_unrealized_pnl_local",
+                                "cumulative_unrealized_pnl_base",
+                            ),
+                        ):
+                            local_value, base_value = leg[local_field], leg[base_field]
+                            if (local_value is None) != (base_value is None):
+                                fail("symbol trajectory local/base P&L availability differs")
+                            if local_value is not None:
+                                expected_base = decimal(local_value) * decimal(
+                                    leg["fx_evidence_rate"]
+                                )
+                                if abs(decimal(base_value) - expected_base) > max(
+                                    Decimal(1), abs(expected_base)
+                                ) * Decimal("1e-18"):
+                                    fail(
+                                        "symbol trajectory base P&L does not reconcile to FX evidence"
+                                    )
+                        financial_contracts.add(
+                            (
+                                leg["account_ref"],
+                                leg["currency"],
+                                leg["currency_provenance"],
+                                leg["fx_rate_target_currency"],
+                                leg["fx_rate_source"],
+                                leg["fx_rate_contract"],
+                            )
                         )
                         realized_values.append(leg["cumulative_realized_pnl_base"])
                         unrealized_values.append(leg["cumulative_unrealized_pnl_base"])
@@ -1716,7 +1768,9 @@ def validate_performance_document(
                     expected_trajectory_method = "TRAJECTORY_POSITION_DISCONTINUITY"
                 elif any(accounts != account_sets[0] for accounts in account_sets[1:]):
                     expected_trajectory_method = "TRAJECTORY_ACCOUNT_LEGS_CHANGED"
-                elif len(financial_provenance) != len(account_sets[0]):
+                elif any(quantities != quantity_maps[0] for quantities in quantity_maps[1:]):
+                    expected_trajectory_method = "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED"
+                elif len(financial_contracts) != len(account_sets[0]):
                     expected_trajectory_method = "TRAJECTORY_FX_DISCONTINUITY"
                 elif len(classification_values) != 1:
                     expected_trajectory_method = "CLASSIFICATION_INCONSISTENT"
@@ -1725,8 +1779,6 @@ def validate_performance_document(
                 else:
                     for before, after in zip(cumulative, cumulative[1:]):
                         consume()
-                        if after[0] < before[0] or after[1] < before[1]:
-                            expected_trajectory_method = "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY"
                     if expected_trajectory_method == "SNAPSHOT_ADJACENT_CUMULATIVE_PNL_DELTA":
                         expected_realized_trajectory = sum(
                             (
@@ -2444,13 +2496,13 @@ def validate_performance_document(
                 "TRAJECTORY_ACCOUNT_LEGS_CHANGED",
                 "account-level position legs reset or transfer inside the selected trajectory",
             ),
-            "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY": (
-                "TRAJECTORY_CUMULATIVE_PNL_DISCONTINUITY",
-                "cumulative realized or unrealized P&L regresses inside the selected trajectory",
+            "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED": (
+                "TRAJECTORY_QUANTITY_LIFECYCLE_UNRECONCILED",
+                "account-level quantity changes lack authoritative trade, transfer, or corporate-action reconciliation",
             ),
             "TRAJECTORY_FX_DISCONTINUITY": (
                 "TRAJECTORY_FX_DISCONTINUITY",
-                "currency or FX evidence changes across account legs inside the trajectory",
+                "position currency or FX provenance/authority contract changes across account legs inside the trajectory",
             ),
             "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE": (
                 "TRADE_FIFO_OPEN_LOT_EVIDENCE_INCOMPLETE",
