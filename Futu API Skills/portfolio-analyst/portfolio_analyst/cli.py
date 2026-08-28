@@ -14,7 +14,11 @@ from .doctor import run_doctor
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .futu_adapter import FutuAdapter, FutuReadError
 from .persistence import SnapshotAlreadyExists, SnapshotStore, bundle_manifest
-from .private_home import PrivateHomeError, ensure_private_home
+from .private_home import (
+    PrivateHomeError,
+    ensure_private_home,
+    require_secure_platform_mutation,
+)
 from .reporting import build_portfolio_report
 from .rendering import terminal_text
 from .repository import SourceDataError
@@ -234,6 +238,22 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     return parser
 
 
+def _requires_secure_platform_mutation(args: argparse.Namespace) -> bool:
+    """Return whether this parsed command explicitly requests persistence."""
+
+    if args.command == "snapshot":
+        return bool(args.save and not args.no_save)
+    if args.command in {"doctor", "risk", "analyze", "simulate", "trades"}:
+        return bool(args.output and not args.no_save)
+    if args.command == "lifecycle":
+        return args.lifecycle_action == "init" or bool(
+            args.lifecycle_action == "validate" and args.output and not args.no_save
+        )
+    if args.command == "journal":
+        return args.journal_action in {"record-decision", "record-analysis"}
+    return False
+
+
 def _human_report(report: dict[str, object], verbose: bool) -> str:
     checks = report["checks"]
     lines = ["Portfolio analyst doctor", f"Overall: {'ready' if report['ok'] else 'not ready'}"]
@@ -345,6 +365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
+        if _requires_secure_platform_mutation(args):
+            require_secure_platform_mutation()
         settings = Settings.from_env()
         if args.command == "journal":
             repository = JournalRepository(settings.data_home)

@@ -11,43 +11,45 @@ class PrivateHomeError(ValueError):
     pass
 
 
+def require_secure_platform_mutation() -> None:
+    """Fail before persistent state is touched on unsupported platforms."""
+
+    if os.name != "posix":
+        raise PrivateHomeError("UNSUPPORTED_PLATFORM_SECURITY: persistent mutation disabled")
+
+
 def ensure_private_home(data_home: Path, *, create: bool = False) -> Path:
     """Return an absolute non-linked private directory, optionally creating it."""
 
     home = data_home.expanduser().absolute()
     if create:
-        if os.name == "posix":
-            flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-            from .persistence import open_or_create_private_directory
+        require_secure_platform_mutation()
+        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        from .persistence import open_or_create_private_directory
 
-            current_fd = os.open("/", flags)
-            try:
-                for index, component in enumerate(home.parts[1:], start=1):
+        current_fd = os.open("/", flags)
+        try:
+            for index, component in enumerate(home.parts[1:], start=1):
+                try:
+                    next_fd = os.open(component, flags, dir_fd=current_fd)
+                except FileNotFoundError:
                     try:
-                        next_fd = os.open(component, flags, dir_fd=current_fd)
-                    except FileNotFoundError:
-                        try:
-                            next_fd = open_or_create_private_directory(current_fd, component, flags)
-                        except (OSError, ValueError) as exc:
-                            raise PrivateHomeError(
-                                "PORTFOLIO_AGENT_HOME cannot be created safely"
-                            ) from exc
-                    if index == len(home.parts) - 1:
-                        metadata = os.fstat(next_fd)
-                        if stat.S_IMODE(metadata.st_mode) != 0o700:
-                            os.close(next_fd)
-                            raise PrivateHomeError("PORTFOLIO_AGENT_HOME must have mode 0700")
-                    os.close(current_fd)
-                    current_fd = next_fd
-            except OSError as exc:
-                raise PrivateHomeError("PORTFOLIO_AGENT_HOME cannot be created safely") from exc
-            finally:
+                        next_fd = open_or_create_private_directory(current_fd, component, flags)
+                    except (OSError, ValueError) as exc:
+                        raise PrivateHomeError(
+                            "PORTFOLIO_AGENT_HOME cannot be created safely"
+                        ) from exc
+                if index == len(home.parts) - 1:
+                    metadata = os.fstat(next_fd)
+                    if stat.S_IMODE(metadata.st_mode) != 0o700:
+                        os.close(next_fd)
+                        raise PrivateHomeError("PORTFOLIO_AGENT_HOME must have mode 0700")
                 os.close(current_fd)
-        else:
-            try:
-                home.mkdir(mode=0o700, parents=True, exist_ok=True)
-            except OSError as exc:
-                raise PrivateHomeError("PORTFOLIO_AGENT_HOME cannot be created safely") from exc
+                current_fd = next_fd
+        except OSError as exc:
+            raise PrivateHomeError("PORTFOLIO_AGENT_HOME cannot be created safely") from exc
+        finally:
+            os.close(current_fd)
     try:
         metadata = home.lstat()
     except OSError as exc:
