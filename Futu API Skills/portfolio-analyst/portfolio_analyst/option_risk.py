@@ -352,7 +352,7 @@ def _collect_quotes(
             raise OptionRiskInputError("trusted option quote clock moved before acquisition")
         if trusted_elapsed >= TOTAL_WALL_SECONDS or real_elapsed >= TOTAL_WALL_SECONDS:
             total_budget_exhausted = True
-            last_instant = min(started, trusted_deadline)
+            last_instant = trusted_deadline
             evidence.append(unavailable_evidence(base, last_instant, "QUOTE_TOTAL_BUDGET_EXCEEDED"))
             continue
 
@@ -368,6 +368,7 @@ def _collect_quotes(
         overflow_marker: dict[str, str] | None = None
         response_byte_count = 0
         quote: OptionQuote | None = None
+        total_wall_failure = False
         call_started = time.monotonic()
         try:
             raw = _bounded_provider_call(provider, identity, timeout=remaining)
@@ -430,12 +431,15 @@ def _collect_quotes(
             overflow_marker = None
             response_byte_count = 0
             total_budget_exhausted = True
+            total_wall_failure = True
         elif reason_code != "QUOTE_TOTAL_BUDGET_EXCEEDED" and per_call_deadline_reached:
             status, reason_code = "FAILURE", "QUOTE_SOURCE_TIMEOUT"
             quote = response = source_response = None
             overflow_marker = None
             response_byte_count = 0
-        if reason_code == "QUOTE_TOTAL_BUDGET_EXCEEDED":
+        if total_wall_failure:
+            finished = trusted_deadline
+        elif reason_code == "QUOTE_TOTAL_BUDGET_EXCEEDED":
             finished = min(observed_finished, call_deadline)
         elif reason_code == "QUOTE_SOURCE_TIMEOUT":
             finished = min(observed_finished, call_deadline)

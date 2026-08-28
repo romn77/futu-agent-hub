@@ -692,6 +692,118 @@ def test_seventh_request_reaching_total_deadline_and_eighth_omitted_roundtrip():
     validate_option_risk_document(report)
 
 
+def test_monotonic_total_wall_normalizes_inflight_failure_to_trusted_deadline(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    analysis_now = AS_OF + timedelta(hours=1)
+    almost_deadline = analysis_now + timedelta(seconds=29, microseconds=999_999)
+    trusted_instants = [
+        analysis_now,
+        analysis_now + timedelta(seconds=1),
+        analysis_now + timedelta(seconds=5),
+        analysis_now + timedelta(seconds=6),
+        analysis_now + timedelta(seconds=10),
+        analysis_now + timedelta(seconds=11),
+        analysis_now + timedelta(seconds=15),
+        analysis_now + timedelta(seconds=16),
+        analysis_now + timedelta(seconds=20),
+        analysis_now + timedelta(seconds=21),
+        analysis_now + timedelta(seconds=24),
+        analysis_now + timedelta(seconds=25),
+        analysis_now + timedelta(seconds=25),
+        almost_deadline,
+    ]
+    monotonic_instants = iter(
+        [
+            0,
+            0,
+            0,
+            1,
+            1,
+            5,
+            5,
+            6,
+            6,
+            10,
+            10,
+            11,
+            11,
+            15,
+            15,
+            16,
+            16,
+            20,
+            20,
+            21,
+            21,
+            24,
+            24,
+            25,
+            25,
+            25,
+            25,
+            30,
+            30,
+        ]
+    )
+    monkeypatch.setattr(option_risk.time, "monotonic", lambda: next(monotonic_instants))
+    source = _snapshot(
+        tuple(_position(chr(ord("A") + index), market_value=str(7 - index)) for index in range(7))
+    )
+
+    report = analyze_option_risk(
+        source,
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(*trusted_instants),
+    ).to_dict()
+
+    final_evidence = report["quote_evidence"][-1]
+    assert final_evidence["status"] == "FAILURE"
+    assert final_evidence["reason_code"] == "QUOTE_TOTAL_BUDGET_EXCEEDED"
+    assert final_evidence["overflow_marker"] is None
+    assert final_evidence["request_finished_at"] == (
+        analysis_now + timedelta(seconds=30)
+    ).isoformat().replace("+00:00", "Z")
+    monkeypatch.undo()
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
+def test_monotonic_total_wall_normalizes_precall_omission_to_trusted_deadline(monkeypatch):
+    from portfolio_analyst import option_risk
+
+    analysis_now = AS_OF + timedelta(hours=1)
+    almost_deadline = analysis_now + timedelta(seconds=29, microseconds=999_999)
+    monotonic_instants = iter([0, 0, 0, 1, 1, 30])
+    monkeypatch.setattr(option_risk.time, "monotonic", lambda: next(monotonic_instants))
+
+    report = analyze_option_risk(
+        _snapshot((_position("A", market_value="2"), _position("B", market_value="1"))),
+        quote_provider=Provider(),
+        analysis_now=analysis_now,
+        clock=SequenceClock(
+            analysis_now,
+            analysis_now + timedelta(seconds=1),
+            almost_deadline,
+        ),
+    ).to_dict()
+
+    omitted = report["quote_evidence"][1]
+    assert omitted["status"] == "OMITTED"
+    assert omitted["reason_code"] == "QUOTE_TOTAL_BUDGET_EXCEEDED"
+    assert omitted["overflow_marker"] is None
+    assert omitted["request_started_at"] == (
+        analysis_now + timedelta(seconds=30)
+    ).isoformat().replace("+00:00", "Z")
+    assert omitted["request_finished_at"] == omitted["request_started_at"]
+    monkeypatch.undo()
+    from portfolio_analyst.schema import validate_option_risk_document
+
+    validate_option_risk_document(report)
+
+
 def test_timeout_ignoring_provider_is_bounded_by_daemon_worker(monkeypatch):
     from portfolio_analyst import option_risk
 
