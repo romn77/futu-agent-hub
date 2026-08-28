@@ -14,6 +14,20 @@ from .lifecycle import LifecycleReport
 from .option_risk import OptionRiskReport, analyze_option_risk
 
 
+PERFORMANCE_REPORT_STATUS = "NOT_INCLUDED_USE_PERFORMANCE_COMMAND"
+
+
+def portfolio_report_identity(payload: Mapping[str, Any]) -> str:
+    """Return the stable content identity for a portfolio report body."""
+
+    body = _json_value(dict(payload))
+    body.pop("portfolio_report_id", None)
+    encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return f"pr-{hashlib.sha256(encoded).hexdigest()[:20]}"
+
+
 @dataclass(frozen=True)
 class PortfolioReport:
     payload: Mapping[str, Any]
@@ -42,6 +56,7 @@ class PortfolioReport:
         lines = [
             "# Portfolio analysis",
             "",
+            f"- portfolio_report_id: `{md(data['portfolio_report_id'])}`",
             f"- source_snapshot_id: `{md(data['source_snapshot_id'])}`",
             f"- As of: {data['as_of']}",
             f"- NAV: {data['summary']['nav_base']} {data['base_currency']}",
@@ -334,6 +349,7 @@ def build_portfolio_report(
     )
     payload = {
         "schema_version": "1.0",
+        "portfolio_report_id": "",
         "as_of": snapshot.as_of,
         "source_snapshot_id": snapshot.snapshot_id,
         "base_currency": snapshot.base_currency,
@@ -364,7 +380,7 @@ def build_portfolio_report(
         "lifecycle": (
             {"status": "UNAVAILABLE_UNTIL_PHASE_4"} if lifecycle is None else lifecycle.to_dict()
         ),
-        "performance": {"status": "UNAVAILABLE_UNTIL_PHASE_5"},
+        "performance": {"status": PERFORMANCE_REPORT_STATUS},
         "options": option_payload,
         "hypothetical_simulation_candidates": [
             finding.simulation_direction
@@ -374,4 +390,5 @@ def build_portfolio_report(
         "data_gaps": risk.data_quality_notes,
         "risk_report": risk.to_dict(),
     }
+    payload["portfolio_report_id"] = portfolio_report_identity(payload)
     return PortfolioReport(payload)

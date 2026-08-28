@@ -791,7 +791,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                         "manifest.json": bundle_manifest(
                             source_snapshot_id=source_snapshot.snapshot_id,
                             as_of=source_snapshot.to_dict()["as_of"],
-                            report_id=lifecycle_report.lifecycle_report_id,
+                            report_id=payload["portfolio_report_id"],
                             files=artifact_files,
                         ),
                     },

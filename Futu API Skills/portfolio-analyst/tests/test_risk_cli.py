@@ -196,6 +196,8 @@ def test_analyze_explicit_output_saves_json_and_markdown_immutably(monkeypatch, 
     markdown = (home / "reports/run-1/portfolio_report.md").read_text()
     assert stdout == json_report
     assert stdout["source_snapshot_id"] == snapshot().snapshot_id
+    manifest = json.loads((home / "reports/run-1/manifest.json").read_text())
+    assert manifest["report_id"] == stdout["portfolio_report_id"]
     assert snapshot().snapshot_id in markdown
     assert "authoritative JSON at `portfolio_report.json`" in markdown
 

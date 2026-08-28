@@ -122,7 +122,9 @@ JSON; `analyze --output DIRECTORY`
 transactionally saves `portfolio_report.json` and `portfolio_report.md` together.
 `--no-save` always wins and the default remains side-effect free. Reports preserve one
 `source_snapshot_id` and `as_of`, contain exactly three review risks, and never emit buy/sell or
-order conclusions. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
+order conclusions. The point-in-time comprehensive report records performance status as
+`NOT_INCLUDED_USE_PERFORMANCE_COMMAND`; historical attribution is intentionally available only
+through the explicit `performance` command. See [references/risk-analysis.md](references/risk-analysis.md) for metric,
 correlation, optional user-policy, unavailable-data, and integrated option-risk contracts.
 Duplicate account holdings are aggregated only after exact `MARKET.SYMBOL` identity and metadata
 agreement; ambiguous identities or currency/classification/role conflicts stop analysis rather

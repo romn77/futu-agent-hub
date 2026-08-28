@@ -1,5 +1,9 @@
 # Performance attribution contract
 
+Point-in-time `analyze` reports `NOT_INCLUDED_USE_PERFORMANCE_COMMAND` and does not invoke this
+historical workflow. Attribution is available only through the explicit `performance` command
+described below.
+
 ## Scope and interval
 
 `performance --from YYYY-MM-DD --to YYYY-MM-DD` selects at least one validated immutable snapshot

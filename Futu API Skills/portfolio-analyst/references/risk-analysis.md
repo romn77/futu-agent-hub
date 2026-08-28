@@ -160,7 +160,9 @@ largest review risks, concentration/exposure/correlation evidence, hypothetical 
 directions, gaps, and the complete Phase 6 option-risk subreport. The option subreport can degrade
 to `PARTIAL`/`UNAVAILABLE` without changing Phase 2 findings or overall-risk policy. Phase 2 still
 fails closed for signed portfolios; standalone `options` analysis does not bypass that rule in
-`analyze`. A simulation direction is hypothetical evidence work, never an order or an independent
+`analyze`. Point-in-time `analyze` does not silently run historical attribution: its performance
+status is `NOT_INCLUDED_USE_PERFORMANCE_COMMAND`, directing callers to the separately bounded
+`performance` command. A simulation direction is hypothetical evidence work, never an order or an independent
 buy/sell conclusion. See [option-risk.md](option-risk.md) for the separate raw-Greek contract.
 
 Both human risk output and comprehensive Markdown repeat `source_snapshot_id`, `as_of`, complete
@@ -173,7 +175,11 @@ Markdown escapes every untrusted label, note, finding, link/HTML metacharacter, 
 terminal output strips ANSI/control/newline injection. Matrix details remain authoritative in
 the JSON representation, and Markdown records the matrix SHA-256 digest. Saved bundles name
 `portfolio_report.json`; no-save Markdown does not claim that an artifact exists. Portfolio JSON
-embeds both the complete risk report and complete option-risk report. Runtime validation requires
+has a recomputed content-addressed `portfolio_report_id`, and the bundle manifest uses that ID
+rather than the lifecycle subreport identity. It embeds both the complete risk report and complete
+option-risk report. Runtime validation requires
 duplicated risk fields to match exactly and independently reconstructs the option source selection,
 quote evidence, legs, per-Greek coverage/aggregates, expiry buckets, quality reasons, status, and
-content identity from the embedded immutable snapshot.
+content identity from the embedded immutable snapshot. Only after that option evidence validates,
+the portfolio validator reconstructs NAV, cash, weight, position count, and Top-5 from its embedded
+source snapshot, and binds gaps and simulation candidates to the embedded risk report.

@@ -665,7 +665,132 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
             raise ReportSemanticError(f"{subject} was omitted in favor of a lower-ranked finding")
 
 
+_RISK_VALIDATION_MAX_NODES = 1_500_000
+_RISK_VALIDATION_MAX_ARRAY_ITEMS = 500_000
+_RISK_VALIDATION_MAX_MAP_ENTRIES = 500_000
+_RISK_VALIDATION_MAX_STRING_BYTES = 64 * 1024 * 1024
+_RISK_VALIDATION_MAX_NORMALIZED_BYTES = 80 * 1024 * 1024
+_RISK_VALIDATION_MAX_SINGLE_STRING_BYTES = 512 * 1024
+_RISK_VALIDATION_MAX_OPERATIONS = 2_000_000
+_RISK_VALIDATION_MAX_DEPTH = 64
+_RISK_VALIDATION_WALL_SECONDS = 10.0
+
+
+def _risk_string_sizes(value: str, *, remaining: int) -> tuple[int, int]:
+    content_bytes = 0
+    normalized_bytes = 2
+    for character in value:
+        codepoint = ord(character)
+        if codepoint <= 0x7F:
+            content_bytes += 1
+            if character in {'"', "\\"} or character in "\b\f\n\r\t":
+                normalized_bytes += 2
+            else:
+                normalized_bytes += 6 if codepoint < 0x20 else 1
+        elif codepoint <= 0x7FF:
+            content_bytes += 2
+            normalized_bytes += 2
+        elif codepoint <= 0xFFFF:
+            content_bytes += 3
+            normalized_bytes += 3
+        else:
+            content_bytes += 4
+            normalized_bytes += 4
+        if content_bytes > _RISK_VALIDATION_MAX_SINGLE_STRING_BYTES or normalized_bytes > remaining:
+            raise ReportSemanticError("risk validation string budget exceeded")
+    return content_bytes, normalized_bytes
+
+
+def _risk_array_limit(path: str) -> int:
+    leaf = path.rsplit(".", 1)[-1]
+    if leaf in {"top_risks", "largest_risks", "hypothetical_simulation_candidates"}:
+        return 3
+    if leaf in {"pairs", "inverse_pairs"}:
+        return 19_900
+    if leaf == "clusters":
+        return 100
+    if leaf in {"data_quality_notes", "data_gaps", "warnings", "missing_fields", "source_errors"}:
+        return 40_000
+    if leaf in {"positions", "accounts", "cash_balances", "affected_positions"}:
+        return 10_000
+    return 10_000
+
+
+def _risk_map_limit(path: str) -> int:
+    if path.endswith("correlation.matrix") or ".correlation.matrix." in path:
+        return 200
+    return 10_000
+
+
+def _preflight_risk_shape(payload: object) -> None:
+    """Bound risk/portfolio input before JSON Schema or regex processing."""
+
+    started = time.monotonic()
+    nodes = 0
+    array_items = 0
+    map_entries = 0
+    string_bytes = 0
+    normalized_bytes = 0
+    operations = 0
+    stack: list[tuple[object, str, int]] = [(payload, "", 0)]
+    while stack:
+        value, path, depth = stack.pop()
+        nodes += 1
+        operations += 1
+        if (
+            nodes > _RISK_VALIDATION_MAX_NODES
+            or operations > _RISK_VALIDATION_MAX_OPERATIONS
+            or depth > _RISK_VALIDATION_MAX_DEPTH
+        ):
+            raise ReportSemanticError("risk validation shape budget exceeded")
+        if operations % 1024 == 0 and time.monotonic() - started > _RISK_VALIDATION_WALL_SECONDS:
+            raise ReportSemanticError("risk validation wall budget exceeded")
+        if isinstance(value, dict):
+            items = len(value)
+            map_entries += items
+            normalized_bytes += 2 + max(items - 1, 0)
+            if items > _risk_map_limit(path) or map_entries > _RISK_VALIDATION_MAX_MAP_ENTRIES:
+                raise ReportSemanticError("risk validation map budget exceeded")
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise ReportSemanticError("risk validation map key budget exceeded")
+                content, normalized = _risk_string_sizes(
+                    key, remaining=_RISK_VALIDATION_MAX_NORMALIZED_BYTES - normalized_bytes
+                )
+                string_bytes += content
+                normalized_bytes += normalized + 1
+                child_path = f"{path}.{key}" if path else key
+                stack.append((child, child_path, depth + 1))
+        elif isinstance(value, (list, tuple)):
+            items = len(value)
+            array_items += items
+            normalized_bytes += 2 + max(items - 1, 0)
+            if items > _risk_array_limit(path) or array_items > _RISK_VALIDATION_MAX_ARRAY_ITEMS:
+                raise ReportSemanticError("risk validation array budget exceeded")
+            stack.extend((child, f"{path}[]", depth + 1) for child in value)
+        elif isinstance(value, str):
+            content, normalized = _risk_string_sizes(
+                value, remaining=_RISK_VALIDATION_MAX_NORMALIZED_BYTES - normalized_bytes
+            )
+            string_bytes += content
+            normalized_bytes += normalized
+        elif value is None:
+            normalized_bytes += 4
+        elif isinstance(value, bool):
+            normalized_bytes += 4 if value else 5
+        elif isinstance(value, int):
+            normalized_bytes += max(1, (value.bit_length() * 30_103) // 100_000 + 1)
+            normalized_bytes += int(value < 0)
+        else:
+            normalized_bytes += 32
+        if string_bytes > _RISK_VALIDATION_MAX_STRING_BYTES:
+            raise ReportSemanticError("risk validation document budget exceeded")
+        if normalized_bytes > _RISK_VALIDATION_MAX_NORMALIZED_BYTES:
+            raise ReportSemanticError("risk validation document budget exceeded")
+
+
 def validate_risk_document(payload: dict[str, Any]) -> None:
+    _preflight_risk_shape(payload)
     _validate(payload, "risk_report.schema.json")
     _validate_report_semantics(payload)
 
@@ -1029,10 +1154,19 @@ def validate_option_risk_document(payload: dict[str, Any]) -> None:
 
 
 def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
+    _preflight_risk_shape(payload)
+    if not isinstance(payload, dict) or not isinstance(payload.get("options"), dict):
+        raise ReportSemanticError("portfolio report options evidence is missing")
+    options = payload["options"]
+    validate_option_risk_document(options)
     _validate(payload, "portfolio_report.schema.json")
     _validate_report_semantics(payload)
     embedded = payload["risk_report"]
     _validate_report_semantics(embedded)
+    from .reporting import portfolio_report_identity
+
+    if payload["portfolio_report_id"] != portfolio_report_identity(payload):
+        raise ReportSemanticError("portfolio report identity does not match its content")
     for portfolio_field, risk_field in (
         ("as_of", "as_of"),
         ("source_snapshot_id", "source_snapshot_id"),
@@ -1059,14 +1193,50 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             or lifecycle["as_of"] != payload["as_of"]
         ):
             raise ReportSemanticError("lifecycle and risk modules reference different snapshots")
-    options = payload["options"]
-    validate_option_risk_document(options)
     if (
         options["source_snapshot_id"] != payload["source_snapshot_id"]
         or options["as_of"] != payload["as_of"]
         or options["base_currency"] != payload["base_currency"]
     ):
         raise ReportSemanticError("options and risk modules reference different snapshots")
+    try:
+        from .risk import RiskInputError, aggregate_economic_positions
+        from .snapshot_io import InvalidSnapshot, snapshot_from_document
+
+        source_snapshot = snapshot_from_document(options["provenance"]["source_snapshot"])
+        economic_positions = aggregate_economic_positions(source_snapshot)
+    except (InvalidSnapshot, RiskInputError) as exc:
+        raise ReportSemanticError("portfolio source snapshot authority is invalid") from exc
+    expected_top_holdings = sorted(
+        economic_positions, key=lambda position: (-abs(position.weight), position.identity)
+    )
+    expected_summary = _json_value(
+        {
+            "nav_base": source_snapshot.nav_base,
+            "cash_base": source_snapshot.cash_base,
+            "cash_weight": source_snapshot.cash_weight,
+            "position_count": len(economic_positions),
+            "top_holdings": [
+                {
+                    "symbol": position.identity,
+                    "weight": position.weight,
+                    "market_value_base": position.market_value_base,
+                }
+                for position in expected_top_holdings[:5]
+            ],
+        }
+    )
+    if payload["summary"] != expected_summary:
+        raise ReportSemanticError("portfolio summary does not match source snapshot authority")
+    if payload["data_gaps"] != embedded["data_quality_notes"]:
+        raise ReportSemanticError("portfolio data gaps do not match risk evidence")
+    expected_candidates = [
+        finding["simulation_direction"]
+        for finding in embedded["top_risks"]
+        if finding["simulation_direction"] is not None
+    ]
+    if payload["hypothetical_simulation_candidates"] != expected_candidates:
+        raise ReportSemanticError("portfolio simulation candidates do not match risk evidence")
 
 
 _LIFECYCLE_MAX_BYTES = 128 * 1024 * 1024
