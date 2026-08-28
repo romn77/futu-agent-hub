@@ -347,16 +347,6 @@ class SnapshotRepository:
                     relative = path.relative_to(self.data_home)
                     if self._relative(path.stem) != relative:
                         raise SnapshotRepositoryError("snapshot history path is not canonical")
-                    try:
-                        timestamp = parse_snapshot_identity(path.stem).timestamp
-                    except InvalidSnapshotIdentity as exc:
-                        raise SnapshotRepositoryError(
-                            "snapshot history identity is invalid"
-                        ) from exc
-                    if start is not None and timestamp < start.astimezone(timestamp.tzinfo):
-                        continue
-                    if end is not None and timestamp > end.astimezone(timestamp.tzinfo):
-                        continue
                     metadata = path.lstat()
                     candidates.append((path, metadata.st_size))
                     if limit is not None and len(candidates) > limit:

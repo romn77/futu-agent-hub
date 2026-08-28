@@ -87,6 +87,28 @@ def test_snapshot_repository_is_content_addressed_nested_and_range_sorted(tmp_pa
     assert repo.read(first.snapshot_id) == first
 
 
+def test_snapshot_repository_microsecond_ranges_use_precise_body_as_of(tmp_path):
+    home = _home(tmp_path)
+    repository = SnapshotRepository(home)
+    base = make_snapshot()
+    body = replace(base, as_of=base.as_of.replace(microsecond=900_000), snapshot_id="pending")
+    snapshot = replace(body, snapshot_id=snapshot_identity(body))
+    repository.save(snapshot)
+
+    at_800 = base.as_of.replace(microsecond=800_000)
+    at_900 = base.as_of.replace(microsecond=900_000)
+    at_950 = base.as_of.replace(microsecond=950_000)
+    assert repository.list(start=at_800) == (snapshot,)
+    assert repository.list(start=at_950) == ()
+    assert repository.list(end=at_900) == (snapshot,)
+    assert repository.list(end=base.as_of.replace(microsecond=899_999)) == ()
+
+    utc_plus_eight = timezone(timedelta(hours=8))
+    normalized_start = at_800.astimezone(utc_plus_eight)
+    normalized_end = at_900.astimezone(utc_plus_eight)
+    assert repository.list(start=normalized_start, end=normalized_end) == (snapshot,)
+
+
 def test_microsecond_snapshot_identity_is_second_granular_but_full_body_bound(tmp_path):
     base = make_snapshot()
     candidate = replace(base, as_of=base.as_of.replace(microsecond=123456), snapshot_id="pending")
