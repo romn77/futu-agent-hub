@@ -1,5 +1,6 @@
 import contextlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,19 +10,27 @@ import unittest
 from unittest import mock
 
 
-SCRIPTS_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), os.pardir, "scripts")
+GUARD_PATH = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__), os.pardir, "scripts", "trading_guard.py"
+    )
 )
 SKILL_DIR = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SKILL_DIR.parents[1]
-sys.path.insert(0, SCRIPTS_DIR)
 
-from trading_guard import (  # noqa: E402
-    TRADING_ENABLED_ENV,
-    TradingDisabledError,
-    exit_trading_disabled,
-    require_trading_enabled,
-)
+
+def load_guard_module(module_name):
+    spec = importlib.util.spec_from_file_location(module_name, GUARD_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_guard = load_guard_module("_futuapi_trading_guard_test")
+TRADING_ENABLED_ENV = _guard.TRADING_ENABLED_ENV
+TradingDisabledError = _guard.TradingDisabledError
+exit_trading_disabled = _guard.exit_trading_disabled
+require_trading_enabled = _guard.require_trading_enabled
 
 
 class TradingGuardTests(unittest.TestCase):
@@ -56,6 +65,18 @@ class TradingGuardTests(unittest.TestCase):
                 require_trading_enabled()
             os.environ[TRADING_ENABLED_ENV] = "true"
             self.assertIsNone(require_trading_enabled())
+
+    def test_loading_by_path_does_not_change_process_module_state(self):
+        original_path = list(sys.path)
+        original_modules = dict(sys.modules)
+        module_name = "_futuapi_trading_guard_isolation_unique"
+        self.assertNotIn(module_name, sys.modules)
+
+        load_guard_module(module_name)
+
+        self.assertEqual(sys.path, original_path)
+        self.assertEqual(sys.modules, original_modules)
+        self.assertNotIn(module_name, sys.modules)
 
     def test_error_message_is_safe_and_actionable(self):
         with self.assertRaises(TradingDisabledError) as raised:
