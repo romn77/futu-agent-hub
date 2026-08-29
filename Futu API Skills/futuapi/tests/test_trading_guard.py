@@ -51,13 +51,26 @@ class TradingGuardTests(unittest.TestCase):
         self.assertNotIn("FUTU_TRD_ENV", message)
 
     def test_cli_formatter_emits_json_and_exit_code_three(self):
-        error = TradingDisabledError("disabled")
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        error = TradingDisabledError("blocked by FUTU_TRADING_ENABLED=true")
+        json_stderr = io.StringIO()
+        with contextlib.redirect_stderr(json_stderr):
             with self.assertRaises(SystemExit) as raised:
                 exit_trading_disabled(error, output_json=True)
         self.assertEqual(raised.exception.code, 3)
-        self.assertEqual(json.loads(stderr.getvalue()), {"error": "disabled"})
+        self.assertEqual(
+            json.loads(json_stderr.getvalue()),
+            {"error": "blocked by FUTU_TRADING_ENABLED=true"},
+        )
+
+        human_stderr = io.StringIO()
+        with contextlib.redirect_stderr(human_stderr):
+            with self.assertRaises(SystemExit) as raised:
+                exit_trading_disabled(error, output_json=False)
+        self.assertEqual(raised.exception.code, 3)
+        self.assertIn(
+            "错误: blocked by FUTU_TRADING_ENABLED=true",
+            human_stderr.getvalue(),
+        )
 
 
 if __name__ == "__main__":
