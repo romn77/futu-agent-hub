@@ -28,6 +28,7 @@ import sys
 import os as _os
 
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
+from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
 from common import (
     create_trade_context,
     create_future_trade_context,
@@ -304,6 +305,8 @@ def place_combo_order(legs_json, price, quantity, order_type="NORMAL",
             print("请确认后加 --confirmed 参数重新执行。")
         sys.exit(2)
 
+    require_trading_enabled()
+
     ctx = None
     try:
         if is_ec:
@@ -421,18 +424,21 @@ if __name__ == "__main__":
     parser.add_argument("--json", action="store_true", dest="output_json", help="输出 JSON 格式")
     args = parser.parse_args()
 
-    place_combo_order(
-        legs_json=args.legs,
-        price=args.price,
-        quantity=args.quantity,
-        order_type=args.order_type,
-        acc_id=args.acc_id,
-        trd_env=args.trd_env,
-        security_firm=args.security_firm,
-        remark=args.remark,
-        time_in_force=args.time_in_force,
-        expire_time=args.expire_time,
-        confirmed=args.confirmed,
-        quote_id=args.quote_id,
-        output_json=args.output_json,
-    )
+    try:
+        place_combo_order(
+            legs_json=args.legs,
+            price=args.price,
+            quantity=args.quantity,
+            order_type=args.order_type,
+            acc_id=args.acc_id,
+            trd_env=args.trd_env,
+            security_firm=args.security_firm,
+            remark=args.remark,
+            time_in_force=args.time_in_force,
+            expire_time=args.expire_time,
+            confirmed=args.confirmed,
+            quote_id=args.quote_id,
+            output_json=args.output_json,
+        )
+    except TradingDisabledError as error:
+        exit_trading_disabled(error, output_json=args.output_json)

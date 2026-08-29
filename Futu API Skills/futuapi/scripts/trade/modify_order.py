@@ -21,6 +21,7 @@ import json
 import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
+from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
 from common import (
     create_sec_or_future_trade_context,
     normalize_trade_ctx_type,
@@ -91,6 +92,8 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
             else:
                 print(f"错误: {msg}")
             sys.exit(1)
+
+    require_trading_enabled()
 
     ctx = None
     try:
@@ -183,7 +186,10 @@ if __name__ == "__main__":
                         help="交易上下文：SEC=证券，FUTURE=期货/预测市场（与 get_accounts 的 ctx_type 一致）")
     parser.add_argument("--json", action="store_true", dest="output_json", help="输出 JSON 格式")
     args = parser.parse_args()
-    modify_order(order_id=args.order_id, price=args.price, quantity=args.quantity,
-                 adjust_limit=args.adjust_limit, acc_id=args.acc_id, market=args.market,
-                 trd_env=args.trd_env, security_firm=args.security_firm,
-                 ctx_type=args.ctx_type, output_json=args.output_json)
+    try:
+        modify_order(order_id=args.order_id, price=args.price, quantity=args.quantity,
+                     adjust_limit=args.adjust_limit, acc_id=args.acc_id, market=args.market,
+                     trd_env=args.trd_env, security_firm=args.security_firm,
+                     ctx_type=args.ctx_type, output_json=args.output_json)
+    except TradingDisabledError as error:
+        exit_trading_disabled(error, output_json=args.output_json)

@@ -30,6 +30,7 @@ import json
 import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
+from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
 from common import (
     create_trade_context,
     create_future_trade_context,
@@ -234,6 +235,8 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
             print("请确认后加 --confirmed 参数重新执行。")
         sys.exit(2)
 
+    require_trading_enabled()
+
     ctx = None
     try:
         if is_ec:
@@ -412,11 +415,14 @@ if __name__ == "__main__":
     parser.add_argument("--confirmed", action="store_true", help="实盘下单确认标志（不传则只预览不执行）")
     parser.add_argument("--json", action="store_true", dest="output_json", help="输出 JSON 格式")
     args = parser.parse_args()
-    place_order(code=args.code, side=args.side, quantity=args.quantity, price=args.price,
-                order_type=args.order_type, acc_id=args.acc_id,
-                trd_env=args.trd_env, security_firm=args.security_firm,
-                output_json=args.output_json, confirmed=args.confirmed,
-                fill_outside_rth=args.fill_outside_rth, session_str=args.session,
-                amount=args.amount, pred_side=args.pred_side,
-                time_in_force=args.time_in_force, expire_time=args.expire_time,
-                remark=args.remark)
+    try:
+        place_order(code=args.code, side=args.side, quantity=args.quantity, price=args.price,
+                    order_type=args.order_type, acc_id=args.acc_id,
+                    trd_env=args.trd_env, security_firm=args.security_firm,
+                    output_json=args.output_json, confirmed=args.confirmed,
+                    fill_outside_rth=args.fill_outside_rth, session_str=args.session,
+                    amount=args.amount, pred_side=args.pred_side,
+                    time_in_force=args.time_in_force, expire_time=args.expire_time,
+                    remark=args.remark)
+    except TradingDisabledError as error:
+        exit_trading_disabled(error, output_json=args.output_json)

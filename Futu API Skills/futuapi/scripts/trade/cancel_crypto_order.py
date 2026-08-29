@@ -11,6 +11,7 @@ import json
 import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
+from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
 from common import (
     create_crypto_trade_context,
     parse_security_firm,
@@ -54,6 +55,8 @@ def cancel_crypto_order(order_id=None, cancel_all=False, acc_id=None,
             print("将撤销该账户下所有加密货币未完成订单。请确认后加 --confirmed 重新执行。")
         sys.exit(2)
 
+    require_trading_enabled()
+
     ctx = None
     try:
         ctx = create_crypto_trade_context(security_firm=firm_enum)
@@ -86,6 +89,9 @@ if __name__ == "__main__":
     parser.add_argument("--confirmed", action="store_true", help="--all 时必须同时传入 --confirmed 才执行")
     parser.add_argument("--json", action="store_true", dest="output_json", help="输出 JSON 格式")
     args = parser.parse_args()
-    cancel_crypto_order(order_id=args.order_id, cancel_all=args.cancel_all,
-                        acc_id=args.acc_id, security_firm=args.security_firm,
-                        output_json=args.output_json, confirmed=args.confirmed)
+    try:
+        cancel_crypto_order(order_id=args.order_id, cancel_all=args.cancel_all,
+                            acc_id=args.acc_id, security_firm=args.security_firm,
+                            output_json=args.output_json, confirmed=args.confirmed)
+    except TradingDisabledError as error:
+        exit_trading_disabled(error, output_json=args.output_json)

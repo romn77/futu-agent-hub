@@ -24,6 +24,7 @@ import json
 import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
+from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
 from common import (
     create_crypto_trade_context,
     parse_trd_env,
@@ -135,6 +136,8 @@ def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
             print("请确认后加 --confirmed 参数重新执行。")
         sys.exit(2)
 
+    require_trading_enabled()
+
     ctx = None
     try:
         ctx = create_crypto_trade_context(security_firm=firm_enum)
@@ -213,7 +216,10 @@ if __name__ == "__main__":
     parser.add_argument("--confirmed", action="store_true", help="确认下单标志（不传则只预览不执行）")
     parser.add_argument("--json", action="store_true", dest="output_json", help="输出 JSON 格式")
     args = parser.parse_args()
-    place_crypto_order(code=args.code, side=args.side, quantity=args.quantity,
-                       price=args.price, order_type=args.order_type, acc_id=args.acc_id,
-                       security_firm=args.security_firm, output_json=args.output_json,
-                       confirmed=args.confirmed)
+    try:
+        place_crypto_order(code=args.code, side=args.side, quantity=args.quantity,
+                           price=args.price, order_type=args.order_type, acc_id=args.acc_id,
+                           security_firm=args.security_firm, output_json=args.output_json,
+                           confirmed=args.confirmed)
+    except TradingDisabledError as error:
+        exit_trading_disabled(error, output_json=args.output_json)
