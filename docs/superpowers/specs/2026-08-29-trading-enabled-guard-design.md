@@ -26,9 +26,9 @@ Selecting `REAL` alone never authorizes a trading write.
 
 ## Guard Architecture
 
-`scripts/common.py` will expose one small shared guard and a dedicated error type. The guard reads `FUTU_TRADING_ENABLED` at call time so a new process always receives the current exported configuration. It does not cache the result.
+`scripts/trading_guard.py` will expose one small shared guard, a dedicated error type, and the CLI error formatter. It uses only the Python standard library and has no SDK or OpenD import side effects. The guard reads `FUTU_TRADING_ENABLED` at call time so a new process always receives the current exported configuration. It does not cache the result.
 
-Every bundled script that can mutate trading state must invoke the guard after input validation and any non-executable preview, but before creating or using a context for an SDK write. The current protected entry points are:
+Every bundled script that can mutate trading state imports the pure guard directly and must invoke it after input validation and any non-executable preview, but before creating or using a context for an SDK write. The current protected entry points are:
 
 - `trade/place_order.py`
 - `trade/place_combo_order.py`
