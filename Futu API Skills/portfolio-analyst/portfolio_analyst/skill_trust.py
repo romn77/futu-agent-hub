@@ -24,7 +24,7 @@ class AuditedCommand:
 # scripts/common.py locally; all other imports are Python stdlib or the external futu SDK.
 _AUDITED_FILES = (
     AuditedFile(
-        Path("SKILL.md"), "37a6b7e103c07ae543a1e33547bdcc5a20a7f92bc6cd6d94fad298e4f04833d5"
+        Path("SKILL.md"), "5619a3fa58c8e36855f68b71238e39a65f140fe6822092bf5188716ad020c1cd"
     ),
     AuditedFile(
         Path("scripts/common.py"),

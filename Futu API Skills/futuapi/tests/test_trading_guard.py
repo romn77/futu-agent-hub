@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -10,6 +12,8 @@ from unittest import mock
 SCRIPTS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "scripts")
 )
+SKILL_DIR = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = SKILL_DIR.parents[1]
 sys.path.insert(0, SCRIPTS_DIR)
 
 from trading_guard import (  # noqa: E402
@@ -21,6 +25,17 @@ from trading_guard import (  # noqa: E402
 
 
 class TradingGuardTests(unittest.TestCase):
+    def test_skill_documents_trading_switch_and_env_is_ignored(self):
+        skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("`FUTU_TRADING_ENABLED`", skill)
+        self.assertIn("退出码 3", skill)
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", ".env"],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
     def test_missing_environment_variable_raises(self):
         with self.assertRaises(TradingDisabledError):
             require_trading_enabled({})

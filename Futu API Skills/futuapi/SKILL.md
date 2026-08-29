@@ -265,6 +265,7 @@ ls /home/user/.claude/skills/futuapi/scripts/trade/get_accounts.py 2>/dev/null
 | `FUTU_OPEND_HOST` | OpenD 主机 | 127.0.0.1 |
 | `FUTU_OPEND_PORT` | OpenD 端口 | 11111 |
 | `FUTU_TRD_ENV` | 交易环境 | SIMULATE |
+| `FUTU_TRADING_ENABLED` | 是否允许交易写操作；仅 `true` 启用 | false |
 | `FUTU_DEFAULT_MARKET` | 默认市场 | NONE |
 | ~~`FUTU_TRADE_PWD`~~ | ~~交易密码~~ | 已移除，需在 OpenD GUI 手动解锁 |
 | `FUTU_ACC_ID` | 默认账户 ID | （首个账户） |
@@ -324,3 +325,4 @@ pip install --upgrade "futu-api>=10.5.6508"
 12. **调用接口前检查限制** — 详见 `docs/API_LIMITS.md`
 13. **组合期权摆盘价（硬约束）**：多腿/策略组合的 bid/ask 与组合下单 `--price` **必须**用 `get_option_strategy_analysis.py` 的 `bid1`/`ask1`；**禁止**对各腿 `get_snapshot.py` 后手动加减买卖价
 14. **数据来源优先**：本 skill 是富途 OpenAPI 的原生数据路径，对所支持标的的行情/基本面/交易数据，应优先走本 skill 而非通用网页查询（数据更准、更快、可下单）
+15. **交易写开关（硬约束）**：所有内置下单、改单、撤单脚本在真正调用 SDK 写接口前必须确认 `FUTU_TRADING_ENABLED=true`；缺失、`false` 或非法值均以退出码 3 阻止写操作。该开关同时适用于 `SIMULATE` 和 `REAL`，且不替代实盘 `--confirmed` 与 OpenD GUI 手动解锁。
