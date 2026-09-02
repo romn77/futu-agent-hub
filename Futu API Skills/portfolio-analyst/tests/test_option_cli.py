@@ -133,6 +133,19 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
     home = tmp_path / "private"
     _save(home, (_position("A260116C1"),))
     provider = Provider()
+    metadata_calls = []
+
+    class Metadata:
+        def metadata(self, identities, *, timeout):
+            metadata_calls.append((identities, timeout))
+            return {"data": [{
+                "code": identities[0],
+                "lot_size": 100,
+                "stock_owner": "US.A",
+                "option_type": "CALL",
+                "strike_time": "2026-01-16",
+                "strike_price": 1,
+            }]}
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
     monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
     monkeypatch.setattr(
@@ -140,6 +153,7 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
     )
     monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
     monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: provider)
+    monkeypatch.setattr(cli, "FutuOptionMetadataProvider", lambda: Metadata())
     from portfolio_analyst import price_history
 
     monkeypatch.setattr(price_history, "FutuAdjustedPriceProvider", lambda _adapter: None)
@@ -155,6 +169,7 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
     payload = json.loads(capsys.readouterr().out)["options"]
 
     assert provider.calls == [("US.A260116C1", 5.0)]
+    assert metadata_calls == [(["US.A260116C1"], 5.0)]
     analysis_now = datetime.fromisoformat(payload["analysis_now"].replace("Z", "+00:00"))
     acquisition = datetime.fromisoformat(
         payload["quote_acquisition_started_at"].replace("Z", "+00:00")

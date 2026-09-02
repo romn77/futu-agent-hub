@@ -16,7 +16,15 @@ are labeled `RAW_CONTRACT_UNITS_NO_MULTIPLIER`; aggregates require complete popu
 Status may be `COMPLETE`, `PARTIAL`, `UNAVAILABLE`, or `NOT_APPLICABLE`; quote freshness is
 `UNVERIFIED`.
 
-The command does not currently expose reliable option right, underlying, multiplier, moneyness,
-covered/protected relationships, or notional/share/beta Delta. It also excludes max profit/loss,
-breakeven, probability, margin, and scenario P&L. These are unavailable/degraded until a future tool
-contract exposes them; never infer them from the contract label or code.
+A package-owned bounded quote-only worker may additionally provide Futu static option metadata:
+multiplier (`lot_size`, provenance `FUTU_STATIC_INFO_LOT_SIZE`), exact underlying, Call/Put right,
+expiry, and strike. From those fields and only the same embedded snapshot, the command derives
+multiplier-adjusted Delta units, local/base notional Delta, ITM/ATM/OTM state, and same-account
+covered-call or protective-put inventory coverage. The ATM band is
+`max(abs(strike) * 0.001, 0.01)` local currency units. Conflicting static and quote fields are
+suppressed with `OPTION_METADATA_CONFLICT`; the raw-Greek status is preserved.
+
+The command never fetches a separate underlying price. Missing, cross-account, or disagreeing
+underlying rows keep money Delta and moneyness unknown. It excludes max profit/loss, breakeven,
+probability, margin, scenario P&L, beta adjustment, cash-secured puts, spreads, collars, and strategy
+inference. Never infer fields from the contract label or code.

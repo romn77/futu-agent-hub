@@ -16,15 +16,16 @@ portfolio implications. Max profit/loss, margin, and probability are not require
 
 ## Current capability boundary
 
-The current `options` tool does not currently expose all fields in the intended contract. It
-inventories recognized option legs and may provide raw contract-unit Greeks, expiry buckets, market
-value, and independently covered raw implied volatility. It does not infer multiplier, underlying,
-option right, moneyness, covered/protected relationships, beta/share/notional Delta, probability,
-margin, or payoff.
+The current `options` tool inventories recognized option legs and may provide raw contract-unit
+Greeks, expiry buckets, market value, and independently covered raw implied volatility. A separate
+bounded static-information read may provide contract multiplier, exact underlying, option right,
+expiry, strike, multiplier-adjusted Delta, same-snapshot notional Delta, moneyness, and conservative
+covered-call/protective-put inventory relationships. These fields remain unknown when their evidence
+contract is incomplete or conflicting; raw-Greek report status is not downgraded solely because
+static metadata is unavailable.
 
-Until the tool contract exposes a required field with reliable provenance, label that field
-**unavailable/degraded**. Never parse a contract code or label to manufacture it. Do not claim that a
-documented future field is already callable.
+Never parse a contract code or label to manufacture a field. Do not infer cash-secured puts, spreads,
+collars, margin, payoff, probability, or advice. Missing evidence is **unavailable/degraded**.
 
 Option failure is local: keep the complete stock/ETF holdings table and other supported portfolio
 analysis, while placing the limitation beside the option conclusion and in data gaps.

@@ -163,7 +163,8 @@ fails closed for signed portfolios; standalone `options` analysis does not bypas
 `analyze`. Point-in-time `analyze` does not silently run historical attribution: its performance
 status is `NOT_INCLUDED_USE_PERFORMANCE_COMMAND`, directing callers to the separately bounded
 `performance` command. A simulation direction is hypothetical evidence work, never an order or an independent
-buy/sell conclusion. See [option-risk.md](option-risk.md) for the separate raw-Greek contract.
+buy/sell conclusion. See [option-risk.md](option-risk.md) for the separate raw-Greek and static
+metadata contract.
 
 Both human risk output and comprehensive Markdown repeat `source_snapshot_id`, `as_of`, complete
 coverage, data-quality status and notes. Every one of the three findings includes type, severity,
@@ -180,6 +181,8 @@ rather than the lifecycle subreport identity. It embeds both the complete risk r
 option-risk report. Runtime validation requires
 duplicated risk fields to match exactly and independently reconstructs the option source selection,
 quote evidence, legs, per-Greek coverage/aggregates, expiry buckets, quality reasons, status, and
-content identity from the embedded immutable snapshot. Only after that option evidence validates,
+content identity from the embedded immutable snapshot. Schema 1.1 additionally replays static
+metadata, same-snapshot money Delta/moneyness, and aggregated underlying relationships; legacy 1.0
+reports retain their original raw-Greek-only replay. Only after that option evidence validates,
 the portfolio validator reconstructs NAV, cash, weight, position count, and Top-5 from its embedded
 source snapshot, and binds gaps and simulation candidates to the embedded risk report.

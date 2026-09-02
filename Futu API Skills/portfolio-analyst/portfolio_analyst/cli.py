@@ -39,6 +39,7 @@ from .schema import (
     validate_option_risk_document,
 )
 from .option_quote import FutuOptionQuoteProvider
+from .option_metadata import FutuOptionMetadataProvider
 from .option_risk import OptionRiskInputError, analyze_option_risk
 from .skill_trust import validate_option_quote_capability
 from .journal_repository import JournalError, JournalRepository
@@ -645,12 +646,16 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             if source_snapshot.as_of > frozen_now:
                 raise OptionRiskInputError("FUTURE_SNAPSHOT")
             option_provider = None
+            metadata_provider = None
             skill_dir = discover_futuapi_skill()
-            if skill_dir is not None and validate_option_quote_capability(skill_dir).valid:
-                option_provider = FutuOptionQuoteProvider(FutuAdapter(skill_dir))
+            if skill_dir is not None:
+                metadata_provider = FutuOptionMetadataProvider()
+                if validate_option_quote_capability(skill_dir).valid:
+                    option_provider = FutuOptionQuoteProvider(FutuAdapter(skill_dir))
             option_report = analyze_option_risk(
                 source_snapshot,
                 quote_provider=option_provider,
+                metadata_provider=metadata_provider,
                 analysis_now=frozen_now,
             )
             payload = option_report.to_dict()
@@ -693,12 +698,14 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                 raise OptionRiskInputError("FUTURE_SNAPSHOT")
             history_provider = None
             option_provider = None
+            metadata_provider = None
             skill_dir = discover_futuapi_skill()
             if skill_dir is not None:
                 from .price_history import FutuAdjustedPriceProvider
 
                 adapter = FutuAdapter(skill_dir)
                 history_provider = FutuAdjustedPriceProvider(adapter)
+                metadata_provider = FutuOptionMetadataProvider()
                 if validate_option_quote_capability(skill_dir).valid:
                     option_provider = FutuOptionQuoteProvider(adapter)
             risk = analyze_risk(
@@ -747,6 +754,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             option_report = analyze_option_risk(
                 source_snapshot,
                 quote_provider=option_provider,
+                metadata_provider=metadata_provider,
                 analysis_now=frozen_now,
             )
             validate_option_risk_document(option_report.to_dict())

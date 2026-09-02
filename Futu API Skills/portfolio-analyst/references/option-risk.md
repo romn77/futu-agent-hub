@@ -37,12 +37,25 @@ ordinary consecutive source failures open the circuit. A normalized response tha
 selected contracts are omitted without another provider call. Remaining contracts stay in structural
 metrics and are marked budget-omitted, circuit-open, or unsupported.
 
+Static contract metadata is acquired separately by the package-owned quote-only
+`option_metadata_worker.py`. The parent sends a canonical list of at most 30 US/HK identities to
+`sys.executable -s`; the child creates only `OpenQuoteContext`, groups the request into at most one
+US and one HK `get_stock_basicinfo(..., SecurityType.OPTION, code_list=...)` call, closes the context,
+and returns only code, lot size, stock owner, option type, strike date, and strike price. No account,
+portfolio, order, credential, or trade context crosses this boundary. The parent applies a five-second
+timeout, a 256 KiB stdout/stderr response budget, a controlled environment, strict identity-set and
+field validation, and stable sanitized failures.
+
 ## Raw units and calculations
 
-Every Greek is labelled `RAW_CONTRACT_UNITS_NO_MULTIPLIER`. No contract multiplier, underlying,
-underlying-share delta, money delta, or beta conversion is guessed.
+Every raw Greek remains labelled `RAW_CONTRACT_UNITS_NO_MULTIPLIER`; static metadata never changes
+raw-Greek status or aggregate authority. Multiplier-adjusted and money Delta are separate derived
+fields and are emitted only from validated static metadata and the embedded snapshot.
 
 - `leg_greek = signed_snapshot_quantity * unit_greek`
+- `contract_adjusted_delta_units = leg_greek * contract_multiplier`
+- `notional_delta_local = contract_adjusted_delta_units * same-snapshot underlying price`
+- `notional_delta_base = notional_delta_local * same-snapshot underlying FX`
 - `net_greek = sum(leg_greek)` only with complete population coverage
 - `gross_abs_greek = sum(abs(leg_greek))` only with complete population coverage
 - `net_market_value_base = sum(signed snapshot market values)`
@@ -57,6 +70,21 @@ leg coverage and status. It remains a nonaggregated raw vendor value with no hig
 interpretation, and inherits the quote's `UNVERIFIED` freshness. Expiry buckets aggregate the same expiry and
 record calendar-day DTE separately for every represented market, using the snapshot `as_of` in the
 market's local timezone. Negative DTE is explicitly expired; trading days are not inferred.
+
+Static metadata is authoritative for multiplier, underlying, right, expiry, and strike. When static
+and quote evidence conflict, the disputed field is suppressed and `OPTION_METADATA_CONFLICT` is
+recorded; unrelated fields and raw-Greek status remain intact. The underlying price is usable only
+when the exact `stock_owner` exists as a positive stock holding in the same account and every matching
+row agrees on local price, currency, and FX. No later quote is fetched. Otherwise money Delta is null
+and moneyness is `UNKNOWN`. `ATM` means the absolute price/strike difference is no more than
+`max(abs(strike) * 0.001, 0.01)` local currency units; values outside that deterministic band are
+`ITM` or `OTM` according to evidenced Call/Put right.
+
+Covered-call and protective-put labels are inventory relationships, not strategy or payoff claims.
+For each account and exact underlying, short-Call or long-Put required shares are aggregated across
+all relevant legs once (`abs(quantity) * multiplier`) before comparison with positive stock quantity.
+The result is `FULL`, `PARTIAL`, `NONE`, or `UNKNOWN`. Long Calls and short Puts are
+`NOT_APPLICABLE`. The report does not infer cash-secured puts, spreads, collars, margin, or payoff.
 
 ## Status and freshness
 
@@ -89,7 +117,12 @@ legs, every Greek and coverage count, aggregates, expiry/type buckets, quality r
 snapshot digest, and the 20-character SHA-256 report identity. Shape, document, operation, and wall
 budgets are independent of live acquisition budgets.
 
-The report intentionally excludes bid/ask, portfolio or combination pricing, max profit/loss,
-breakeven, probability, margin, scenario P/L, money/beta/underlying-share delta, inferred
-multiplier/underlying, and trading advice. `analyze` embeds this subreport without changing Phase 2's
+New reports use option-risk schema `1.1`. Runtime replay still accepts schema `1.0` reports and
+reconstructs their original raw-Greek-only shape. Version `1.1` adds static metadata evidence,
+multiplier/money-Delta/moneyness fields, and aggregated underlying relationships; migration does not
+rewrite stored `1.0` artifacts.
+
+The report intentionally excludes bid/ask, combination pricing, max profit/loss, breakeven,
+probability, margin, scenario P/L, beta adjustment, inferred strategies, and trading advice.
+`analyze` embeds this subreport without changing Phase 2's
 exactly-three findings, risk policy, or signed-portfolio fail-closed behavior.

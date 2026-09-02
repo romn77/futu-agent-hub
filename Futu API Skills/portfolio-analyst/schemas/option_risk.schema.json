@@ -2,11 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://portfolio-analyst.local/schemas/option_risk.schema.json",
   "type": "object",
-  "maxProperties": 32,
+  "maxProperties": 36,
   "additionalProperties": false,
   "required": ["schema_version", "option_risk_id", "analysis_now", "quote_acquisition_started_at", "as_of", "source_snapshot_id", "source_snapshot_digest", "base_currency", "status", "data_quality", "coverage", "provenance", "source_population", "quote_evidence", "leg_exposures", "greek_aggregates", "implied_volatility_coverage", "option_type_buckets", "expiry_buckets", "quality_reasons", "formulas", "limitations"],
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "1.1"}}, "required": ["schema_version"]},
+      "then": {"required": ["metadata_evidence", "underlying_relationships"]}
+    }
+  ],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"enum": ["1.0", "1.1"]},
     "option_risk_id": {"type": "string", "maxLength": 20, "pattern": "^[0-9a-f]{20}$"},
     "analysis_now": {"type": "string", "maxLength": 64, "format": "date-time"},
     "quote_acquisition_started_at": {"type": "string", "maxLength": 64, "format": "date-time"},
@@ -40,7 +46,7 @@
       }
     },
     "provenance": {
-      "type": "object", "maxProperties": 6, "additionalProperties": false,
+      "type": "object", "maxProperties": 7, "additionalProperties": false,
       "required": ["source_snapshot", "quote_source", "quote_script_sha256", "quote_capability", "quote_freshness", "greek_unit"],
       "properties": {
         "source_snapshot": {"$ref": "https://portfolio-analyst.local/schemas/portfolio_snapshot.schema.json"},
@@ -48,7 +54,8 @@
         "quote_script_sha256": {"const": "0ea054b6b8f6f37938885041b7257653627941408462fc9c3c53d0395d4c8fd8"},
         "quote_capability": {"enum": ["AVAILABLE", "UNAVAILABLE", "NOT_ACCESSED"]},
         "quote_freshness": {"const": "UNVERIFIED"},
-        "greek_unit": {"const": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"}
+        "greek_unit": {"const": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"},
+        "metadata_source": {"const": "FUTU_GET_STOCK_BASICINFO_OPTION"}
       }
     },
     "source_population": {
@@ -62,7 +69,9 @@
       }
     },
     "quote_evidence": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/quoteEvidence"}},
+    "metadata_evidence": {"$ref": "#/$defs/metadataEvidence"},
     "leg_exposures": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/leg"}},
+    "underlying_relationships": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/underlyingRelationship"}},
     "greek_aggregates": {
       "type": "object", "maxProperties": 5, "additionalProperties": false,
       "required": ["delta", "gamma", "vega", "theta", "rho"],
@@ -83,14 +92,18 @@
     },
     "option_type_buckets": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/typeBucket"}},
     "expiry_buckets": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/expiryBucket"}},
-    "quality_reasons": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/reason"}},
+    "quality_reasons": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/reason"}},
     "formulas": {
-      "type": "object", "maxProperties": 5, "additionalProperties": false,
+      "type": "object", "maxProperties": 9, "additionalProperties": false,
       "required": ["leg_greek", "net_greek", "gross_abs_greek", "gross_to_nav", "dte"],
       "properties": {
         "leg_greek": {"type": "string", "maxLength": 256}, "net_greek": {"type": "string", "maxLength": 256},
         "gross_abs_greek": {"type": "string", "maxLength": 256}, "gross_to_nav": {"type": "string", "maxLength": 256},
-        "dte": {"type": "string", "maxLength": 256}
+        "dte": {"type": "string", "maxLength": 256},
+        "contract_adjusted_delta_units": {"type": "string", "maxLength": 256},
+        "notional_delta_local": {"type": "string", "maxLength": 256},
+        "notional_delta_base": {"type": "string", "maxLength": 256},
+        "atm_tolerance": {"type": "string", "maxLength": 256}
       }
     },
     "limitations": {"type": "array", "minItems": 7, "maxItems": 7, "items": {"type": "string", "minLength": 1, "maxLength": 512}}
@@ -141,6 +154,34 @@
         "response": {"oneOf": [{"$ref": "#/$defs/quoteResponse"}, {"type": "null"}]}
       }
     },
+    "staticMetadataRow": {
+      "type": "object", "maxProperties": 6, "additionalProperties": false,
+      "required": ["code", "lot_size", "stock_owner", "option_type", "strike_time", "strike_price"],
+      "properties": {
+        "code": {"$ref": "#/$defs/identity"},
+        "lot_size": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "stock_owner": {"$ref": "#/$defs/identity"},
+        "option_type": {"enum": ["CALL", "PUT"]},
+        "strike_time": {"type": "string", "maxLength": 10, "format": "date"},
+        "strike_price": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/nonnegativeDecimal"}
+      }
+    },
+    "metadataResponse": {
+      "type": "object", "maxProperties": 1, "additionalProperties": false,
+      "required": ["data"],
+      "properties": {"data": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/staticMetadataRow"}}}
+    },
+    "metadataEvidence": {
+      "type": "object", "maxProperties": 5, "additionalProperties": false,
+      "required": ["request", "status", "reason_code", "response_byte_count", "response"],
+      "properties": {
+        "request": {"type": "array", "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
+        "status": {"enum": ["NOT_ACCESSED", "SUCCESS", "UNAVAILABLE"]},
+        "reason_code": {"enum": [null, "OPTION_METADATA_CAPABILITY_UNAVAILABLE", "OPTION_METADATA_TIMEOUT", "OPTION_METADATA_RESPONSE_TOO_LARGE", "OPTION_METADATA_RESPONSE_INVALID", "OPTION_METADATA_SOURCE_UNAVAILABLE", "OPTION_METADATA_REQUEST_INVALID"]},
+        "response_byte_count": {"type": "integer", "minimum": 0, "maximum": 262144},
+        "response": {"oneOf": [{"$ref": "#/$defs/metadataResponse"}, {"type": "null"}]}
+      }
+    },
     "boundedJson": {
       "oneOf": [
         {"type": "object", "maxProperties": 128, "propertyNames": {"maxLength": 128}, "additionalProperties": {"$ref": "#/$defs/boundedJson"}},
@@ -150,7 +191,7 @@
       ]
     },
     "leg": {
-      "type": "object", "maxProperties": 15, "additionalProperties": false,
+      "type": "object", "maxProperties": 24, "additionalProperties": false,
       "required": ["source_index", "identity", "market", "account_ref", "quantity", "direction", "market_value_base", "unit", "option_type", "expiry", "strike", "implied_volatility", "greeks"],
       "properties": {
         "source_index": {"type": "integer", "minimum": 0, "maximum": 9999}, "identity": {"$ref": "#/$defs/identity"},
@@ -160,7 +201,32 @@
         "unit": {"const": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"}, "option_type": {"enum": ["CALL", "PUT", null]},
         "expiry": {"oneOf": [{"type": "string", "maxLength": 10, "format": "date"}, {"type": "null"}]},
         "strike": {"$ref": "#/$defs/nullableDecimal"}, "implied_volatility": {"$ref": "#/$defs/nullableDecimal"},
-        "greeks": {"$ref": "#/$defs/greeks"}
+        "greeks": {"$ref": "#/$defs/greeks"},
+        "contract_multiplier": {"$ref": "#/$defs/nullableDecimal"},
+        "multiplier_provenance": {"enum": ["FUTU_STATIC_INFO_LOT_SIZE", null]},
+        "underlying_identity": {"oneOf": [{"$ref": "#/$defs/identity"}, {"type": "null"}]},
+        "contract_adjusted_delta_units": {"$ref": "#/$defs/nullableDecimal"},
+        "notional_delta_local": {"$ref": "#/$defs/nullableDecimal"},
+        "notional_delta_base": {"$ref": "#/$defs/nullableDecimal"},
+        "moneyness": {"enum": ["ITM", "ATM", "OTM", "UNKNOWN"]},
+        "relationship": {
+          "type": "object", "maxProperties": 2, "additionalProperties": false,
+          "required": ["kind", "status"],
+          "properties": {"kind": {"enum": ["COVERED_CALL", "PROTECTIVE_PUT", null]}, "status": {"enum": ["FULL", "PARTIAL", "NONE", "UNKNOWN", "NOT_APPLICABLE"]}}
+        }
+      }
+    },
+    "underlyingRelationship": {
+      "type": "object", "maxProperties": 7, "additionalProperties": false,
+      "required": ["account_ref", "underlying_identity", "kind", "option_identities", "required_underlying_units", "available_underlying_units", "status"],
+      "properties": {
+        "account_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+        "underlying_identity": {"$ref": "#/$defs/identity"},
+        "kind": {"enum": ["COVERED_CALL", "PROTECTIVE_PUT"]},
+        "option_identities": {"type": "array", "minItems": 1, "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
+        "required_underlying_units": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/nonnegativeDecimal"},
+        "available_underlying_units": {"oneOf": [{"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/nonnegativeDecimal"}, {"type": "null"}]},
+        "status": {"enum": ["FULL", "PARTIAL", "NONE", "UNKNOWN"]}
       }
     },
     "greekAggregate": {

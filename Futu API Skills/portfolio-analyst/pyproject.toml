@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moomoo-portfolio-analyst"
-version = "0.6.0"
+version = "0.7.0"
 description = "Read-only portfolio analysis commands backed by the official Futu API Skill"
 requires-python = ">=3.10"
 dependencies = ["jsonschema>=4.20", "PyYAML>=6.0"]

@@ -428,12 +428,12 @@ def test_comprehensive_report_embeds_and_binds_full_option_report():
         validate_portfolio_report_document(forged)
 
 
-def test_phase6_version_and_packaged_schema_are_0_6_0():
+def test_option_metadata_release_version_and_schema_are_0_7_0():
     root = Path(__file__).parents[1]
     project_text = (root / "pyproject.toml").read_text()
     from portfolio_analyst import __version__
 
-    assert __version__ == "0.6.0"
-    assert 'version = "0.6.0"' in project_text
+    assert __version__ == "0.7.0"
+    assert 'version = "0.7.0"' in project_text
     assert "schemas/option_risk.schema.json" in project_text
-    assert "version: 0.6.0" in (root / "SKILL.md").read_text()
+    assert "version: 0.7.0" in (root / "SKILL.md").read_text()

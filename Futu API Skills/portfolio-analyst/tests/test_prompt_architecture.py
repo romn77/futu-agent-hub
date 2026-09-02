@@ -198,7 +198,8 @@ def test_research_options_recommendation_and_degradation_are_explicit():
         "unavailable/degraded",
     ):
         assert requirement in options
-    assert "does not currently expose all" in options
+    assert "bounded static-information read" in options
+    assert "Never parse a contract code or label" in options
 
     recommendations = _read("references/recommendation-policy.md")
     assert "explicitly requests actionable change" in recommendations

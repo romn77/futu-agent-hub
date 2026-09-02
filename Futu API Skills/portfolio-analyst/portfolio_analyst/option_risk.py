@@ -25,6 +25,13 @@ from .option_quote import (
     OptionQuoteProviderError,
     parse_option_quote_response,
 )
+from .option_metadata import (
+    METADATA_TIMEOUT_SECONDS,
+    OptionMetadata,
+    OptionMetadataContractError,
+    OptionMetadataProviderError,
+    parse_option_metadata_response,
+)
 from .skill_trust import OPTION_QUOTE_SHA256
 
 
@@ -47,6 +54,10 @@ class OptionRiskInputError(ValueError):
 
 class OptionQuoteProvider(Protocol):
     def quote(self, identity: str, *, timeout: float) -> object: ...
+
+
+class OptionMetadataProvider(Protocol):
+    def metadata(self, identities: list[str], *, timeout: float) -> object: ...
 
 
 class _OptionQuoteWorkerTimeout(TimeoutError):
@@ -193,6 +204,46 @@ class OptionRiskReport:
             "- Implied volatility (raw vendor value, nonaggregated): "
             f"{iv['status']}; coverage={iv['available_legs']}/{iv['total_legs']}"
         )
+        if data["schema_version"] == "1.1" and data["leg_exposures"]:
+            lines.extend(
+                [
+                    "",
+                    "## Held option semantics",
+                    "",
+                    "| Contract | Direction | Right | Expiry | Strike | Multiplier | Underlying | Moneyness | Adjusted Delta | Money Delta (base) | Relationship |",
+                    "|---|---|---|---|---:|---:|---|---|---:|---:|---|",
+                ]
+            )
+            for leg in data["leg_exposures"]:
+                relationship = leg["relationship"]
+                relation_text = (
+                    relationship["status"]
+                    if relationship["kind"] is None
+                    else f"{relationship['kind']} / {relationship['status']}"
+                )
+                multiplier = leg["contract_multiplier"] or "UNKNOWN"
+                if leg["multiplier_provenance"]:
+                    multiplier = f"{multiplier} ({leg['multiplier_provenance']})"
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        str(value if value is not None else "UNKNOWN")
+                        for value in (
+                            leg["identity"],
+                            leg["direction"],
+                            leg["option_type"],
+                            leg["expiry"],
+                            leg["strike"],
+                            multiplier,
+                            leg["underlying_identity"],
+                            leg["moneyness"],
+                            leg["contract_adjusted_delta_units"],
+                            leg["notional_delta_base"],
+                            relation_text,
+                        )
+                    )
+                    + " |"
+                )
         lines.extend(["", "## Limitations", "", *[f"- {item}" for item in data["limitations"]]])
         return "\n".join(lines) + "\n"
 
@@ -470,13 +521,95 @@ def _collect_quotes(
     return acquisition_started, evidence, quotes
 
 
+def _collect_metadata(
+    contracts: list[dict[str, Any]], provider: OptionMetadataProvider | None
+) -> tuple[dict[str, Any], dict[str, OptionMetadata]]:
+    identities = sorted(
+        item["identity"] for item in contracts if item["selection_status"] == "SELECTED"
+    )
+    base = {"request": identities, "response_byte_count": 0, "response": None}
+    if not identities:
+        return {**base, "status": "NOT_ACCESSED", "reason_code": None}, {}
+    if provider is None:
+        return {
+            **base,
+            "status": "UNAVAILABLE",
+            "reason_code": "OPTION_METADATA_CAPABILITY_UNAVAILABLE",
+        }, {}
+    try:
+        raw = provider.metadata(identities, timeout=METADATA_TIMEOUT_SECONDS)
+        encoded = _bounded_response_bytes(raw)
+        if len(encoded) > MAX_SINGLE_RESPONSE_BYTES:
+            raise OptionMetadataProviderError("OPTION_METADATA_RESPONSE_TOO_LARGE")
+        parsed = dict(parse_option_metadata_response(identities, raw))
+        response = {"data": [parsed[identity].to_source_dict() for identity in identities]}
+        response_bytes = len(_bounded_response_bytes(response))
+        return {
+            **base,
+            "status": "SUCCESS",
+            "reason_code": None,
+            "response_byte_count": response_bytes,
+            "response": response,
+        }, parsed
+    except OptionMetadataProviderError as exc:
+        reason = exc.reason_code
+    except OptionMetadataContractError:
+        reason = "OPTION_METADATA_RESPONSE_INVALID"
+    except TimeoutError:
+        reason = "OPTION_METADATA_TIMEOUT"
+    except Exception:
+        reason = "OPTION_METADATA_SOURCE_UNAVAILABLE"
+    return {**base, "status": "UNAVAILABLE", "reason_code": reason}, {}
+
+
+def _bound_underlying(
+    snapshot: PortfolioSnapshot, account_ref: str, identity: str
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    rows = [
+        item
+        for item in snapshot.positions
+        if item.account_ref == account_ref
+        and item.security_type == "STOCK"
+        and item.quantity > 0
+        and _identity(item) == identity
+    ]
+    if not rows:
+        return None
+    signatures = {(item.last_price_local, item.currency, item.fx_to_base) for item in rows}
+    if len(signatures) != 1:
+        return None
+    price, _currency, fx = next(iter(signatures))
+    if price <= 0 or fx <= 0:
+        return None
+    quantity = sum((item.quantity for item in rows), Decimal(0))
+    if quantity <= 0:
+        return None
+    return quantity, price, fx
+
+
+def _moneyness(option_type: str | None, strike: Decimal | None, price: Decimal | None) -> str:
+    if option_type not in {"CALL", "PUT"} or strike is None or price is None or price <= 0:
+        return "UNKNOWN"
+    tolerance = max(abs(strike) * Decimal("0.001"), Decimal("0.01"))
+    distance = price - strike
+    if abs(distance) <= tolerance:
+        return "ATM"
+    if option_type == "CALL":
+        return "ITM" if distance > 0 else "OTM"
+    return "ITM" if distance < 0 else "OTM"
+
+
 def analyze_option_risk(
     snapshot: PortfolioSnapshot,
     *,
     quote_provider: OptionQuoteProvider | None = None,
+    metadata_provider: OptionMetadataProvider | None = None,
     analysis_now: datetime | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    report_schema_version: str = "1.1",
 ) -> OptionRiskReport:
+    if report_schema_version not in {"1.0", "1.1"}:
+        raise OptionRiskInputError("OPTION_REPORT_SCHEMA_VERSION_UNSUPPORTED")
     if len(snapshot.positions) > MAX_SOURCE_POSITIONS:
         raise OptionRiskInputError("option source position hard cap exceeded")
     analysis_now = (
@@ -497,6 +630,16 @@ def analyze_option_risk(
         quote_acquisition_started_at, quote_evidence, quotes = _collect_quotes(
             contracts, quote_provider, clock, analysis_now
         )
+    if report_schema_version == "1.1":
+        metadata_evidence, metadata = _collect_metadata(contracts, metadata_provider)
+    else:
+        metadata_evidence, metadata = {
+            "request": [],
+            "status": "NOT_ACCESSED",
+            "reason_code": None,
+            "response_byte_count": 0,
+            "response": None,
+        }, {}
 
     reasons: list[dict[str, str]] = []
     if unknown_count:
@@ -540,6 +683,14 @@ def analyze_option_risk(
     for code in sorted({item["reason_code"] for item in quote_evidence if item["reason_code"]}):
         scope, detail = failure_details[code]
         reasons.append(_reason(code, scope, detail))
+    if metadata_evidence["reason_code"] is not None:
+        reasons.append(
+            _reason(
+                metadata_evidence["reason_code"],
+                "option_metadata",
+                "option static metadata is unavailable or invalid",
+            )
+        )
     if snapshot.data_quality.status != "COMPLETE":
         reasons.append(
             _reason(
@@ -559,6 +710,37 @@ def analyze_option_risk(
     derived_greek_overflows = {name: {"leg_values": 0, "aggregate": False} for name in GREEKS}
     for leg in option_legs:
         quote = quotes.get(leg["identity"])
+        static = metadata.get(leg["identity"])
+        option_type = None if quote is None else quote.option_type
+        expiry = None if quote is None else quote.expiry
+        strike = None if quote is None else quote.strike
+        conflicts: list[str] = []
+        if static is not None:
+            for field, quote_value, static_value in (
+                ("option_type", option_type, static.option_type),
+                ("expiry", expiry, static.expiry),
+                ("strike", strike, static.strike),
+            ):
+                if quote_value is not None and quote_value != static_value:
+                    conflicts.append(field)
+            option_type = None if "option_type" in conflicts else static.option_type
+            expiry = None if "expiry" in conflicts else static.expiry
+            strike = None if "strike" in conflicts else static.strike
+        if conflicts:
+            reasons.append(
+                _reason(
+                    "OPTION_METADATA_CONFLICT",
+                    leg["identity"],
+                    "quote and static metadata disagree for " + ", ".join(conflicts),
+                )
+            )
+        bound = (
+            None
+            if static is None
+            else _bound_underlying(snapshot, leg["account_ref"], static.underlying_identity)
+        )
+        underlying_price = None if bound is None else bound[1]
+        underlying_fx = None if bound is None else bound[2]
         greek_values: dict[str, Decimal | None] = {}
         for name in GREEKS:
             unit_greek = None if quote is None else quote.greeks[name]
@@ -567,17 +749,89 @@ def analyze_option_risk(
                 derived_greek_overflows[name]["leg_values"] += 1
                 value = None
             greek_values[name] = value
+        adjusted_delta = None
+        notional_local = None
+        notional_base = None
+        if static is not None and greek_values["delta"] is not None:
+            adjusted_delta = greek_values["delta"] * static.contract_multiplier
+            if not decimal_fits_report(adjusted_delta):
+                adjusted_delta = None
+            if adjusted_delta is not None and underlying_price is not None:
+                notional_local = adjusted_delta * underlying_price
+                notional_base = notional_local * underlying_fx
+                if not decimal_fits_report(notional_local):
+                    notional_local = notional_base = None
+                elif not decimal_fits_report(notional_base):
+                    notional_base = None
+        if option_type is None:
+            relationship = {"kind": None, "status": "UNKNOWN"}
+        elif option_type == "CALL" and leg["direction"] == "SHORT":
+            relationship = {"kind": "COVERED_CALL", "status": "UNKNOWN"}
+        elif option_type == "PUT" and leg["direction"] == "LONG":
+            relationship = {"kind": "PROTECTIVE_PUT", "status": "UNKNOWN"}
+        else:
+            relationship = {"kind": None, "status": "NOT_APPLICABLE"}
         leg_exposures.append(
             {
                 **leg,
                 "unit": RAW_GREEK_UNIT,
-                "option_type": None if quote is None else quote.option_type,
-                "expiry": None
-                if quote is None or quote.expiry is None
-                else quote.expiry.isoformat(),
-                "strike": None if quote is None else quote.strike,
+                "option_type": option_type,
+                "expiry": None if expiry is None else expiry.isoformat(),
+                "strike": strike,
                 "implied_volatility": None if quote is None else quote.implied_volatility,
                 "greeks": greek_values,
+                "contract_multiplier": None if static is None else static.contract_multiplier,
+                "multiplier_provenance": (
+                    None if static is None else "FUTU_STATIC_INFO_LOT_SIZE"
+                ),
+                "underlying_identity": None if static is None else static.underlying_identity,
+                "contract_adjusted_delta_units": adjusted_delta,
+                "notional_delta_local": notional_local,
+                "notional_delta_base": notional_base,
+                "moneyness": _moneyness(option_type, strike, underlying_price),
+                "relationship": relationship,
+            }
+        )
+
+    relationship_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for leg in leg_exposures:
+        kind = leg["relationship"]["kind"]
+        owner = leg["underlying_identity"]
+        if kind is not None and owner is not None and leg["contract_multiplier"] is not None:
+            relationship_groups[(leg["account_ref"], owner, kind)].append(leg)
+    underlying_relationships: list[dict[str, Any]] = []
+    for (account_ref, owner, kind), legs in sorted(relationship_groups.items()):
+        required = sum(
+            (abs(item["quantity"]) * item["contract_multiplier"] for item in legs), Decimal(0)
+        )
+        bound = _bound_underlying(snapshot, account_ref, owner)
+        available = None if bound is None else bound[0]
+        exact_positive_rows = any(
+            item.account_ref == account_ref
+            and item.security_type == "STOCK"
+            and item.quantity > 0
+            and _identity(item) == owner
+            for item in snapshot.positions
+        )
+        if available is None:
+            relationship_status = "UNKNOWN" if exact_positive_rows else "NONE"
+        elif available >= required:
+            relationship_status = "FULL"
+        elif available > 0:
+            relationship_status = "PARTIAL"
+        else:
+            relationship_status = "NONE"
+        for item in legs:
+            item["relationship"]["status"] = relationship_status
+        underlying_relationships.append(
+            {
+                "account_ref": account_ref,
+                "underlying_identity": owner,
+                "kind": kind,
+                "option_identities": sorted({item["identity"] for item in legs}),
+                "required_underlying_units": required,
+                "available_underlying_units": available,
+                "status": relationship_status,
             }
         )
 
@@ -725,7 +979,7 @@ def analyze_option_risk(
         else "AVAILABLE"
     )
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": report_schema_version,
         "option_risk_id": "",
         "analysis_now": analysis_now,
         "quote_acquisition_started_at": quote_acquisition_started_at,
@@ -758,6 +1012,7 @@ def analyze_option_risk(
             "quote_capability": quote_capability,
             "quote_freshness": "UNVERIFIED",
             "greek_unit": RAW_GREEK_UNIT,
+            "metadata_source": "FUTU_GET_STOCK_BASICINFO_OPTION",
         },
         "source_population": {
             "net_market_value_base": net_mv,
@@ -766,7 +1021,9 @@ def analyze_option_risk(
             "contracts": contracts,
         },
         "quote_evidence": quote_evidence,
+        "metadata_evidence": metadata_evidence,
         "leg_exposures": leg_exposures,
+        "underlying_relationships": underlying_relationships,
         "greek_aggregates": greek_aggregates,
         "implied_volatility_coverage": implied_volatility_coverage,
         "option_type_buckets": type_buckets,
@@ -774,12 +1031,53 @@ def analyze_option_risk(
         "quality_reasons": sorted(reasons, key=lambda item: (item["code"], item["scope"])),
         "formulas": {
             "leg_greek": "signed_snapshot_quantity * unit_greek",
+            "contract_adjusted_delta_units": (
+                "signed_snapshot_quantity * raw_delta * contract_multiplier"
+            ),
+            "notional_delta_local": (
+                "contract_adjusted_delta_units * same_snapshot_underlying_price_local"
+            ),
+            "notional_delta_base": "notional_delta_local * same_snapshot_underlying_fx_to_base",
+            "atm_tolerance": "max(abs(strike) * 0.001, 0.01 local currency units)",
             "net_greek": "sum(leg_greek) only with complete population coverage",
             "gross_abs_greek": "sum(abs(leg_greek)) only with complete population coverage",
             "gross_to_nav": "gross_market_value_base / snapshot_nav_base",
             "dte": "expiry_calendar_date - snapshot_as_of_market_local_date",
         },
         "limitations": [
+            "Raw Greek aggregates retain vendor contract units; multiplier-adjusted delta is separate.",
+            "Contract multiplier and underlying identity require Futu static option metadata.",
+            "Quote freshness is UNVERIFIED; only request start and finish windows are recorded.",
+            "Implied volatility is a raw vendor value and is not aggregated.",
+            "Implied volatility has no high/low interpretation and inherits UNVERIFIED quote freshness.",
+            "No bid/ask, max profit/loss, breakeven, probability, margin, scenario P/L, beta, strategy, or trading advice is provided.",
+            "DTE is calendar-day difference, not trading days.",
+        ],
+    }
+    if report_schema_version == "1.0":
+        payload.pop("metadata_evidence")
+        payload.pop("underlying_relationships")
+        payload["provenance"].pop("metadata_source")
+        for leg in payload["leg_exposures"]:
+            for field in (
+                "contract_multiplier",
+                "multiplier_provenance",
+                "underlying_identity",
+                "contract_adjusted_delta_units",
+                "notional_delta_local",
+                "notional_delta_base",
+                "moneyness",
+                "relationship",
+            ):
+                leg.pop(field)
+        payload["formulas"] = {
+            "leg_greek": "signed_snapshot_quantity * unit_greek",
+            "net_greek": "sum(leg_greek) only with complete population coverage",
+            "gross_abs_greek": "sum(abs(leg_greek)) only with complete population coverage",
+            "gross_to_nav": "gross_market_value_base / snapshot_nav_base",
+            "dte": "expiry_calendar_date - snapshot_as_of_market_local_date",
+        }
+        payload["limitations"] = [
             "Greeks are raw contract units with no contract multiplier.",
             "No multiplier, underlying identity, or underlying-share exposure is inferred.",
             "Quote freshness is UNVERIFIED; only request start and finish windows are recorded.",
@@ -787,8 +1085,7 @@ def analyze_option_risk(
             "Implied volatility has no high/low interpretation and inherits UNVERIFIED quote freshness.",
             "No bid/ask, portfolio pricing, max profit/loss, breakeven, probability, margin, scenario P/L, beta, money delta, or trading advice is provided.",
             "DTE is calendar-day difference, not trading days.",
-        ],
-    }
+        ]
     identity_body = {key: value for key, value in payload.items() if key != "option_risk_id"}
     payload["option_risk_id"] = hashlib.sha256(_canonical_bytes(identity_body)).hexdigest()[:20]
     return OptionRiskReport(payload)

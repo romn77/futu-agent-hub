@@ -852,6 +852,11 @@ def _option_datetime(value: str, label: str) -> datetime:
 
 def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
     from .futu_adapter import FutuReadError
+    from .option_metadata import (
+        MAX_METADATA_RESPONSE_BYTES,
+        METADATA_TIMEOUT_SECONDS,
+        OptionMetadataProviderError,
+    )
     from .option_quote import OptionQuoteError, OptionQuoteProviderError
     from .option_risk import (
         MAX_SINGLE_RESPONSE_BYTES,
@@ -1125,11 +1130,58 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
         provider = None
     else:
         provider = ReplayProvider()
+    metadata_evidence = payload.get("metadata_evidence") or {
+        "request": [],
+        "status": "NOT_ACCESSED",
+        "reason_code": None,
+        "response_byte_count": 0,
+        "response": None,
+    }
+    metadata_status = metadata_evidence["status"]
+    metadata_reason = metadata_evidence["reason_code"]
+    metadata_response = metadata_evidence["response"]
+    metadata_bytes = metadata_evidence["response_byte_count"]
+    if metadata_status == "NOT_ACCESSED":
+        if metadata_evidence["request"] or metadata_reason is not None or metadata_response is not None or metadata_bytes:
+            raise ReportSemanticError("unaccessed option metadata evidence is inconsistent")
+        metadata_provider: Any = None
+    elif metadata_status == "SUCCESS":
+        if metadata_reason is not None or metadata_response is None:
+            raise ReportSemanticError("successful option metadata evidence is inconsistent")
+        measured = len(_bounded_response_bytes(metadata_response))
+        if measured != metadata_bytes or measured > MAX_METADATA_RESPONSE_BYTES:
+            raise ReportSemanticError("option metadata byte evidence is inconsistent")
+
+        class ReplayMetadataProvider:
+            def metadata(self, identities: list[str], *, timeout: float) -> object:
+                if identities != metadata_evidence["request"] or timeout != METADATA_TIMEOUT_SECONDS:
+                    raise ReportSemanticError("option metadata replay request is inconsistent")
+                return metadata_response
+
+        metadata_provider = ReplayMetadataProvider()
+    elif metadata_status == "UNAVAILABLE":
+        if metadata_reason is None or metadata_response is not None or metadata_bytes:
+            raise ReportSemanticError("unavailable option metadata evidence is inconsistent")
+        if metadata_reason == "OPTION_METADATA_CAPABILITY_UNAVAILABLE":
+            metadata_provider = None
+        else:
+
+            class FailedMetadataProvider:
+                def metadata(self, identities: list[str], *, timeout: float) -> object:
+                    if identities != metadata_evidence["request"] or timeout != METADATA_TIMEOUT_SECONDS:
+                        raise ReportSemanticError("option metadata replay request is inconsistent")
+                    raise OptionMetadataProviderError(metadata_reason)
+
+            metadata_provider = FailedMetadataProvider()
+    else:
+        raise ReportSemanticError("option metadata evidence status is invalid")
     expected = analyze_option_risk(
         snapshot,
         quote_provider=provider,
+        metadata_provider=metadata_provider,
         analysis_now=analysis_now,
         clock=replay_clock,
+        report_schema_version=payload["schema_version"],
     ).to_dict()
     try:
         next(iterator)
