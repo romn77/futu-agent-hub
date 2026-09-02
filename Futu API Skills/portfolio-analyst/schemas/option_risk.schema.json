@@ -177,7 +177,7 @@
       "properties": {
         "request": {"type": "array", "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
         "status": {"enum": ["NOT_ACCESSED", "SUCCESS", "UNAVAILABLE"]},
-        "reason_code": {"enum": [null, "OPTION_METADATA_CAPABILITY_UNAVAILABLE", "OPTION_METADATA_ENDPOINT_INVALID", "OPTION_METADATA_TIMEOUT", "OPTION_METADATA_RESPONSE_TOO_LARGE", "OPTION_METADATA_RESPONSE_INVALID", "OPTION_METADATA_SOURCE_UNAVAILABLE", "OPTION_METADATA_REQUEST_INVALID"]},
+        "reason_code": {"enum": [null, "OPTION_METADATA_CAPABILITY_UNAVAILABLE", "OPTION_METADATA_ENDPOINT_INVALID", "OPTION_METADATA_TIMEOUT", "OPTION_METADATA_RESPONSE_TOO_LARGE", "OPTION_METADATA_RESPONSE_INVALID", "OPTION_METADATA_SOURCE_UNAVAILABLE", "OPTION_METADATA_REQUEST_INVALID", "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"]},
         "response_byte_count": {"type": "integer", "minimum": 0, "maximum": 262144},
         "response": {"oneOf": [{"$ref": "#/$defs/metadataResponse"}, {"type": "null"}]}
       }

@@ -46,10 +46,12 @@ groups the request into at most one
 US and one HK `get_stock_basicinfo(..., SecurityType.OPTION, code_list=...)` call, closes the context,
 and returns only code, lot size, stock owner, option type, strike date, and strike price. No account,
 portfolio, order, credential, or trade context crosses this boundary. The parent applies a five-second
-timeout and a cross-platform, running 256 KiB combined stdout/stderr budget. Concurrent bounded pipe
-readers kill the worker immediately on overflow and never accumulate or spool unbounded output. The
-parent also applies a controlled environment, strict identity-set and field validation, and stable
-sanitized failures.
+timeout covering the worker and inherited-pipe lifetime, plus a running 256 KiB combined
+stdout/stderr budget. On POSIX, the worker starts in a new session; deadline or overflow kills its
+entire process group before the direct child is reaped and pipes are closed. The parent never
+accumulates or spools unbounded output. Platforms without this process-tree guarantee fail closed as
+`OPTION_METADATA_PROCESS_TREE_UNSUPPORTED`. The parent also applies a controlled environment,
+strict identity-set and field validation, and stable sanitized failures.
 
 ## Raw units and calculations
 

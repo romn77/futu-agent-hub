@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -284,6 +286,103 @@ def test_bounded_runner_timeout_cleans_pipe_threads():
         thread.name.startswith("portfolio-option-metadata-")
         for thread in threading.enumerate()
     )
+
+
+def _pid_is_live(pid: int) -> bool:
+    stat_path = f"/proc/{pid}/stat"
+    try:
+        state = open(stat_path, encoding="utf-8").read().split()[2]
+    except FileNotFoundError:
+        state = None
+    if state == "Z":
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
+def test_bounded_runner_timeout_kills_descendant_that_inherits_pipes(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    parent_program = (
+        "import pathlib,subprocess,sys\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(2)'])\n"
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid))\n"
+    )
+
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _bounded_subprocess_run(
+            [sys.executable, "-c", parent_program],
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=0.15,
+            shell=False,
+            env={"PATH": ""},
+            check=False,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+    child_pid = int(child_pid_file.read_text())
+    assert not _pid_is_live(child_pid)
+    assert not any(
+        thread.name.startswith("portfolio-option-metadata-")
+        for thread in threading.enumerate()
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
+def test_bounded_runner_overflow_kills_descendant_that_inherits_pipes(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    marker = tmp_path / "should-not-exist"
+    child_program = (
+        "import os,time\n"
+        "chunk=b'x'*65536\n"
+        "for _ in range(64):\n"
+        " os.write(1,chunk); os.write(2,chunk)\n"
+        f"open({str(marker)!r},'w').write('unbounded')\n"
+        "time.sleep(2)\n"
+    )
+    parent_program = (
+        "import pathlib,subprocess,sys\n"
+        f"child=subprocess.Popen([sys.executable,'-c',{child_program!r}])\n"
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid))\n"
+    )
+
+    started = time.monotonic()
+    completed = _bounded_subprocess_run(
+        [sys.executable, "-c", parent_program],
+        input=b"",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=5.0,
+        shell=False,
+        env={"PATH": ""},
+        check=False,
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+    assert len(completed.stdout) + len(completed.stderr) == MAX_METADATA_RESPONSE_BYTES + 1
+    assert not marker.exists()
+    child_pid = int(child_pid_file.read_text())
+    assert not _pid_is_live(child_pid)
+
+
+def test_bounded_runner_fails_closed_when_process_tree_is_not_supported(monkeypatch):
+    import portfolio_analyst.option_metadata as module
+
+    monkeypatch.setattr(module, "_POSIX_PROCESS_GROUPS", False, raising=False)
+    provider = FutuOptionMetadataProvider()
+
+    with pytest.raises(OptionMetadataProviderError) as caught:
+        provider.metadata(["US.A"], timeout=0.1)
+
+    assert caught.value.reason_code == "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
 
 
 @pytest.mark.parametrize(

@@ -9,9 +9,11 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import subprocess
 import sys
-import threading
+import time
 from typing import Callable, Iterable, Mapping
 
 from .models import _decimal_text, decimal_fits_report
@@ -24,6 +26,11 @@ METADATA_FIELDS = frozenset(
     {"code", "lot_size", "stock_owner", "option_type", "strike_time", "strike_price"}
 )
 _IDENTITY = re.compile(r"^(US|HK)\.[A-Z0-9][A-Z0-9.-]{0,63}$")
+_POSIX_PROCESS_GROUPS = os.name == "posix"
+
+
+class _OptionMetadataProcessTreeUnsupported(RuntimeError):
+    pass
 
 
 def validate_opend_endpoint(host: object, port: object) -> tuple[str, int]:
@@ -42,56 +49,68 @@ def validate_opend_endpoint(host: object, port: object) -> tuple[str, int]:
 
 
 def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-    """Drain both pipes concurrently and kill as soon as their combined budget is exceeded."""
+    """Bound the process group, pipe lifetime, and combined stdout/stderr bytes."""
+
+    if not _POSIX_PROCESS_GROUPS:
+        raise _OptionMetadataProcessTreeUnsupported
 
     supplied_input = kwargs.pop("input", b"")
     kwargs.pop("stdout", None)
     kwargs.pop("stderr", None)
     timeout = kwargs.pop("timeout", None)
     kwargs.pop("check", None)
+    kwargs.pop("start_new_session", None)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("timeout must be positive")
+    deadline = time.monotonic() + timeout
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
         **kwargs,
     )
     chunks: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
-    state = {"size": 0, "overflow": False}
-    lock = threading.Lock()
+    total_size = 0
+    overflow = False
+    timed_out = False
+    selector = selectors.DefaultSelector()
 
-    def drain(name: str, stream: object) -> None:
-        while True:
-            chunk = stream.read(64 * 1024)  # type: ignore[attr-defined]
-            if not chunk:
-                return
-            should_kill = False
-            with lock:
-                remaining = MAX_METADATA_RESPONSE_BYTES - state["size"]
-                if remaining > 0:
-                    chunks[name].append(chunk[:remaining])
-                state["size"] += len(chunk)
-                if state["size"] > MAX_METADATA_RESPONSE_BYTES and not state["overflow"]:
-                    state["overflow"] = True
-                    should_kill = True
-            if should_kill:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
+    assert (
+        process.stdout is not None
+        and process.stderr is not None
+        and process.stdin is not None
+    )
 
-    assert process.stdout is not None and process.stderr is not None and process.stdin is not None
-    readers = [
-        threading.Thread(
-            target=drain,
-            args=(name, stream),
-            daemon=True,
-            name=f"portfolio-option-metadata-{name}",
-        )
-        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
-    ]
-    for reader in readers:
-        reader.start()
+    def terminate_process_group() -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            process.wait()
+        group_deadline = time.monotonic() + 0.5
+        while time.monotonic() < group_deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break
+            except OSError:
+                break
+            time.sleep(0.005)
+
     try:
         try:
             if supplied_input:
@@ -101,32 +120,74 @@ def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.
             pass
         finally:
             process.stdin.close()
-        try:
-            returncode = process.wait(timeout=timeout)  # type: ignore[arg-type]
-        except subprocess.TimeoutExpired:
-            process.kill()
+
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        while selector.get_map() or process.poll() is None:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                timed_out = True
+                break
+            if not selector.get_map():
+                try:
+                    process.wait(timeout=remaining_time)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                break
+
+            events = selector.select(remaining_time)
+            if not events:
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+                continue
+            for key, _mask in events:
+                stream = key.fileobj
+                try:
+                    chunk = os.read(stream.fileno(), 64 * 1024)  # type: ignore[union-attr]
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()  # type: ignore[union-attr]
+                    continue
+                remaining_bytes = MAX_METADATA_RESPONSE_BYTES - total_size
+                if remaining_bytes > 0:
+                    chunks[key.data].append(chunk[:remaining_bytes])
+                total_size += len(chunk)
+                if total_size > MAX_METADATA_RESPONSE_BYTES:
+                    overflow = True
+                    break
+            if overflow:
+                break
+
+        if timed_out or overflow:
+            terminate_process_group()
+        else:
             process.wait()
-            raise subprocess.TimeoutExpired(command, timeout) from None
+    except BaseException:
+        terminate_process_group()
+        raise
     finally:
-        for reader in readers:
-            reader.join(timeout=2)
-        if any(reader.is_alive() for reader in readers):
-            process.kill()
-            process.wait()
-            process.stdout.close()
-            process.stderr.close()
-            for reader in readers:
-                reader.join(timeout=1)
-    if state["overflow"]:
+        selector.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    if timed_out:
+        raise subprocess.TimeoutExpired(command, timeout)
+    if overflow:
         return subprocess.CompletedProcess(
             process.args,
-            returncode,
+            process.returncode,
             b"x" * (MAX_METADATA_RESPONSE_BYTES + 1),
             b"",
         )
     return subprocess.CompletedProcess(
         process.args,
-        returncode,
+        process.returncode,
         b"".join(chunks["stdout"]),
         b"".join(chunks["stderr"]),
     )
@@ -287,6 +348,10 @@ class FutuOptionMetadataProvider:
             )
         except subprocess.TimeoutExpired:
             raise OptionMetadataProviderError("OPTION_METADATA_TIMEOUT") from None
+        except _OptionMetadataProcessTreeUnsupported:
+            raise OptionMetadataProviderError(
+                "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
+            ) from None
         except Exception:
             raise OptionMetadataProviderError("OPTION_METADATA_SOURCE_UNAVAILABLE") from None
         stdout = getattr(completed, "stdout", b"")

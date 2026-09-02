@@ -26,9 +26,10 @@ suppressed with `OPTION_METADATA_CONFLICT`; the raw-Greek status is preserved.
 
 The parent validates and passes the configured `FUTU_OPEND_HOST` and `FUTU_OPEND_PORT` explicitly in
 an account-free canonical request. It inherits no other Futu endpoint, account, or credential
-configuration. A five-second timeout and
-cross-platform concurrent pipe readers enforce one combined 256 KiB stdout/stderr limit while the
-worker is running; overflow kills the worker and serializes only a stable reason code.
+configuration. A five-second deadline covers the direct worker and any inherited stdout/stderr pipe
+handles. On POSIX, the parent creates a new session and kills the whole process group on deadline or
+combined 256 KiB overflow before reaping the direct child. Platforms without that process-tree
+guarantee fail closed with `OPTION_METADATA_PROCESS_TREE_UNSUPPORTED`.
 
 The command never fetches a separate underlying price. Missing, cross-account, or disagreeing
 underlying rows keep money Delta and moneyness unknown. It excludes max profit/loss, breakeven,
