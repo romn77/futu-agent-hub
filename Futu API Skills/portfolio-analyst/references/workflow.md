@@ -21,6 +21,147 @@ path, materialize exactly that response as a regular `0600` file inside a newly 
 for every downstream command. Remove that temporary directory after the response, including after a
 failure. Do not place it in canonical `snapshots/YYYY/MM` history.
 
+## One-shot restricted temporary recipe
+
+Run this from the Skill directory as one Bash invocation. It resolves `Settings.from_env()`, uses
+`ensure_private_home(settings.data_home, create=True)`, creates only an exact restricted child,
+runs snapshot and risk plus conditional options in the same shell, emits one internal JSON envelope,
+and validates the exact target again before cleanup. Capture the envelope for report composition;
+do not paste raw JSON into chat or send it to web tools.
+
+```bash
+set -euo pipefail
+umask 077
+
+portfolio_data_home="$(
+python - <<'PY'
+from portfolio_analyst.private_home import ensure_private_home
+from portfolio_analyst.settings import Settings
+
+settings = Settings.from_env()
+print(ensure_private_home(settings.data_home, create=True))
+PY
+)"
+test -n "$portfolio_data_home"
+test -d "$portfolio_data_home"
+test ! -L "$portfolio_data_home"
+
+portfolio_run_dir="$(mktemp -d -- "$portfolio_data_home/.portfolio-current.XXXXXXXX")"
+portfolio_snapshot_path="$portfolio_run_dir/snapshot.json"
+portfolio_risk_path="$portfolio_run_dir/risk.json"
+portfolio_options_path=""
+
+cleanup_portfolio_run() {
+  test -n "${portfolio_run_dir:-}" || return 0
+  python - "$portfolio_data_home" "$portfolio_run_dir" <<'PY'
+from pathlib import Path
+import shutil
+import stat
+import sys
+
+home = Path(sys.argv[1]).resolve(strict=True)
+candidate = Path(sys.argv[2])
+if candidate.is_symlink():
+    raise SystemExit("refusing to clean a symlink")
+resolved = candidate.resolve(strict=True)
+if resolved.parent != home or not resolved.name.startswith(".portfolio-current."):
+    raise SystemExit("refusing to clean an unconfined path")
+metadata = resolved.stat()
+if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+    raise SystemExit("refusing to clean a non-private directory")
+for child in resolved.iterdir():
+    child_metadata = child.lstat()
+    if (
+        child.is_symlink()
+        or not stat.S_ISREG(child_metadata.st_mode)
+        or stat.S_IMODE(child_metadata.st_mode) != 0o600
+        or child_metadata.st_nlink != 1
+    ):
+        raise SystemExit("refusing to clean unexpected temporary content")
+shutil.rmtree(resolved)
+PY
+}
+trap cleanup_portfolio_run EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+chmod 0700 "$portfolio_run_dir"
+python scripts/portfolio.py snapshot --trd-env REAL --base-currency USD --json --no-save \
+  > "$portfolio_snapshot_path"
+chmod 0600 "$portfolio_snapshot_path"
+
+portfolio_snapshot_rel="$(
+python - "$portfolio_data_home" "$portfolio_snapshot_path" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+home = Path(sys.argv[1]).resolve(strict=True)
+target = Path(sys.argv[2])
+metadata = target.lstat()
+if target.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+    raise SystemExit("snapshot temporary file is not regular")
+if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1:
+    raise SystemExit("snapshot temporary file is not private")
+print(target.resolve(strict=True).relative_to(home))
+PY
+)"
+
+python scripts/portfolio.py risk --snapshot "$portfolio_snapshot_rel" --json --no-save \
+  > "$portfolio_risk_path"
+chmod 0600 "$portfolio_risk_path"
+
+if python - "$portfolio_snapshot_path" <<'PY'
+from decimal import Decimal, InvalidOperation
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    snapshot = json.load(stream)
+try:
+    held = any(
+        position.get("security_type") == "OPTION"
+        and Decimal(str(position.get("quantity"))) != 0
+        for position in snapshot["positions"]
+    )
+except (InvalidOperation, KeyError, TypeError, ValueError):
+    raise SystemExit(2) from None
+raise SystemExit(0 if held else 1)
+PY
+then
+  portfolio_options_path="$portfolio_run_dir/options.json"
+  python scripts/portfolio.py options --snapshot "$portfolio_snapshot_rel" --json --no-save \
+    > "$portfolio_options_path"
+  chmod 0600 "$portfolio_options_path"
+else
+  portfolio_option_probe_status=$?
+  test "$portfolio_option_probe_status" -eq 1 || exit "$portfolio_option_probe_status"
+fi
+
+python - "$portfolio_snapshot_path" "$portfolio_risk_path" "$portfolio_options_path" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+def load(path: str):
+    with Path(path).open(encoding="utf-8") as stream:
+        return json.load(stream)
+
+print(json.dumps({
+    "snapshot": load(sys.argv[1]),
+    "risk": load(sys.argv[2]),
+    "options": load(sys.argv[3]) if sys.argv[3] else None,
+}, ensure_ascii=False))
+PY
+```
+
+`set -e` makes a snapshot/risk/options or validation error fail the invocation. The `EXIT` trap then
+cleans only the resolved private child; signal traps exit through that same cleanup. If cleanup
+validation detects replacement, linkage, a symlink, a wrong mode, or an unexpected child, it refuses
+deletion and reports the exact leftover path for manual inspection. This recipe is an interim prompt-
+layer bridge until a lifecycle-free bundled current-analysis command exists.
+
 ## 3. Build the portfolio layer
 
 Validate current holdings, NAV, cash, USD basis, and snapshot identity. Run deterministic `risk`

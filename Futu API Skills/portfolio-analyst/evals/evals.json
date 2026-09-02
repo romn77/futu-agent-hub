@@ -18,13 +18,15 @@
         "Return Markdown in chat without option, recommendation, simulation, or persistence workflows."
       ],
       "assertions": [
-        {"type": "equals", "target": "snapshot.trd_env", "value": "REAL"},
-        {"type": "equals", "target": "snapshot.base_currency", "value": "USD"},
-        {"type": "count_equals", "target": "response.complete_holdings_table.rows", "value": 37},
-        {"type": "equals", "target": "response.selected_deep_research.count_max", "value": 8},
-        {"type": "not_contains", "target": "loaded_references", "value": "references/options-policy.md"},
-        {"type": "not_contains", "target": "executed_commands", "value": "--save"},
-        {"type": "not_contains", "target": "response", "value": "ADD/HOLD/TRIM/EXIT"}
+        {"type": "equals", "target": "trace.snapshot.trd_env", "value": "REAL"},
+        {"type": "equals", "target": "trace.snapshot.base_currency", "value": "USD"},
+        {"type": "count_equals", "target": "trace.observations.holdings.symbols", "value": 37},
+        {"type": "equals", "target": "trace.observations.deep_research.max_names", "value": 8},
+        {"type": "equals", "target": "trace.observations.deep_research.eligible_omissions_disclosed", "value": true},
+        {"type": "not_contains", "target": "trace.loaded_references", "value": "references/options-policy.md"},
+        {"type": "not_contains", "target": "trace.executed_commands", "value": "--save"},
+        {"type": "not_contains", "target": "trace.executed_commands", "value": "portfolio.py analyze"},
+        {"type": "not_contains", "target": "response_markdown", "value": "ADD/HOLD/TRIM/EXIT"}
       ]
     },
     {
@@ -32,22 +34,24 @@
       "prompt": "分析我当前 REAL/USD 美股持仓。快照中有股票、ETF 和三个期权腿；当前期权工具有原始 Greeks 和到期日，但没有 multiplier、Call/Put、underlying 或 ITM/OTM。",
       "fixture": {
         "held_options": true,
-        "option_tool_status": "PARTIAL",
+        "option_tool_status": "COMPLETE",
         "missing_option_fields": ["multiplier", "right", "underlying", "moneyness"]
       },
       "expected_behavior": [
         "Load the options policy only after held options are identified.",
         "Use the same snapshot_id/as_of for holdings and option inventory.",
-        "Report raw contract-unit Greeks with their unit limitation.",
-        "Mark missing intended fields unavailable/degraded while completing unaffected sections."
+        "Preserve the current option tool's COMPLETE raw-Greek status and report its unit limitation.",
+        "Record multiplier, underlying, and moneyness as separate analysis capability gaps while completing unaffected sections."
       ],
       "assertions": [
-        {"type": "contains", "target": "loaded_references", "value": "references/options-policy.md"},
-        {"type": "equals", "target": "response.option_risk.status", "value": "PARTIAL"},
-        {"type": "contains", "target": "response.option_risk", "value": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"},
-        {"type": "contains", "target": "response.data_gaps", "value": "multiplier unavailable"},
-        {"type": "not_contains", "target": "response.option_risk", "value": "covered call confirmed"},
-        {"type": "equals", "target": "workflow.stop", "value": false}
+        {"type": "contains", "target": "trace.loaded_references", "value": "references/options-policy.md"},
+        {"type": "equals", "target": "trace.observations.options.tool_status", "value": "COMPLETE"},
+        {"type": "equals", "target": "trace.observations.options.unit_label", "value": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"},
+        {"type": "contains", "target": "trace.observations.options.capability_gaps", "value": "multiplier"},
+        {"type": "contains", "target": "trace.observations.options.capability_gaps", "value": "underlying"},
+        {"type": "contains", "target": "trace.observations.options.capability_gaps", "value": "moneyness"},
+        {"type": "not_contains", "target": "response_markdown", "value": "covered call confirmed"},
+        {"type": "equals", "target": "trace.observations.workflow.stop", "value": false}
       ]
     },
     {
@@ -66,13 +70,13 @@
         "Do not persist, place orders, or propose unheld candidates."
       ],
       "assertions": [
-        {"type": "contains", "target": "loaded_references", "value": "references/recommendation-policy.md"},
-        {"type": "contains", "target": "loaded_references", "value": "references/optional-workflows/rebalance-simulation.md"},
-        {"type": "count_equals", "target": "response.simulation.scenarios", "value": 1},
-        {"type": "equals", "target": "response.simulation.target_weight", "value": "0.12"},
-        {"type": "not_contains", "target": "executed_commands", "value": "place_order"},
-        {"type": "not_contains", "target": "executed_commands", "value": "--save"},
-        {"type": "equals", "target": "response.unheld_candidates.count", "value": 0}
+        {"type": "contains", "target": "trace.loaded_references", "value": "references/recommendation-policy.md"},
+        {"type": "contains", "target": "trace.loaded_references", "value": "references/optional-workflows/rebalance-simulation.md"},
+        {"type": "count_equals", "target": "trace.observations.simulation.scenarios", "value": 1},
+        {"type": "equals", "target": "trace.observations.simulation.target_weight", "value": "0.12"},
+        {"type": "not_contains", "target": "trace.executed_commands", "value": "place_order"},
+        {"type": "not_contains", "target": "trace.executed_commands", "value": "--save"},
+        {"type": "equals", "target": "trace.observations.unheld_candidates.count", "value": 0}
       ]
     }
   ]
