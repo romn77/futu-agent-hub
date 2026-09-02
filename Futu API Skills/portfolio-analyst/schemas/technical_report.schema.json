@@ -128,13 +128,15 @@
     },
     "instrument": {
       "type": "object", "additionalProperties": false,
-      "required": ["identity", "security_type", "selection_reasons", "status", "current_price", "latest_bar", "moving_averages", "swing_pivots", "volume_congestion", "support_zones", "resistance_zones", "quality_reasons", "evidence"],
+      "required": ["identity", "security_type", "selection_reasons", "status", "current_price", "latest_bar", "price_quantum", "atr14", "moving_averages", "swing_pivots", "volume_congestion", "support_zones", "resistance_zones", "quality_reasons", "evidence"],
       "properties": {
         "identity": {"$ref": "#/$defs/identity"},
         "security_type": {"enum": ["STOCK", "ETF"]},
         "selection_reasons": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/reason"}},
         "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
         "current_price": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+        "price_quantum": {"enum": ["0.01", "0.001", "0.0001"]},
+        "atr14": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
         "latest_bar": {
           "oneOf": [
             {"type": "null"},

@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from portfolio_analyst.identity import snapshot_identity
+from portfolio_analyst.risk import analyze_risk
 from portfolio_analyst.schema import ReportSemanticError, validate_technical_document
 from portfolio_analyst.technical import (
     TechnicalBar,
@@ -174,6 +175,57 @@ def test_derivation_is_deterministic_bounded_and_never_crosses_current_price():
     assert "score" not in str(context).lower()
 
 
+@pytest.mark.parametrize(
+    ("places", "quantum"),
+    [(0, "0.01"), (2, "0.01"), (4, "0.0001")],
+)
+def test_all_derived_price_evidence_uses_input_bounded_quantum(places, quantum):
+    unit = Decimal(1).scaleb(-places)
+    daily = tuple(
+        TechnicalBar(
+            date=date(2026, 2, 10) + timedelta(days=index),
+            open=(Decimal("100") + Decimal(index % 7)).quantize(unit),
+            high=(Decimal("102") + Decimal(index % 7)).quantize(unit),
+            low=(Decimal("98") + Decimal(index % 7)).quantize(unit),
+            close=(Decimal("100.3333") + Decimal(index % 7)).quantize(unit),
+            volume=Decimal(1000 + index),
+        )
+        for index in range(70)
+    )
+    weekly = daily[:45]
+
+    context = derive_technical_context(
+        identity="US.AAA",
+        current_price=Decimal("103.3333").quantize(unit),
+        daily=daily,
+        weekly=weekly,
+        cutoff=date(2026, 8, 27),
+    )
+
+    assert context["price_quantum"] == quantum
+    price_texts = [
+        value
+        for value in context["moving_averages"].values()
+        if value is not None
+    ]
+    if context["atr14"] is not None:
+        price_texts.append(context["atr14"])
+    price_texts.extend(item["price"] for item in context["swing_pivots"])
+    price_texts.extend(item["price"] for item in context["volume_congestion"]["nodes"])
+    for zone in (*context["support_zones"], *context["resistance_zones"]):
+        price_texts.extend((zone["lower"], zone["upper"]))
+    max_places = len(quantum.partition(".")[2])
+    assert all(len(text.partition(".")[2]) <= max_places for text in price_texts)
+    reversed_context = derive_technical_context(
+        identity="US.AAA",
+        current_price=Decimal("103.3333").quantize(unit),
+        daily=tuple(reversed(daily)),
+        weekly=tuple(reversed(weekly)),
+        cutoff=date(2026, 8, 27),
+    )
+    assert reversed_context == context
+
+
 def test_sparse_and_zero_volume_series_are_explicitly_unknown_without_prediction():
     context = derive_technical_context(
         identity="US.AAA",
@@ -322,6 +374,23 @@ def test_schema_replay_rejects_derived_or_raw_evidence_tampering():
         validate_technical_document(tampered)
 
 
+def test_analyze_and_validator_reject_semantically_invalid_embedded_risk():
+    source = base_snapshot()
+    valid_risk = analyze_risk(source).to_dict()
+    invalid_risk = deepcopy(valid_risk)
+    invalid_risk["top_risks"].reverse()
+
+    with pytest.raises(TechnicalInputError, match="risk report is invalid"):
+        analyze_technical(source, provider=Provider(), risk_document=invalid_risk)
+
+    report = analyze_technical(
+        source, provider=Provider(), risk_document=valid_risk
+    ).to_dict()
+    report["provenance"]["source_risk_report"]["top_risks"].reverse()
+    with pytest.raises(ReportSemanticError, match="embedded risk report is invalid"):
+        validate_technical_document(report)
+
+
 def test_replay_preserves_explicit_requested_identity_even_when_cap_omits_it():
     source = _portfolio(
         [(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)]
@@ -354,3 +423,51 @@ def test_markdown_states_zones_are_observed_context_not_forecasts():
     assert "not forecasts" in markdown
     assert "Score" not in markdown
     assert "BUY" not in markdown
+
+
+def test_untrusted_preflight_rejects_depth_width_strings_cycles_and_non_json_scalars():
+    source = _portfolio([("AAA", ".30")])
+    report = analyze_technical(source, provider=Provider()).to_dict()
+
+    deep = {}
+    cursor = deep
+    for _ in range(1200):
+        cursor["x"] = {}
+        cursor = cursor["x"]
+    hostile = deepcopy(report)
+    hostile["hostile"] = deep
+
+    wide = deepcopy(report)
+    wide["hostile"] = [None] * 20_001
+    huge = deepcopy(report)
+    huge["hostile"] = "x" * (1024 * 1024 + 1)
+    cyclic = deepcopy(report)
+    cyclic["hostile"] = cyclic
+    non_json = deepcopy(report)
+    non_json["hostile"] = object()
+    non_string_key = deepcopy(report)
+    non_string_key[1] = "bad"
+
+    for payload in (hostile, wide, huge, cyclic, non_json, non_string_key):
+        with pytest.raises(ReportSemanticError, match="technical validation preflight"):
+            validate_technical_document(payload)
+
+    validate_technical_document(report)
+
+    near_bar_budget = analyze_technical(
+        _portfolio([(f"B{index}", ".10") for index in range(8)]),
+        provider=Provider(
+            daily=_bars(160),
+            weekly=_bars(
+                105,
+                interval="1w",
+                start=date(2024, 8, 23),
+            ),
+        ),
+    ).to_dict()
+    assert sum(
+        len(series["bars"])
+        for item in near_bar_budget["instruments"]
+        for series in item["evidence"].values()
+    ) == 8 * (160 + 105)
+    validate_technical_document(near_bar_budget)

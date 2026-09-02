@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -302,16 +303,97 @@ def _validate(payload: dict[str, Any], name: str) -> None:
 def _preflight_technical_shape(payload: Any) -> None:
     """Bound untrusted technical reports before schema traversal and semantic replay."""
 
+    max_depth = 64
+    max_nodes = 500_000
+    max_width = 20_000
+    max_operations = 1_000_000
+    max_string_bytes = 1024 * 1024
+    max_key_bytes = 512
+    max_total_string_bytes = 4 * 1024 * 1024
+
+    def fail(detail: str) -> NoReturn:
+        raise ReportSemanticError(f"technical validation preflight failed: {detail}")
+
+    nodes = 0
+    operations = 0
+    string_bytes = 0
+    active_containers: set[int] = set()
+    stack: list[tuple[bool, Any, int]] = [(False, payload, 0)]
+    while stack:
+        exiting, value, depth = stack.pop()
+        operations += 1
+        if operations > max_operations:
+            fail("operation budget exceeded")
+        if exiting:
+            active_containers.remove(id(value))
+            continue
+        nodes += 1
+        if nodes > max_nodes:
+            fail("node budget exceeded")
+        if depth > max_depth:
+            fail("depth budget exceeded")
+        if isinstance(value, (dict, list)):
+            identity = id(value)
+            if identity in active_containers:
+                fail("cyclic container")
+            if len(value) > max_width:
+                fail("container width exceeded")
+            active_containers.add(identity)
+            stack.append((True, value, depth))
+            if isinstance(value, dict):
+                children: list[Any] = []
+                for key, child in value.items():
+                    if not isinstance(key, str):
+                        fail("mapping key is not a string")
+                    if len(key) > max_key_bytes:
+                        fail("mapping key byte budget exceeded")
+                    encoded_key = key.encode("utf-8")
+                    if len(encoded_key) > max_key_bytes:
+                        fail("mapping key byte budget exceeded")
+                    string_bytes += len(encoded_key)
+                    children.append(child)
+                for child in reversed(children):
+                    stack.append((False, child, depth + 1))
+            else:
+                for child in reversed(value):
+                    stack.append((False, child, depth + 1))
+        elif isinstance(value, str):
+            if len(value) > max_string_bytes:
+                fail("single string byte budget exceeded")
+            encoded = value.encode("utf-8")
+            if len(encoded) > max_string_bytes:
+                fail("single string byte budget exceeded")
+            string_bytes += len(encoded)
+        elif value is None or isinstance(value, bool):
+            pass
+        elif isinstance(value, int):
+            if value.bit_length() > 4096:
+                fail("integer scalar budget exceeded")
+        elif isinstance(value, float):
+            if not math.isfinite(value):
+                fail("non-finite numeric scalar")
+        else:
+            fail("non-JSON scalar")
+        if string_bytes > max_total_string_bytes:
+            fail("total string byte budget exceeded")
+
     try:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise ReportSemanticError("technical report is not JSON-compatible") from exc
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise ReportSemanticError(
+            "technical validation preflight failed: JSON encoding refused"
+        ) from exc
     if len(body.encode("utf-8")) > 4 * 1024 * 1024:
-        raise ReportSemanticError("technical report exceeds the 4 MiB validation budget")
+        fail("4 MiB document budget exceeded")
     if isinstance(payload, dict):
         instruments = payload.get("instruments")
         if isinstance(instruments, list) and len(instruments) > 8:
-            raise ReportSemanticError("technical report exceeds the eight-symbol budget")
+            fail("eight-symbol budget exceeded")
         if isinstance(instruments, list):
             bar_count = 0
             for item in instruments:
@@ -324,7 +406,7 @@ def _preflight_technical_shape(payload: Any) -> None:
                     if isinstance(series, dict) and isinstance(series.get("bars"), list):
                         bar_count += len(series["bars"])
             if bar_count > 8 * (160 + 110):
-                raise ReportSemanticError("technical report exceeds the raw-bar budget")
+                fail("raw-bar budget exceeded")
 
 
 def validate_technical_document(payload: dict[str, Any]) -> None:
@@ -332,6 +414,14 @@ def validate_technical_document(payload: dict[str, Any]) -> None:
 
     _preflight_technical_shape(payload)
     _validate(payload, "technical_report.schema.json")
+    embedded_risk = payload["provenance"]["source_risk_report"]
+    if embedded_risk is not None:
+        try:
+            validate_risk_document(embedded_risk)
+        except (jsonschema.ValidationError, ReportSemanticError) as exc:
+            raise ReportSemanticError("embedded risk report is invalid") from exc
+        if embedded_risk["source_snapshot_id"] != payload["source_snapshot_id"]:
+            raise ReportSemanticError("embedded risk report does not bind the source snapshot")
     try:
         from .technical import replay_technical_document
 

@@ -7,7 +7,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -375,7 +375,32 @@ def _mean(values: Sequence[Decimal], count: int) -> Decimal | None:
         return +(sum(values[-count:], Decimal("0")) / Decimal(count))
 
 
-def _pivot_evidence(bars: Sequence[TechnicalBar]) -> list[dict[str, str]]:
+def _price_quantum(current: Decimal, *series: Sequence[TechnicalBar]) -> Decimal:
+    values = [current]
+    for bars in series:
+        for bar in bars:
+            values.extend((bar.open, bar.high, bar.low, bar.close))
+    places = max(
+        (
+            max(0, -int(value.normalize().as_tuple().exponent))
+            for value in values
+            if value.is_finite()
+        ),
+        default=2,
+    )
+    return Decimal("1").scaleb(-min(4, max(2, places)))
+
+
+def _quantize_price(value: Decimal, quantum: Decimal) -> Decimal:
+    precision = max(50, len(value.as_tuple().digits) + abs(value.adjusted()) + 12)
+    with localcontext() as context:
+        context.prec = min(600, precision)
+        return value.quantize(quantum, rounding=ROUND_HALF_EVEN)
+
+
+def _pivot_evidence(
+    bars: Sequence[TechnicalBar], quantum: Decimal
+) -> list[dict[str, str]]:
     pivots: list[dict[str, str]] = []
     for index in range(2, len(bars) - 2):
         neighbors = bars[index - 2 : index] + bars[index + 1 : index + 3]
@@ -384,18 +409,28 @@ def _pivot_evidence(bars: Sequence[TechnicalBar]) -> list[dict[str, str]]:
             item.low for item in neighbors
         ):
             pivots.append(
-                {"date": current.date.isoformat(), "kind": "SWING_LOW", "price": _decimal_text(current.low)}
+                {
+                    "date": current.date.isoformat(),
+                    "kind": "SWING_LOW",
+                    "price": _decimal_text(_quantize_price(current.low, quantum)),
+                }
             )
         if current.high >= max(item.high for item in neighbors) and current.high > min(
             item.high for item in neighbors
         ):
             pivots.append(
-                {"date": current.date.isoformat(), "kind": "SWING_HIGH", "price": _decimal_text(current.high)}
+                {
+                    "date": current.date.isoformat(),
+                    "kind": "SWING_HIGH",
+                    "price": _decimal_text(_quantize_price(current.high, quantum)),
+                }
             )
     return pivots[-12:]
 
 
-def _congestion(bars: Sequence[TechnicalBar]) -> tuple[str, list[dict[str, str | int]]]:
+def _congestion(
+    bars: Sequence[TechnicalBar], quantum: Decimal
+) -> tuple[str, list[dict[str, str | int]]]:
     if not bars or sum((item.volume for item in bars), Decimal("0")) <= 0:
         return "UNAVAILABLE", []
     low = min(item.low for item in bars)
@@ -413,7 +448,11 @@ def _congestion(bars: Sequence[TechnicalBar]) -> tuple[str, list[dict[str, str |
     order = sorted(range(8), key=lambda index: (-buckets[index], index))[:3]
     nodes = [
         {
-            "price": _decimal_text(low + width * (Decimal(index) + Decimal("0.5"))),
+            "price": _decimal_text(
+                _quantize_price(
+                    low + width * (Decimal(index) + Decimal("0.5")), quantum
+                )
+            ),
             "volume": _decimal_text(buckets[index]),
             "observations": observations[index],
         }
@@ -445,12 +484,14 @@ def _zones(
     pivots: Sequence[Mapping[str, str]],
     congestion_nodes: Sequence[Mapping[str, Any]],
     as_of: str,
+    atr: Decimal | None,
+    quantum: Decimal,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    atr = _atr(daily)
     if len(daily) < 20 or atr is None:
         return [], []
     width = max(atr / Decimal("2"), current * Decimal("0.005"))
     width = min(width, current * Decimal("0.05"))
+    width = max(quantum, _quantize_price(width, quantum))
     candidates: list[tuple[Decimal, str]] = [
         (Decimal(item["price"]), item["kind"]) for item in pivots
     ]
@@ -470,15 +511,21 @@ def _zones(
                 clusters.append([candidate])
         result: list[dict[str, Any]] = []
         for cluster in clusters[:2]:
-            center = sum((item[0] for item in cluster), Decimal("0")) / Decimal(len(cluster))
-            lower = max(Decimal("0"), center - width)
-            upper = center + width
+            center = _quantize_price(
+                sum((item[0] for item in cluster), Decimal("0")) / Decimal(len(cluster)),
+                quantum,
+            )
+            lower = _quantize_price(max(Decimal("0"), center - width), quantum)
+            upper = _quantize_price(center + width, quantum)
             if kind == "SUPPORT":
                 upper = min(upper, current)
             else:
                 lower = max(lower, current)
             if lower > upper:
-                continue
+                if kind == "SUPPORT":
+                    lower = upper
+                else:
+                    upper = lower
             result.append(
                 {
                     "lower": _decimal_text(lower),
@@ -510,17 +557,22 @@ def derive_technical_context(
         raise TechnicalInputError(f"current price is invalid for {identity}")
     normalized_daily = _normalize_bars(daily, cutoff=cutoff, maximum=DAILY_BAR_CAP)
     normalized_weekly = _normalize_bars(weekly, cutoff=cutoff, maximum=WEEKLY_BAR_CAP)
+    quantum = _price_quantum(current_price, normalized_daily, normalized_weekly)
+    quantized_current = _quantize_price(current_price, quantum)
     daily_closes = [item.close for item in normalized_daily]
     weekly_closes = [item.close for item in normalized_weekly]
-    pivots = _pivot_evidence(normalized_daily)
-    congestion_status, congestion_nodes = _congestion(normalized_daily)
+    pivots = _pivot_evidence(normalized_daily, quantum)
+    congestion_status, congestion_nodes = _congestion(normalized_daily, quantum)
+    atr = _atr(normalized_daily)
     as_of = normalized_daily[-1].date.isoformat() if normalized_daily else cutoff.isoformat()
     support, resistance = _zones(
-        current=current_price,
+        current=quantized_current,
         daily=normalized_daily,
         pivots=pivots,
         congestion_nodes=congestion_nodes,
         as_of=as_of,
+        atr=atr,
+        quantum=quantum,
     )
     reasons: list[str] = []
     if len(normalized_daily) < 50 or len(normalized_weekly) < 40:
@@ -528,11 +580,21 @@ def derive_technical_context(
     if congestion_status == "UNAVAILABLE":
         reasons.append("VOLUME_CONGESTION_UNAVAILABLE")
     return {
+        "price_quantum": _decimal_text(quantum),
+        "atr14": _decimal_text(_quantize_price(atr, quantum)) if atr is not None else None,
         "moving_averages": {
-            "daily_20": _decimal_text(value) if (value := _mean(daily_closes, 20)) is not None else None,
-            "daily_50": _decimal_text(value) if (value := _mean(daily_closes, 50)) is not None else None,
-            "weekly_20": _decimal_text(value) if (value := _mean(weekly_closes, 20)) is not None else None,
-            "weekly_40": _decimal_text(value) if (value := _mean(weekly_closes, 40)) is not None else None,
+            "daily_20": _decimal_text(_quantize_price(value, quantum))
+            if (value := _mean(daily_closes, 20)) is not None
+            else None,
+            "daily_50": _decimal_text(_quantize_price(value, quantum))
+            if (value := _mean(daily_closes, 50)) is not None
+            else None,
+            "weekly_20": _decimal_text(_quantize_price(value, quantum))
+            if (value := _mean(weekly_closes, 20)) is not None
+            else None,
+            "weekly_40": _decimal_text(_quantize_price(value, quantum))
+            if (value := _mean(weekly_closes, 40)) is not None
+            else None,
         },
         "swing_pivots": pivots,
         "volume_congestion": {
@@ -635,6 +697,15 @@ def analyze_technical(
     explicit_symbols: Sequence[str] = (),
     _replay_evidence: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> TechnicalReport:
+    if risk_document is not None:
+        from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+
+        from .schema import ReportSemanticError, validate_risk_document
+
+        try:
+            validate_risk_document(dict(risk_document))
+        except (JsonSchemaValidationError, ReportSemanticError) as exc:
+            raise TechnicalInputError("risk report is invalid") from exc
     selection = select_technical_holdings(
         snapshot, risk_document=risk_document, explicit_symbols=explicit_symbols
     )
@@ -696,7 +767,15 @@ def analyze_technical(
             )
         except TechnicalInputError:
             current_price = None
+            fallback_quantum = _price_quantum(Decimal("0"), daily, weekly)
+            fallback_atr = _atr(daily)
             context = {
+                "price_quantum": _decimal_text(fallback_quantum),
+                "atr14": (
+                    _decimal_text(_quantize_price(fallback_atr, fallback_quantum))
+                    if fallback_atr is not None
+                    else None
+                ),
                 "moving_averages": {
                     "daily_20": None,
                     "daily_50": None,
@@ -730,10 +809,21 @@ def analyze_technical(
                 "security_type": selected.security_type,
                 "selection_reasons": list(selected.reasons),
                 "status": status,
-                "current_price": _decimal_text(current_price) if current_price is not None else None,
+                "current_price": (
+                    _decimal_text(
+                        _quantize_price(current_price, Decimal(context["price_quantum"]))
+                    )
+                    if current_price is not None and context["price_quantum"] is not None
+                    else None
+                ),
                 "latest_bar": (
-                    {"date": latest.date.isoformat(), "close": _decimal_text(latest.close)}
-                    if latest
+                    {
+                        "date": latest.date.isoformat(),
+                        "close": _decimal_text(
+                            _quantize_price(latest.close, Decimal(context["price_quantum"]))
+                        ),
+                    }
+                    if latest and context["price_quantum"] is not None
                     else None
                 ),
                 **context,

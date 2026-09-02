@@ -58,6 +58,13 @@ explicit unavailable/degraded status and leaves unsupported conclusions unknown.
 
 This is observed price context only, not a forecast or trade signal.
 
+- The deterministic price quantum is inferred from the greatest significant decimal-place count in
+  validated current-price and daily/weekly OHLC inputs after trailing-zero normalization, clamped
+  between 2 and 4 decimal places. The quantum is therefore `0.01`, `0.001`, or `0.0001`.
+  Round-half-even quantization is applied before current/latest display prices, moving averages,
+  ATR14, pivots, volume-bin centers, cluster comparisons, zone widths, and zone bounds enter derived
+  report fields. Raw normalized OHLCV evidence remains unchanged and hashed. This prevents Decimal
+  division tails from masquerading as quote precision while keeping replay deterministic.
 - Moving averages are arithmetic means of closes for daily 20/50 and weekly 20/40 bars. Missing
   observation counts produce `null`.
 - Swing evidence uses a five-bar local window. A swing low is no higher than the two lows on either
@@ -65,10 +72,11 @@ This is observed price context only, not a forecast or trade signal.
 - Volume congestion uses eight equal-width daily price bins. Each bar's volume is assigned using
   typical price `(high + low + close) / 3`; retain the three greatest-volume bins, with lower-bin
   tie-break. Zero total volume is unavailable.
-- Candidate levels are swing prices and volume-bin centers. Zone half-width is
+- Candidate levels are quantized swing prices and volume-bin centers. Zone half-width is
   `max(ATR14 / 2, current snapshot price * 0.5%)`, capped at 5% of current price. Cluster candidates
-  within one half-width in nearest-to-current order and emit at most two regions per side.
-- Clamp support upper bounds to current price and resistance lower bounds to current price. Every
+  within one quantized half-width in nearest-to-current order and emit at most two regions per side.
+- After quantization, clamp support upper bounds to current price and resistance lower bounds to
+  current price, repairing any collapsed interval to a zero-width observed region. Every
   region records lower/upper, kind, method, evidence types, observation count, and evidence date.
 
 Fewer than 20 daily bars yields no zones. Sparse histories and zero volume remain explicitly

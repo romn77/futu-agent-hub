@@ -299,6 +299,8 @@ def test_tool_contracts_distinguish_current_cli_from_unavailable_capabilities():
     assert "technical --snapshot" in technical
     assert "--risk-report" in technical
     assert "## Current CLI" in technical
+    assert "price quantum" in technical
+    assert "2 and 4 decimal places" in technical
     for capability in (research,):
         assert "WebSearch" in capability
         assert "WebFetch" in capability

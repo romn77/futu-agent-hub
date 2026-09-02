@@ -6,6 +6,7 @@ import subprocess
 
 from portfolio_analyst import cli
 from portfolio_analyst.persistence import SnapshotStore
+from portfolio_analyst.risk import analyze_risk
 from portfolio_analyst.snapshot_repository import SnapshotRepository
 from portfolio_analyst.settings import Settings
 from test_risk_analysis import snapshot
@@ -81,6 +82,38 @@ def test_technical_cli_maps_invalid_private_risk_report_to_stable_input_error(
 
     assert result == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_TECHNICAL"
+
+
+def test_technical_cli_rejects_semantically_reordered_private_risk_report(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    source = snapshot()
+    saved = SnapshotRepository(home).save(source)
+    risk = analyze_risk(source).to_dict()
+    risk["top_risks"].reverse()
+    SnapshotStore(home).save("risk.json", json.dumps(risk) + "\n")
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+
+    result = cli.main(
+        [
+            "technical",
+            "--snapshot",
+            saved.relative_to(home).as_posix(),
+            "--risk-report",
+            "risk.json",
+            "--json",
+            "--no-save",
+        ],
+        trusted_now=datetime(2026, 8, 27, 12, tzinfo=timezone.utc),
+    )
+
+    assert result == 2
+    assert json.loads(capsys.readouterr().out)["error"] == {
+        "code": "INVALID_TECHNICAL",
+        "message": "risk report is invalid",
+    }
 
 
 def test_technical_cli_keeps_subprocess_timeout_local_and_preserves_omitted_explicit_request(
