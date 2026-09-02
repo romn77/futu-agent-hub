@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, localcontext
 import subprocess
 
 import pytest
@@ -17,6 +17,7 @@ from portfolio_analyst.technical import (
     analyze_technical,
     derive_technical_context,
     select_technical_holdings,
+    _price_quantum,
 )
 from test_risk_analysis import _position, reconciled_snapshot, snapshot as base_snapshot
 
@@ -224,6 +225,96 @@ def test_all_derived_price_evidence_uses_input_bounded_quantum(places, quantum):
         cutoff=date(2026, 8, 27),
     )
     assert reversed_context == context
+
+
+def test_price_quantum_uses_decimal_tuple_exponents_without_ambient_rounding():
+    huge = Decimal("1234567890123456789012345678901234567890.001")
+    with localcontext() as construction:
+        construction.prec = 100
+        bar = TechnicalBar(
+            date=date(2026, 8, 1),
+            open=huge,
+            high=huge + Decimal("1"),
+            low=huge - Decimal("1"),
+            close=huge,
+            volume=Decimal("1"),
+        )
+
+    with localcontext() as context:
+        context.prec = 3
+        context.rounding = ROUND_DOWN
+        assert _price_quantum(Decimal("1.2300")) == Decimal("0.01")
+        assert _price_quantum(Decimal("1.2300"), (bar,)) == Decimal("0.001")
+        assert _price_quantum(Decimal("1E-12")) == Decimal("0.0001")
+        assert _price_quantum(Decimal("1E+40")) == Decimal("0.01")
+
+
+def test_generation_and_replay_are_independent_of_ambient_decimal_context():
+    source = _portfolio([("AAA", ".30")])
+    provider = Provider()
+
+    def generated(precision, rounding):
+        with localcontext() as context:
+            context.prec = precision
+            context.rounding = rounding
+            return analyze_technical(source, provider=provider).to_dict()
+
+    low_precision = generated(3, ROUND_DOWN)
+    normal_precision = generated(28, ROUND_UP)
+
+    assert low_precision == normal_precision
+    with localcontext() as context:
+        context.prec = 28
+        context.rounding = ROUND_UP
+        validate_technical_document(low_precision)
+    with localcontext() as context:
+        context.prec = 3
+        context.rounding = ROUND_DOWN
+        validate_technical_document(normal_precision)
+
+
+def test_large_integer_with_mill_precision_keeps_stable_atr_congestion_and_zones():
+    base = Decimal("9" * 500 + ".001")
+    with localcontext() as construction:
+        construction.prec = 550
+        bars = tuple(
+            TechnicalBar(
+                date=date(2026, 2, 10) + timedelta(days=index),
+                open=base + Decimal(index % 7),
+                high=base + Decimal(index % 7) + Decimal("2.003"),
+                low=base + Decimal(index % 7) - Decimal("2.003"),
+                close=base + Decimal(index % 7) + Decimal("0.001"),
+                volume=Decimal(1000 + index),
+            )
+            for index in range(70)
+        )
+        current_price = base + Decimal("3")
+
+    def derived(precision, rounding):
+        with localcontext() as context:
+            context.prec = precision
+            context.rounding = rounding
+            return derive_technical_context(
+                identity="US.AAA",
+                current_price=current_price,
+                daily=bars,
+                weekly=bars[:45],
+                cutoff=date(2026, 8, 27),
+            )
+
+    result = derived(3, ROUND_DOWN)
+    assert result == derived(28, ROUND_UP)
+
+    assert result["price_quantum"] == "0.001"
+    assert len(result["atr14"].partition(".")[2]) <= 3
+    assert result["volume_congestion"]["status"] == "AVAILABLE"
+    assert result["support_zones"]
+    assert result["resistance_zones"]
+    assert all(
+        len(value.partition(".")[2]) <= 3
+        for zone in (*result["support_zones"], *result["resistance_zones"])
+        for value in (zone["lower"], zone["upper"])
+    )
 
 
 def test_sparse_and_zero_volume_series_are_explicitly_unknown_without_prediction():

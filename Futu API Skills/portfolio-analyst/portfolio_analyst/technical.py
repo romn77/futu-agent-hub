@@ -7,7 +7,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
+from decimal import Context, Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -21,6 +21,12 @@ DAILY_START_DAYS = 200
 WEEKLY_START_DAYS = 735
 DAILY_BAR_CAP = 160
 WEEKLY_BAR_CAP = 110
+_DERIVATION_CONTEXT = Context(prec=600, rounding=ROUND_HALF_EVEN)
+_PRICE_QUANTA = {
+    2: Decimal("0.01"),
+    3: Decimal("0.001"),
+    4: Decimal("0.0001"),
+}
 
 
 class TechnicalInputError(ValueError):
@@ -223,6 +229,20 @@ def select_technical_holdings(
 ) -> TechnicalSelection:
     """Select at most eight held US stock/ETF identities by the documented stable rules."""
 
+    with localcontext(_DERIVATION_CONTEXT):
+        return _select_technical_holdings_in_context(
+            snapshot,
+            risk_document=risk_document,
+            explicit_symbols=explicit_symbols,
+        )
+
+
+def _select_technical_holdings_in_context(
+    snapshot: PortfolioSnapshot,
+    *,
+    risk_document: Mapping[str, Any] | None,
+    explicit_symbols: Sequence[str],
+) -> TechnicalSelection:
     if len(explicit_symbols) > MAX_TECHNICAL_SYMBOLS:
         raise TechnicalInputError("explicit technical selection accepts at most eight symbols")
 
@@ -244,9 +264,13 @@ def select_technical_holdings(
         )
         if record["security_type"] != position.security_type:
             raise TechnicalInputError(f"conflicting security type for {identity}")
-        record["weight"] += abs(position.weight)
+        with localcontext(_DERIVATION_CONTEXT):
+            record["weight"] = record["weight"] + position.weight.copy_abs()
 
-    ordered = sorted(grouped.values(), key=lambda item: (-item["weight"], item["identity"]))
+    ordered = sorted(
+        grouped.values(),
+        key=lambda item: (item["weight"].copy_negate(), item["identity"]),
+    )
     reasons: dict[str, list[str]] = {}
 
     def include(identity: str, reason: str) -> None:
@@ -276,7 +300,10 @@ def select_technical_holdings(
             )
         if identity not in explicit_identities:
             explicit_identities.append(identity)
-    for identity in sorted(explicit_identities, key=lambda value: (-grouped[value]["weight"], value)):
+    for identity in sorted(
+        explicit_identities,
+        key=lambda value: (grouped[value]["weight"].copy_negate(), value),
+    ):
         include(identity, "EXPLICIT_HELD_SYMBOL")
 
     if risk_document is not None:
@@ -306,7 +333,7 @@ def select_technical_holdings(
         reasons,
         key=lambda identity: (
             min(priority[reason] for reason in reasons[identity]),
-            -grouped[identity]["weight"],
+            grouped[identity]["weight"].copy_negate(),
             identity,
         ),
     )
@@ -324,7 +351,10 @@ def select_technical_holdings(
     return TechnicalSelection(
         selected=selected,
         explicit_requested=tuple(
-            sorted(explicit_identities, key=lambda value: (-grouped[value]["weight"], value))
+            sorted(
+                explicit_identities,
+                key=lambda value: (grouped[value]["weight"].copy_negate(), value),
+            )
         ),
         omitted=tuple(requested[MAX_TECHNICAL_SYMBOLS:]),
         eligible_count=len(ordered),
@@ -370,8 +400,7 @@ def _normalize_bars(
 def _mean(values: Sequence[Decimal], count: int) -> Decimal | None:
     if len(values) < count:
         return None
-    with localcontext() as context:
-        context.prec = 50
+    with localcontext(_DERIVATION_CONTEXT):
         return +(sum(values[-count:], Decimal("0")) / Decimal(count))
 
 
@@ -380,21 +409,27 @@ def _price_quantum(current: Decimal, *series: Sequence[TechnicalBar]) -> Decimal
     for bars in series:
         for bar in bars:
             values.extend((bar.open, bar.high, bar.low, bar.close))
-    places = max(
-        (
-            max(0, -int(value.normalize().as_tuple().exponent))
-            for value in values
-            if value.is_finite()
-        ),
-        default=2,
-    )
-    return Decimal("1").scaleb(-min(4, max(2, places)))
+    places = max((_effective_decimal_places(value) for value in values), default=2)
+    return _PRICE_QUANTA[min(4, max(2, places))]
+
+
+def _effective_decimal_places(value: Decimal) -> int:
+    if not value.is_finite() or value.is_zero():
+        return 0
+    decimal_tuple = value.as_tuple()
+    exponent = int(decimal_tuple.exponent)
+    if exponent >= 0:
+        return 0
+    trailing_zeroes = 0
+    for digit in reversed(decimal_tuple.digits):
+        if digit != 0:
+            break
+        trailing_zeroes += 1
+    return max(0, -(exponent + trailing_zeroes))
 
 
 def _quantize_price(value: Decimal, quantum: Decimal) -> Decimal:
-    precision = max(50, len(value.as_tuple().digits) + abs(value.adjusted()) + 12)
-    with localcontext() as context:
-        context.prec = min(600, precision)
+    with localcontext(_DERIVATION_CONTEXT):
         return value.quantize(quantum, rounding=ROUND_HALF_EVEN)
 
 
@@ -431,6 +466,13 @@ def _pivot_evidence(
 def _congestion(
     bars: Sequence[TechnicalBar], quantum: Decimal
 ) -> tuple[str, list[dict[str, str | int]]]:
+    with localcontext(_DERIVATION_CONTEXT):
+        return _congestion_in_context(bars, quantum)
+
+
+def _congestion_in_context(
+    bars: Sequence[TechnicalBar], quantum: Decimal
+) -> tuple[str, list[dict[str, str | int]]]:
     if not bars or sum((item.volume for item in bars), Decimal("0")) <= 0:
         return "UNAVAILABLE", []
     low = min(item.low for item in bars)
@@ -463,6 +505,11 @@ def _congestion(
 
 
 def _atr(bars: Sequence[TechnicalBar]) -> Decimal | None:
+    with localcontext(_DERIVATION_CONTEXT):
+        return _atr_in_context(bars)
+
+
+def _atr_in_context(bars: Sequence[TechnicalBar]) -> Decimal | None:
     if len(bars) < 15:
         return None
     ranges: list[Decimal] = []
@@ -478,6 +525,28 @@ def _atr(bars: Sequence[TechnicalBar]) -> Decimal | None:
 
 
 def _zones(
+    *,
+    current: Decimal,
+    daily: Sequence[TechnicalBar],
+    pivots: Sequence[Mapping[str, str]],
+    congestion_nodes: Sequence[Mapping[str, Any]],
+    as_of: str,
+    atr: Decimal | None,
+    quantum: Decimal,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    with localcontext(_DERIVATION_CONTEXT):
+        return _zones_in_context(
+            current=current,
+            daily=daily,
+            pivots=pivots,
+            congestion_nodes=congestion_nodes,
+            as_of=as_of,
+            atr=atr,
+            quantum=quantum,
+        )
+
+
+def _zones_in_context(
     *,
     current: Decimal,
     daily: Sequence[TechnicalBar],
@@ -546,6 +615,24 @@ def _zones(
 
 
 def derive_technical_context(
+    *,
+    identity: str,
+    current_price: Decimal,
+    daily: Sequence[TechnicalBar],
+    weekly: Sequence[TechnicalBar],
+    cutoff: date,
+) -> dict[str, Any]:
+    with localcontext(_DERIVATION_CONTEXT):
+        return _derive_technical_context_in_context(
+            identity=identity,
+            current_price=current_price,
+            daily=daily,
+            weekly=weekly,
+            cutoff=cutoff,
+        )
+
+
+def _derive_technical_context_in_context(
     *,
     identity: str,
     current_price: Decimal,
@@ -696,6 +783,24 @@ def analyze_technical(
     risk_document: Mapping[str, Any] | None = None,
     explicit_symbols: Sequence[str] = (),
     _replay_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+) -> TechnicalReport:
+    with localcontext(_DERIVATION_CONTEXT):
+        return _analyze_technical_in_context(
+            snapshot,
+            provider=provider,
+            risk_document=risk_document,
+            explicit_symbols=explicit_symbols,
+            _replay_evidence=_replay_evidence,
+        )
+
+
+def _analyze_technical_in_context(
+    snapshot: PortfolioSnapshot,
+    *,
+    provider: TechnicalHistoryProvider | None,
+    risk_document: Mapping[str, Any] | None,
+    explicit_symbols: Sequence[str],
+    _replay_evidence: Mapping[str, Mapping[str, Any]] | None,
 ) -> TechnicalReport:
     if risk_document is not None:
         from jsonschema.exceptions import ValidationError as JsonSchemaValidationError

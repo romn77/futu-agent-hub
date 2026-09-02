@@ -59,12 +59,18 @@ explicit unavailable/degraded status and leaves unsupported conclusions unknown.
 This is observed price context only, not a forecast or trade signal.
 
 - The deterministic price quantum is inferred from the greatest significant decimal-place count in
-  validated current-price and daily/weekly OHLC inputs after trailing-zero normalization, clamped
-  between 2 and 4 decimal places. The quantum is therefore `0.01`, `0.001`, or `0.0001`.
-  Round-half-even quantization is applied before current/latest display prices, moving averages,
-  ATR14, pivots, volume-bin centers, cluster comparisons, zone widths, and zone bounds enter derived
-  report fields. Raw normalized OHLCV evidence remains unchanged and hashed. This prevents Decimal
-  division tails from masquerading as quote precision while keeping replay deterministic.
+  validated current-price and daily/weekly OHLC inputs, clamped between 2 and 4 decimal places. The
+  implementation reads each Decimal tuple's exponent and strips coefficient trailing zeroes
+  directly; it never calls context-sensitive normalization. The quantum is therefore `0.01`,
+  `0.001`, or `0.0001`.
+- All selection-weight and technical-price derivation, including replay, runs in an explicit
+  600-digit Decimal context with fixed round-half-even rounding. The 600-digit bound covers the
+  report contract's at-most-512-character finite Decimal inputs plus bounded aggregation. Ambient
+  process precision and rounding cannot change the result. Round-half-even quantization is applied
+  before current/latest display prices, moving averages, ATR14, pivots, volume-bin centers, cluster
+  comparisons, zone widths, and zone bounds enter derived report fields. Raw normalized OHLCV
+  evidence remains unchanged and hashed. This prevents Decimal division tails from masquerading as
+  quote precision while keeping replay deterministic.
 - Moving averages are arithmetic means of closes for daily 20/50 and weekly 20/40 bars. Missing
   observation counts produce `null`.
 - Swing evidence uses a five-bar local window. A swing low is no higher than the two lows on either
