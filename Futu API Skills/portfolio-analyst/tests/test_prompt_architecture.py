@@ -75,6 +75,10 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     assert "no default persistence" in skill
     assert "never unlock" in skill.lower()
     assert "place order" in skill.lower()
+    assert "For account and brokerage data access, use only" in skill
+    assert "bundled `portfolio-analyst` CLI" in skill
+    assert "For external research, use `WebSearch` and `WebFetch` only under" in skill
+    assert "references/evidence-policy.md" in skill
 
     default_route = _section(skill, "Default comprehensive route")
     for required in (

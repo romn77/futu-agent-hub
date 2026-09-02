@@ -14,7 +14,9 @@ screening, or a multi-currency wealth system.
 
 This Skill is strictly read-only. Never unlock trading, request or accept a trading password, invoke
 an order command, or modify an account. `place order` and every equivalent trading action are outside
-the boundary. Use only the bundled `portfolio-analyst` CLI and its audited official `futuapi` reads.
+the boundary. For account and brokerage data access, use only the bundled `portfolio-analyst` CLI and
+its audited official `futuapi` reads. For external research, use `WebSearch` and `WebFetch` only under
+the [evidence policy](references/evidence-policy.md); never use them to access or modify an account.
 
 ## Default comprehensive route
 
