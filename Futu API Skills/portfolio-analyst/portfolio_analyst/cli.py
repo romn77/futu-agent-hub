@@ -10,6 +10,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+
 from .doctor import run_doctor
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .futu_adapter import FutuAdapter, FutuReadError
@@ -32,11 +34,13 @@ from .risk import (
     load_portfolio_policy,
 )
 from .schema import (
+    ReportSemanticError,
     validate_lifecycle_document,
     validate_portfolio_report_document,
     validate_rebalance_result_document,
     validate_risk_document,
     validate_option_risk_document,
+    validate_technical_document,
 )
 from .option_quote import FutuOptionQuoteProvider
 from .option_metadata import FutuOptionMetadataProvider
@@ -66,6 +70,11 @@ from .performance import (
     ExternalFlowEvidence,
     MAX_ATTRIBUTION_SNAPSHOTS,
     analyze_performance,
+)
+from .technical import (
+    FutuTechnicalHistoryProvider,
+    TechnicalInputError,
+    analyze_technical,
 )
 
 
@@ -163,6 +172,26 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     options.add_argument("--output", help="relative output directory under data home")
     options.add_argument("--no-save", action="store_true")
     options.add_argument("--verbose", action="store_true")
+    technical = subparsers.add_parser(
+        "technical", help="derive bounded support/resistance context for selected holdings"
+    )
+    technical_source = technical.add_mutually_exclusive_group(required=True)
+    technical_source.add_argument("--latest", action="store_true", help="use latest valid snapshot")
+    technical_source.add_argument(
+        "--snapshot", help="relative immutable snapshot path under data home"
+    )
+    technical.add_argument(
+        "--risk-report", help="optional relative validated risk report under data home"
+    )
+    technical.add_argument(
+        "--symbol", action="append", default=[], help="additional held US stock/ETF"
+    )
+    technical.add_argument(
+        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
+    )
+    technical.add_argument("--output", help="relative output directory under data home")
+    technical.add_argument("--no-save", action="store_true")
+    technical.add_argument("--verbose", action="store_true")
     simulate = subparsers.add_parser("simulate", help="run a non-executable rebalance simulation")
     source = simulate.add_mutually_exclusive_group(required=True)
     source.add_argument("--latest", action="store_true", help="use latest valid saved snapshot")
@@ -692,6 +721,69 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             )
             return 0
 
+        if args.command == "technical":
+            source_snapshot = _load_selected_snapshot(
+                settings.data_home, latest=args.latest, relative_path=args.snapshot
+            )
+            if source_snapshot.as_of > frozen_now:
+                raise FutureSnapshotError("selected snapshot is later than trusted analysis time")
+            risk_document = None
+            if args.risk_report:
+                _relative, raw = SnapshotRepository(settings.data_home).read_private_bytes(
+                    args.risk_report
+                )
+                try:
+                    risk_document = json.loads(
+                        raw,
+                        object_pairs_hook=SnapshotRepository._unique_object,
+                    )
+                except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+                    raise TechnicalInputError("risk report JSON is invalid") from exc
+                if not isinstance(risk_document, dict):
+                    raise TechnicalInputError("risk report must be a JSON object")
+                try:
+                    validate_risk_document(risk_document)
+                except (JsonSchemaValidationError, ReportSemanticError) as exc:
+                    raise TechnicalInputError("risk report is invalid") from exc
+            provider = None
+            skill_dir = discover_futuapi_skill()
+            if skill_dir is not None:
+                provider = FutuTechnicalHistoryProvider(FutuAdapter(skill_dir))
+            report = analyze_technical(
+                source_snapshot,
+                provider=provider,
+                risk_document=risk_document,
+                explicit_symbols=tuple(args.symbol),
+            )
+            payload = report.to_dict()
+            validate_technical_document(payload)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+            if args.output and not args.no_save:
+                output = Path(args.output)
+                resolve_output_path(settings.data_home, output / "technical_report.json")
+                artifacts = {
+                    "portfolio_snapshot.json": json.dumps(
+                        source_snapshot.to_dict(), ensure_ascii=False, indent=2
+                    )
+                    + "\n",
+                    "technical_report.json": rendered + "\n",
+                    "technical_report.md": report.to_markdown(),
+                }
+                SnapshotStore(settings.data_home).save_bundle(
+                    output,
+                    {
+                        **artifacts,
+                        "manifest.json": bundle_manifest(
+                            source_snapshot_id=source_snapshot.snapshot_id,
+                            as_of=payload["as_of"],
+                            report_id=payload["technical_report_id"],
+                            files=artifacts,
+                        ),
+                    },
+                )
+            print(rendered if args.as_json else report.to_markdown(), end="\n" if args.as_json else "")
+            return 0
+
         if args.command in {"risk", "analyze"}:
             source_snapshot = _load_selected_snapshot(
                 settings.data_home, latest=args.latest, relative_path=args.snapshot
@@ -993,6 +1085,8 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
         return _emit_error(args, "CONFIG_ERROR", str(exc))
     except RiskConfigError as exc:
         return _emit_error(args, "CONFIG_ERROR", str(exc))
+    except TechnicalInputError as exc:
+        return _emit_error(args, "INVALID_TECHNICAL", str(exc))
     except RebalanceError as exc:
         return _emit_error(args, "INVALID_REQUEST", str(exc))
     except TradePolicyConfigError as exc:

@@ -259,7 +259,7 @@ def test_workflow_routes_to_the_owned_current_analysis_helper():
         "immediately before each unlink",
         "after each deletion",
         "same-UID malicious concurrent mutation is outside",
-        "risk and options failures are local degradation",
+        "risk, technical, and options failures are local degradation",
         "absolute retained path",
         "CONFIG_ERROR",
         "PRIVATE_HOME_ERROR",
@@ -296,18 +296,20 @@ def test_tool_contracts_distinguish_current_cli_from_unavailable_capabilities():
     assert "risk --snapshot" in risk and "--lookback" in risk
     assert "options --snapshot" in options and "RAW_CONTRACT_UNITS_NO_MULTIPLIER" in options
     assert "No dedicated research CLI is currently exposed" in research
-    assert "No dedicated technical CLI is currently exposed" in technical
-    for capability in (research, technical):
+    assert "technical --snapshot" in technical
+    assert "--risk-report" in technical
+    assert "## Current CLI" in technical
+    for capability in (research,):
         assert "WebSearch" in capability
         assert "WebFetch" in capability
         assert "authorized read-only host tools" in capability
     assert "unavailable/degraded" in research
     assert "unavailable/degraded" in technical
 
-    current_cli = {"snapshot", "analyze", "risk", "options"}
+    current_cli = {"snapshot", "analyze", "risk", "technical", "options"}
     for name in current_cli:
         assert "## Current CLI" in _read(f"references/tool-contract/core/{name}.md")
-    for name in ("research", "technical"):
+    for name in ("research",):
         assert "## Capability status" in _read(f"references/tool-contract/core/{name}.md")
 
 

@@ -19,7 +19,7 @@ from .private_home import PrivateHomeError, ensure_private_home, require_secure_
 from .settings import Settings, SettingsError
 
 
-_ALLOWED_FILES = frozenset({"snapshot.json", "risk.json", "options.json"})
+_ALLOWED_FILES = frozenset({"snapshot.json", "risk.json", "technical.json", "options.json"})
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
 
@@ -346,7 +346,7 @@ def run_current_analysis(
     settings: Settings | None = None,
     invoke: Callable[[list[str]], CliResult] | None = None,
 ) -> dict[str, Any]:
-    """Acquire one snapshot; make risk/options failures explicit local degradations."""
+    """Acquire one snapshot; make risk/technical/options failures local degradations."""
 
     resolved_settings = settings or Settings.from_env()
     command = invoke or _invoke_cli
@@ -380,6 +380,26 @@ def run_current_analysis(
         elif risk_degradation is not None:
             degradations.append(risk_degradation)
 
+        technical_arguments = [
+            "technical",
+            "--snapshot",
+            snapshot_path,
+            "--json",
+            "--no-save",
+        ]
+        if risk is not None:
+            technical_arguments.extend(
+                ("--risk-report", owned.relative_path("risk.json"))
+            )
+        technical_result = command(technical_arguments)
+        technical, technical_degradation = _component_result(
+            technical_result, "technical"
+        )
+        if technical is not None:
+            owned.write_json("technical.json", technical)
+        elif technical_degradation is not None:
+            degradations.append(technical_degradation)
+
         options: dict[str, Any] | None = None
         if _has_held_options(snapshot):
             options_result = command(
@@ -394,6 +414,7 @@ def run_current_analysis(
         return {
             "snapshot": snapshot,
             "risk": risk,
+            "technical": technical,
             "options": options,
             "degradations": degradations,
         }

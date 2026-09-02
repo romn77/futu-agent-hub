@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-analyst.local/schemas/technical_report.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "technical_report_id", "as_of", "analysis_cutoff",
+    "source_snapshot_id", "source_risk_digest", "selection", "instruments",
+    "data_quality_status", "data_quality_notes", "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "technical_report_id": {"type": "string", "pattern": "^ta-[0-9a-f]{24}$"},
+    "as_of": {"type": "string", "format": "date-time", "maxLength": 64},
+    "analysis_cutoff": {"type": "string", "format": "date"},
+    "source_snapshot_id": {"type": "string", "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
+    "source_risk_digest": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{64}$"}]},
+    "selection": {"$ref": "#/$defs/selection"},
+    "instruments": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/instrument"}},
+    "data_quality_status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+    "data_quality_notes": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "decimal": {"type": "string", "maxLength": 512, "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+    "identity": {"type": "string", "pattern": "^US\\.[A-Z0-9]+(?:[.-][A-Z0-9]+)*$", "maxLength": 40},
+    "reason": {"enum": ["WEIGHT_AT_LEAST_5_PERCENT_NAV", "TOP_WEIGHT_FILL_TO_FIVE", "EXPLICIT_HELD_SYMBOL", "PRINCIPAL_RISK_1", "PRINCIPAL_RISK_2", "PRINCIPAL_RISK_3"]},
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible_count", "max_symbols", "tie_breaker", "selected", "omitted", "truncated"],
+      "properties": {
+        "eligible_count": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "max_symbols": {"const": 8},
+        "tie_breaker": {"const": "rule_priority_then_weight_desc_then_identity_asc"},
+        "selected": {
+          "type": "array", "maxItems": 8,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["identity", "weight", "reasons"],
+            "properties": {
+              "identity": {"$ref": "#/$defs/identity"},
+              "weight": {"$ref": "#/$defs/decimal"},
+              "reasons": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/reason"}}
+            }
+          }
+        },
+        "omitted": {"type": "array", "maxItems": 10000, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "bar": {
+      "type": "object", "additionalProperties": false,
+      "required": ["date", "open", "high", "low", "close", "volume"],
+      "properties": {
+        "date": {"type": "string", "format": "date"},
+        "open": {"$ref": "#/$defs/decimal"}, "high": {"$ref": "#/$defs/decimal"},
+        "low": {"$ref": "#/$defs/decimal"}, "close": {"$ref": "#/$defs/decimal"},
+        "volume": {"$ref": "#/$defs/decimal"}
+      }
+    },
+    "series": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "interval", "requested_start", "requested_end", "observed_start", "observed_end", "bar_count", "sha256", "bars", "reason"],
+      "properties": {
+        "status": {"enum": ["AVAILABLE", "UNAVAILABLE"]},
+        "interval": {"enum": ["1d", "1w"]},
+        "requested_start": {"type": "string", "format": "date"},
+        "requested_end": {"type": "string", "format": "date"},
+        "observed_start": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date"}]},
+        "observed_end": {"oneOf": [{"type": "null"}, {"type": "string", "format": "date"}]},
+        "bar_count": {"type": "integer", "minimum": 0, "maximum": 160},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bars": {"type": "array", "maxItems": 160, "items": {"$ref": "#/$defs/bar"}},
+        "reason": {"oneOf": [{"type": "null"}, {"enum": ["SOURCE_TIMEOUT", "SOURCE_OR_EVIDENCE_INVALID"]}]}
+      }
+    },
+    "pivot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["date", "kind", "price"],
+      "properties": {
+        "date": {"type": "string", "format": "date"},
+        "kind": {"enum": ["SWING_LOW", "SWING_HIGH"]},
+        "price": {"$ref": "#/$defs/decimal"}
+      }
+    },
+    "zone": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lower", "upper", "kind", "method", "evidence", "observations", "as_of"],
+      "properties": {
+        "lower": {"$ref": "#/$defs/decimal"}, "upper": {"$ref": "#/$defs/decimal"},
+        "kind": {"enum": ["SUPPORT", "RESISTANCE"]},
+        "method": {"const": "ATR_HALF_OR_HALF_PERCENT_CLUSTER"},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"enum": ["SWING_LOW", "SWING_HIGH", "VOLUME_CONGESTION"]}},
+        "observations": {"type": "integer", "minimum": 1, "maximum": 15},
+        "as_of": {"type": "string", "format": "date"}
+      }
+    },
+    "averages": {
+      "type": "object", "additionalProperties": false,
+      "required": ["daily_20", "daily_50", "weekly_20", "weekly_40"],
+      "properties": {
+        "daily_20": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+        "daily_50": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+        "weekly_20": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+        "weekly_40": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]}
+      }
+    },
+    "congestion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "method", "nodes"],
+      "properties": {
+        "status": {"enum": ["AVAILABLE", "UNAVAILABLE"]},
+        "method": {"const": "EIGHT_EQUAL_PRICE_BINS_BY_TRADED_VOLUME"},
+        "nodes": {
+          "type": "array", "maxItems": 3,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["price", "volume", "observations"],
+            "properties": {
+              "price": {"$ref": "#/$defs/decimal"}, "volume": {"$ref": "#/$defs/decimal"},
+              "observations": {"type": "integer", "minimum": 1, "maximum": 160}
+            }
+          }
+        }
+      }
+    },
+    "instrument": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "security_type", "selection_reasons", "status", "current_price", "latest_bar", "moving_averages", "swing_pivots", "volume_congestion", "support_zones", "resistance_zones", "quality_reasons", "evidence"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "security_type": {"enum": ["STOCK", "ETF"]},
+        "selection_reasons": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/reason"}},
+        "status": {"enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE"]},
+        "current_price": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/decimal"}]},
+        "latest_bar": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "object", "additionalProperties": false, "required": ["date", "close"], "properties": {"date": {"type": "string", "format": "date"}, "close": {"$ref": "#/$defs/decimal"}}}
+          ]
+        },
+        "moving_averages": {"$ref": "#/$defs/averages"},
+        "swing_pivots": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/pivot"}},
+        "volume_congestion": {"$ref": "#/$defs/congestion"},
+        "support_zones": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/zone"}},
+        "resistance_zones": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/zone"}},
+        "quality_reasons": {"type": "array", "maxItems": 4, "uniqueItems": true, "items": {"enum": ["INSUFFICIENT_HISTORY", "VOLUME_CONGESTION_UNAVAILABLE", "CURRENT_PRICE_EVIDENCE_INVALID"]}},
+        "evidence": {
+          "type": "object", "additionalProperties": false,
+          "required": ["daily", "weekly"],
+          "properties": {"daily": {"$ref": "#/$defs/series"}, "weekly": {"$ref": "#/$defs/series"}}
+        }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_snapshot", "source_risk_report", "adjustment", "session", "algorithm"],
+      "properties": {
+        "source_snapshot": {"$ref": "https://portfolio-analyst.local/schemas/portfolio_snapshot.schema.json"},
+        "source_risk_report": {"oneOf": [{"type": "null"}, {"$ref": "https://portfolio-analyst.local/schemas/risk_report.schema.json"}]},
+        "adjustment": {"const": "FORWARD"}, "session": {"const": "REGULAR_ONLY"},
+        "algorithm": {"const": "SUPPORT_RESISTANCE_CONTEXT_V1"}
+      }
+    }
+  }
+}

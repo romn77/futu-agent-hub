@@ -36,7 +36,7 @@ For every new comprehensive analysis:
    [research](references/tool-contract/core/research.md), and
    [technical](references/tool-contract/core/technical.md).
 4. Run the owned one-shot helper in the workflow to acquire a fresh `REAL` / `USD` snapshot and local
-   risk/option results. It applies the workflow's guarded cleanup threat model to restricted
+   risk/technical/option results. It applies the workflow's guarded cleanup threat model to restricted
    temporary state before returning.
 5. Use one bound snapshot for the entire report: account facts, risk, holdings, options when
    applicable, and research selection must share its `snapshot_id` and `as_of`.
@@ -47,8 +47,8 @@ For every new comprehensive analysis:
 The default path does not load optional workflows. It also does not load option or recommendation
 policy unless its condition below is met.
 
-This default route runs `risk` against the bound snapshot and composes the Markdown report directly;
-run `options` only when held option positions make that conditional route applicable. Do not run the
+This default route runs `risk` and then `technical` against the bound snapshot and composes the
+Markdown report directly; run `options` only when held option positions make that conditional route applicable. Do not run the
 bundled `analyze` command: it also reads lifecycle records and snapshot history, which are explicit-
 only workflows.
 

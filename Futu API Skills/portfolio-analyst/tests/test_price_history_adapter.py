@@ -10,6 +10,7 @@ import pytest
 
 from portfolio_analyst.futu_adapter import FutuAdapter, UnsafeFutuCommand
 from portfolio_analyst.price_history import FutuAdjustedPriceProvider
+from portfolio_analyst.technical import FutuTechnicalHistoryProvider
 from portfolio_analyst.skill_trust import audited_files
 
 
@@ -104,3 +105,88 @@ def test_provider_forwards_bounded_per_call_timeout_to_audited_adapter():
     )
 
     assert observed["timeout"] == 1.25
+
+
+def test_weekly_kline_has_a_distinct_bounded_read_only_contract(tmp_path):
+    adapter = FutuAdapter(_skill(tmp_path))
+    request = adapter.validate_request(
+        "get_kline",
+        [
+            "US.AAPL",
+            "--ktype",
+            "1w",
+            "--start",
+            "2024-08-27",
+            "--end",
+            "2026-08-27",
+            "--rehab",
+            "forward",
+            "--session",
+            "NONE",
+            "--num",
+            "110",
+            "--json",
+        ],
+    )
+
+    assert request.arguments[2] == "1w"
+    with pytest.raises(UnsafeFutuCommand):
+        adapter.validate_request(
+            "get_kline",
+            [
+                "US.AAPL",
+                "--ktype",
+                "1w",
+                "--start",
+                "2023-08-01",
+                "--end",
+                "2026-08-27",
+                "--rehab",
+                "forward",
+                "--session",
+                "NONE",
+                "--num",
+                "110",
+                "--json",
+            ],
+        )
+
+
+def test_technical_provider_uses_exact_daily_and_weekly_windows_and_identity():
+    calls = []
+
+    class Adapter:
+        def read_private_json(self, name, arguments, *, timeout):
+            calls.append((name, arguments, timeout))
+            interval = arguments[arguments.index("--ktype") + 1]
+            return {
+                "code": "US.AAPL",
+                "ktype": interval,
+                "source": "history",
+                "data": [
+                    {
+                        "time": "2026-08-26 00:00:00",
+                        "open": "100",
+                        "high": "103",
+                        "low": "99",
+                        "close": "102",
+                        "volume": "12345",
+                    }
+                ],
+            }
+
+    provider = FutuTechnicalHistoryProvider(Adapter())
+    daily = provider.bars(
+        "AAPL", market="US", interval="1d", as_of=date(2026, 8, 27), timeout_seconds=5
+    )
+    weekly = provider.bars(
+        "AAPL", market="US", interval="1w", as_of=date(2026, 8, 27), timeout_seconds=5
+    )
+
+    assert daily[0].close == 102
+    assert weekly[0].volume == 12345
+    assert calls[0][1][calls[0][1].index("--start") + 1] == "2026-02-08"
+    assert calls[0][1][calls[0][1].index("--num") + 1] == "160"
+    assert calls[1][1][calls[1][1].index("--start") + 1] == "2024-08-22"
+    assert calls[1][1][calls[1][1].index("--num") + 1] == "110"
+    assert all(call[2] == 5 for call in calls)

@@ -12,7 +12,8 @@ JSON or claim that a report/snapshot was saved. Keep the overview compact and th
 4. **Three principal risks** — exactly three, each tied to affected positions and evidence.
 5. **Complete holdings table** — every nonzero current filled holding.
 6. **Selected deep research** — why each name was selected, evidence, thesis/invalidation,
-   redundancy, cycle/macro sensitivity, and technical context.
+   redundancy, cycle/macro sensitivity, and technical context. Use the bound `technical` report's
+   observed regions; do not restate them as targets or predictions.
 7. **Option risk** — only if applicable; otherwise omit the section.
 8. **Macro impact** — concise and connected to the current portfolio.
 9. **Observations** — evidence-backed portfolio implications; recommendations only under the

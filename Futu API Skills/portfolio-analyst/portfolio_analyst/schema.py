@@ -299,6 +299,51 @@ def _validate(payload: dict[str, Any], name: str) -> None:
     validator.validate(payload)
 
 
+def _preflight_technical_shape(payload: Any) -> None:
+    """Bound untrusted technical reports before schema traversal and semantic replay."""
+
+    try:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ReportSemanticError("technical report is not JSON-compatible") from exc
+    if len(body.encode("utf-8")) > 4 * 1024 * 1024:
+        raise ReportSemanticError("technical report exceeds the 4 MiB validation budget")
+    if isinstance(payload, dict):
+        instruments = payload.get("instruments")
+        if isinstance(instruments, list) and len(instruments) > 8:
+            raise ReportSemanticError("technical report exceeds the eight-symbol budget")
+        if isinstance(instruments, list):
+            bar_count = 0
+            for item in instruments:
+                if not isinstance(item, dict):
+                    continue
+                evidence = item.get("evidence")
+                if not isinstance(evidence, dict):
+                    continue
+                for series in evidence.values():
+                    if isinstance(series, dict) and isinstance(series.get("bars"), list):
+                        bar_count += len(series["bars"])
+            if bar_count > 8 * (160 + 110):
+                raise ReportSemanticError("technical report exceeds the raw-bar budget")
+
+
+def validate_technical_document(payload: dict[str, Any]) -> None:
+    """Validate shape and reconstruct every derived field from bounded embedded evidence."""
+
+    _preflight_technical_shape(payload)
+    _validate(payload, "technical_report.schema.json")
+    try:
+        from .technical import replay_technical_document
+
+        expected = replay_technical_document(payload)
+    except ReportSemanticError:
+        raise
+    except Exception as exc:
+        raise ReportSemanticError(f"technical semantic validation failed: {exc}") from exc
+    if expected != payload:
+        raise ReportSemanticError("technical report does not match reconstructed evidence")
+
+
 def _semantic_error(detail: str) -> NoReturn:
     raise ReportSemanticError(f"correlation semantic validation failed: {detail}")
 

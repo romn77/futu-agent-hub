@@ -276,10 +276,52 @@ def test_cleanup_unlinks_only_owned_whitelist_then_removes_directory(tmp_path):
     path = owned.path
     owned.write_json("snapshot.json", _snapshot())
     owned.write_json("risk.json", {"status": "COMPLETE"})
+    owned.write_json("technical.json", {"status": "COMPLETE"})
 
     owned.cleanup()
 
     assert not path.exists()
+
+
+def test_current_analysis_runs_technical_after_risk_and_binds_available_risk(tmp_path):
+    home = _private_home(tmp_path)
+    calls = []
+
+    def invoke(arguments):
+        calls.append(arguments)
+        if arguments[0] == "snapshot":
+            return CliResult(0, json.dumps(_snapshot()), "")
+        return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+
+    envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
+
+    technical = next(arguments for arguments in calls if arguments[0] == "technical")
+    assert "--risk-report" in technical
+    assert technical.index("--risk-report") > technical.index("--snapshot")
+    assert envelope["technical"] == {"status": "COMPLETE"}
+    assert list(home.iterdir()) == []
+
+
+def test_current_analysis_keeps_technical_failure_local_when_risk_is_unavailable(tmp_path):
+    home = _private_home(tmp_path)
+    technical_arguments = []
+
+    def invoke(arguments):
+        if arguments[0] == "snapshot":
+            return CliResult(0, json.dumps(_snapshot()), "")
+        if arguments[0] == "risk":
+            return CliResult(2, json.dumps({"error": {"code": "UNSUPPORTED_PORTFOLIO"}}), "")
+        if arguments[0] == "technical":
+            technical_arguments.extend(arguments)
+            return CliResult(2, json.dumps({"error": {"code": "SOURCE_UNAVAILABLE"}}), "")
+        raise AssertionError(arguments)
+
+    envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
+
+    assert "--risk-report" not in technical_arguments
+    assert envelope["technical"] is None
+    assert [item["component"] for item in envelope["degradations"]] == ["risk", "technical"]
+    assert list(home.iterdir()) == []
 
 
 def test_cleanup_implementation_never_uses_recursive_deletion():

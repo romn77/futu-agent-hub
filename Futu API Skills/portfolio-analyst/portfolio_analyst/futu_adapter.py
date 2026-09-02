@@ -345,7 +345,7 @@ class FutuAdapter:
 
     @staticmethod
     def _validate_kline_request(arguments: tuple[str, ...]) -> FutuRequest:
-        """Require the one audited historical adjusted-daily invocation shape."""
+        """Require one of the exact bounded forward-adjusted history shapes."""
 
         if not arguments or not re.fullmatch(r"[A-Z]{2,4}\.[A-Z0-9][A-Z0-9.-]{0,31}", arguments[0]):
             raise UnsafeFutuCommand("K-line security code is outside the command policy")
@@ -367,9 +367,11 @@ class FutuAdapter:
         required = {"--ktype", "--start", "--end", "--rehab", "--session", "--num", "--json"}
         if set(options) != required:
             raise UnsafeFutuCommand("adjusted daily history requires the complete option policy")
-        if options["--ktype"] != "1d" or options["--rehab"] != "forward":
-            raise UnsafeFutuCommand("only forward-adjusted daily history is permitted")
-        if options["--session"] != "NONE" or options["--num"] != "1000":
+        ktype = options["--ktype"]
+        num = options["--num"]
+        if options["--rehab"] != "forward" or ktype not in {"1d", "1w"}:
+            raise UnsafeFutuCommand("only bounded forward-adjusted history is permitted")
+        if options["--session"] != "NONE":
             raise UnsafeFutuCommand("K-line option value is outside the command policy")
         try:
             start = date.fromisoformat(str(options["--start"]))
@@ -378,6 +380,14 @@ class FutuAdapter:
             raise UnsafeFutuCommand("K-line dates must use YYYY-MM-DD") from None
         if start > end:
             raise UnsafeFutuCommand("K-line start date must not follow end date")
+        window_days = (end - start).days
+        allowed_shape = (
+            (ktype == "1d" and num == "1000" and window_days <= 10_050)
+            or (ktype == "1d" and num == "160" and window_days <= 200)
+            or (ktype == "1w" and num == "110" and window_days <= 735)
+        )
+        if not allowed_shape:
+            raise UnsafeFutuCommand("K-line interval, page, or date window is outside policy")
         normalized = [arguments[0]]
         for option in ("--ktype", "--start", "--end", "--rehab", "--session", "--num"):
             normalized.extend((option, str(options[option])))

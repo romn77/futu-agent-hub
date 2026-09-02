@@ -24,9 +24,10 @@ python scripts/current_analysis.py
 ```
 
 Capture its stdout as internal evidence for report composition; never paste the raw JSON into chat or
-send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`, and
-`options` only when an option position is present. It never calls `analyze`, lifecycle, saved history,
-or a persistence flag.
+send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`,
+`technical`, and `options` only when an option position is present. Technical runs after risk with
+the bound risk report when available, or from snapshot weights when risk is unavailable. It never
+calls `analyze`, lifecycle, saved history, or a persistence flag.
 
 Expected startup failures return exit status 2 with a stable JSON envelope: `CONFIG_ERROR` for
 invalid settings, `PRIVATE_HOME_ERROR` for an unavailable/unsafe data home, and `IO_ERROR` for
@@ -53,16 +54,16 @@ pre-unlink and post-deletion checks narrow that time-of-check/time-of-use window
 races, but do not claim an atomic owned-only deletion guarantee against such an attacker.
 
 Snapshot acquisition/validation failure stops because current holdings authority is unavailable.
-In contrast, risk and options failures are local degradation: the helper returns `risk` or `options`
-as `null`, records the component's structured error in `degradations`, continues with the reliable
-snapshot and other component, and still performs safe cleanup. In particular,
+In contrast, risk, technical, and options failures are local degradation: the helper returns the
+failed component as `null`, records its structured error in `degradations`, continues with the
+reliable snapshot and other components, and still performs safe cleanup. In particular,
 `UNSUPPORTED_PORTFOLIO` for stock shorts does not abort the remaining report.
 
 ## 3. Build the portfolio layer
 
 Validate current holdings, NAV, cash, USD basis, and snapshot identity. Use the helper's deterministic
-`risk` result when available, then compose the comprehensive Markdown from snapshot/risk evidence and
-the bounded research layers. Reconcile position count and ensure every nonzero current filled holding
+`risk` and `technical` results when available, then compose comprehensive Markdown from the bound
+snapshot/risk/technical evidence and bounded research layers. Reconcile position count and ensure every nonzero current filled holding
 will appear in the final table. Keep cash outside the position table. Do not run `analyze`; it reads
 local lifecycle records and snapshot history even without output persistence.
 
