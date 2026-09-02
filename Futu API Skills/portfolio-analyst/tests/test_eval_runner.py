@@ -136,3 +136,17 @@ def test_eval_runner_fails_cleanly_for_a_nonmatching_object_key(tmp_path):
     assert completed.returncode == 1, completed.stderr
     result = json.loads(completed.stdout)
     assert result["cases"][0]["assertions"][0]["passed"] is False
+
+
+def test_eval_runner_rejects_empty_response_markdown(tmp_path):
+    evals_path, audit_path = _write_documents(tmp_path)
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["response_markdown"] = "  \n"
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    completed = _run(evals_path, audit_path)
+
+    assert completed.returncode == 2
+    result = json.loads(completed.stdout)
+    assert result["passed"] is False
+    assert "response_markdown must be a non-empty string" in result["error"]

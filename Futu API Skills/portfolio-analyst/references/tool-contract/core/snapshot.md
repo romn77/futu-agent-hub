@@ -16,6 +16,7 @@ FX evidence, and data-quality status/notes. It depends on audited read-only acco
 Missing position currency, required FX, invalid/non-positive NAV, or unsafe source identity fails
 closed instead of manufacturing valuation.
 
-For one-report binding, the orchestrator may place the returned body in a restricted temporary file
-below the private data home for downstream `--snapshot` reads, then remove it. That is orchestration,
-not a new CLI flag or canonical persistence mode.
+For one-report binding, use `scripts/current_analysis.py`. Its owned temporary-state contract is in
+`references/workflow.md`; it passes an exact restricted snapshot to downstream reads and removes only
+verified owned files. This is orchestration, not a new snapshot CLI flag or canonical persistence
+mode.

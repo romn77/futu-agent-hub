@@ -35,11 +35,11 @@ For every new comprehensive analysis:
    [risk](references/tool-contract/core/risk.md),
    [research](references/tool-contract/core/research.md), and
    [technical](references/tool-contract/core/technical.md).
-4. Acquire a fresh `REAL` / `USD` snapshot. Use one bound snapshot for the entire report: account
-   facts, risk, holdings, options when applicable, and research selection must share its
-   `snapshot_id` and `as_of`.
-5. Keep the snapshot in a private restricted temporary location only as long as needed, then delete
-   it. There is no default persistence of snapshots, reports, history, or research artifacts.
+4. Run the owned one-shot helper in the workflow to acquire a fresh `REAL` / `USD` snapshot and local
+   risk/option results. It verifies and cleans its restricted temporary state before returning.
+5. Use one bound snapshot for the entire report: account facts, risk, holdings, options when
+   applicable, and research selection must share its `snapshot_id` and `as_of`.
+   There is **no default persistence** of snapshots, reports, history, or research artifacts.
 6. Analyze every current filled holding, select at most eight names for deep research, and return the
    final report as Markdown in chat. Do not dump raw JSON.
 

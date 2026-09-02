@@ -31,6 +31,10 @@ arrays contain strings; snapshot and observations are objects. Observations are 
 emitted by the harness, not prose scraped from the Markdown. Keep the sidecar local and do not place
 private account IDs, user identity, or raw snapshot bodies in it.
 
+`response_markdown` must be a non-empty, non-whitespace string. Bundled cases assert their required
+report headings directly against it; the options case also checks that authoritative tool status and
+broader analysis capability gaps remain visibly distinct in the user-facing Markdown.
+
 The bundled cases use these observation fields:
 
 - `holdings.symbols`, `deep_research.max_names`, and

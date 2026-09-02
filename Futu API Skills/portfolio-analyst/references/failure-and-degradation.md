@@ -27,6 +27,8 @@ holdings table.
 
 ## Cleanup on failure
 
-Remove the private temporary snapshot and intermediate files on success or failure. Cleanup does not
+On success or component failure, the owned helper removes only its verified owned files and then its
+empty temporary directory. It never recursively deletes. If identity or entry-set validation fails,
+cleanup must fail closed: retain the remaining state and report its absolute path. Cleanup does not
 delete canonical user history. Never switch to `--save`, `--latest`, a stale artifact, SIMULATE, or a
 different base currency merely to make the workflow continue.

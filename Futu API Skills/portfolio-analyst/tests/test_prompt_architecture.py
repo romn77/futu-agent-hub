@@ -245,26 +245,33 @@ def test_web_research_is_public_minimal_and_treats_pages_as_untrusted():
         assert untrusted_rule in evidence
 
 
-def test_workflow_has_a_fail_closed_one_shot_temporary_recipe():
+def test_workflow_routes_to_the_owned_current_analysis_helper():
     workflow = _read("references/workflow.md")
     for requirement in (
-        "## One-shot restricted temporary recipe",
+        "## Owned one-shot helper",
+        "python scripts/current_analysis.py",
         "Settings.from_env()",
         "ensure_private_home(settings.data_home, create=True)",
-        "set -euo pipefail",
-        "umask 077",
-        "mktemp -d",
-        "trap",
-        ".resolve(strict=True)",
-        "resolved.parent != home",
-        "shutil.rmtree(resolved)",
-        "snapshot --trd-env REAL --base-currency USD --json --no-save",
-        "risk --snapshot",
-        "options --snapshot",
+        "device and inode",
+        "explicit whitelist",
+        "never recursively deletes",
+        "risk and options failures are local degradation",
+        "absolute retained path",
     ):
         assert requirement in workflow
     assert "rm -rf" not in workflow
+    assert "shutil.rmtree" not in workflow
     assert "$HOME" not in workflow
+
+
+def test_failure_policy_matches_fail_closed_owned_cleanup():
+    policy = _read("references/failure-and-degradation.md")
+
+    assert "verified owned files" in policy
+    assert "identity or entry-set validation fails" in policy
+    assert "retain the remaining state" in policy
+    assert "absolute path" in policy
+    assert "recursively delete" in policy
 
 
 def test_tool_contracts_distinguish_current_cli_from_unavailable_capabilities():
@@ -319,6 +326,24 @@ def test_three_behavior_evals_have_machine_checkable_assertions():
             assert assertion["target"].split(".", 1)[0] in {"response_markdown", "trace"}
             assert "value" in assertion
 
+        required_headings = {
+            "## Scope and data time",
+            "## One-line conclusion",
+            "## Overview",
+            "## Three principal risks",
+            "## Complete holdings table",
+            "## Selected deep research",
+            "## Macro impact",
+            "## Observations",
+            "## Data gaps and sources",
+        }
+        markdown_assertions = {
+            item["value"]
+            for item in case["assertions"]
+            if item["type"] == "contains" and item["target"] == "response_markdown"
+        }
+        assert required_headings <= markdown_assertions
+
     option_case = next(
         case for case in document["evals"] if case["id"] == "conditional-options-degradation"
     )
@@ -331,6 +356,8 @@ def test_three_behavior_evals_have_machine_checkable_assertions():
         ("contains", "trace.observations.options.capability_gaps", "multiplier"),
         ("contains", "trace.observations.options.capability_gaps", "underlying"),
         ("contains", "trace.observations.options.capability_gaps", "moneyness"),
+        ("contains", "response_markdown", "Tool status: COMPLETE"),
+        ("contains", "response_markdown", "Analysis capability gaps"),
     }
 
 

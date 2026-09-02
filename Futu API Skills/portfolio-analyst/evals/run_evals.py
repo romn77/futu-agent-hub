@@ -120,8 +120,7 @@ def load_audit_envelope(path: Path) -> dict[str, Any]:
     if audit.get("schema_version") != "1.0":
         raise EvalInputError("audit envelope schema_version must be 1.0")
     _validate_case_id(audit.get("case_id"), "audit envelope case_id")
-    if not isinstance(audit.get("response_markdown"), str):
-        raise EvalInputError("audit envelope response_markdown must be a string")
+    _require_string(audit.get("response_markdown"), "audit envelope response_markdown")
     trace = audit.get("trace")
     if not isinstance(trace, dict):
         raise EvalInputError("audit envelope trace must be an object")
