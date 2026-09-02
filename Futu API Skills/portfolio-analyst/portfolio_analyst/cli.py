@@ -649,7 +649,9 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             metadata_provider = None
             skill_dir = discover_futuapi_skill()
             if skill_dir is not None:
-                metadata_provider = FutuOptionMetadataProvider()
+                metadata_provider = FutuOptionMetadataProvider(
+                    host=settings.opend_host, port=settings.opend_port
+                )
                 if validate_option_quote_capability(skill_dir).valid:
                     option_provider = FutuOptionQuoteProvider(FutuAdapter(skill_dir))
             option_report = analyze_option_risk(
@@ -705,7 +707,9 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
 
                 adapter = FutuAdapter(skill_dir)
                 history_provider = FutuAdjustedPriceProvider(adapter)
-                metadata_provider = FutuOptionMetadataProvider()
+                metadata_provider = FutuOptionMetadataProvider(
+                    host=settings.opend_host, port=settings.opend_port
+                )
                 if validate_option_quote_capability(skill_dir).valid:
                     option_provider = FutuOptionQuoteProvider(adapter)
             risk = analyze_risk(

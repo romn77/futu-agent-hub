@@ -146,14 +146,26 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
                 "strike_time": "2026-01-16",
                 "strike_price": 1,
             }]}
-    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(
+            lambda cls: Settings(data_home=home, opend_host="10.0.0.8", opend_port=22222)
+        ),
+    )
     monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
     monkeypatch.setattr(
         cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
     )
     monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
     monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: provider)
-    monkeypatch.setattr(cli, "FutuOptionMetadataProvider", lambda: Metadata())
+    metadata_endpoints = []
+
+    def metadata_provider(*, host, port):
+        metadata_endpoints.append((host, port))
+        return Metadata()
+
+    monkeypatch.setattr(cli, "FutuOptionMetadataProvider", metadata_provider)
     from portfolio_analyst import price_history
 
     monkeypatch.setattr(price_history, "FutuAdjustedPriceProvider", lambda _adapter: None)
@@ -170,12 +182,116 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
 
     assert provider.calls == [("US.A260116C1", 5.0)]
     assert metadata_calls == [(["US.A260116C1"], 5.0)]
+    assert metadata_endpoints == [("10.0.0.8", 22222)]
     analysis_now = datetime.fromisoformat(payload["analysis_now"].replace("Z", "+00:00"))
     acquisition = datetime.fromisoformat(
         payload["quote_acquisition_started_at"].replace("Z", "+00:00")
     )
     assert acquisition - analysis_now >= timedelta(seconds=30)
     assert payload["quote_evidence"][0]["status"] == "SUCCESS"
+
+
+def test_standalone_options_passes_settings_endpoint_to_metadata_provider(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    _save(home, (_position("A260116C1"),))
+    endpoints = []
+
+    class Metadata:
+        def metadata(self, identities, *, timeout):
+            return {"data": [{
+                "code": identities[0], "lot_size": 100, "stock_owner": "US.A",
+                "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 1,
+            }]}
+
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(
+            lambda cls: Settings(data_home=home, opend_host="opend.internal", opend_port=33333)
+        ),
+    )
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
+    monkeypatch.setattr(
+        cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
+    )
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+    monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: Provider())
+
+    def metadata_provider(*, host, port):
+        endpoints.append((host, port))
+        return Metadata()
+
+    monkeypatch.setattr(cli, "FutuOptionMetadataProvider", metadata_provider)
+
+    assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["metadata_evidence"]["status"] == "SUCCESS"
+    assert endpoints == [("opend.internal", 33333)]
+
+
+def test_invalid_metadata_endpoint_degrades_options_without_internal_error(
+    monkeypatch, tmp_path, capsys
+):
+    home = tmp_path / "private"
+    _save(home, (_position("A260116C1"),))
+    monkeypatch.setattr(
+        Settings,
+        "from_env",
+        classmethod(lambda cls: Settings(data_home=home, opend_host="bad/host", opend_port=11111)),
+    )
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
+    monkeypatch.setattr(
+        cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
+    )
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+    monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: Provider())
+
+    assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "COMPLETE"
+    assert payload["metadata_evidence"]["reason_code"] == "OPTION_METADATA_ENDPOINT_INVALID"
+
+
+def test_options_cli_keeps_many_account_conflicts_schema_valid(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "private"
+    positions = tuple(
+        _position(
+            "A260116C1",
+            account_ref="acct-a" if index == 0 else f"acct-{index:03d}",
+            market_value="1",
+        )
+        for index in range(129)
+    )
+    _save(home, positions)
+
+    class Metadata:
+        def metadata(self, identities, *, timeout):
+            return {"data": [{
+                "code": identities[0], "lot_size": 100, "stock_owner": "US.A",
+                "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 1,
+            }]}
+
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
+    monkeypatch.setattr(
+        cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
+    )
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+    monkeypatch.setattr(
+        cli,
+        "FutuOptionQuoteProvider",
+        lambda _adapter: Provider(rows={"US.A260116C1": {"option_type": "PUT"}}),
+    )
+    monkeypatch.setattr(
+        cli, "FutuOptionMetadataProvider", lambda **_endpoint: Metadata()
+    )
+
+    assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [item["code"] for item in payload["quality_reasons"]].count(
+        "OPTION_METADATA_CONFLICT"
+    ) == 1
 
 
 def test_standalone_options_accepts_signed_legs_but_analyze_keeps_phase2_fail_closed(

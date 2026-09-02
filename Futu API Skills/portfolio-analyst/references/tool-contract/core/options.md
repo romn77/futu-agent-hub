@@ -24,6 +24,12 @@ covered-call or protective-put inventory coverage. The ATM band is
 `max(abs(strike) * 0.001, 0.01)` local currency units. Conflicting static and quote fields are
 suppressed with `OPTION_METADATA_CONFLICT`; the raw-Greek status is preserved.
 
+The parent validates and passes the configured `FUTU_OPEND_HOST` and `FUTU_OPEND_PORT` explicitly in
+an account-free canonical request. It inherits no other Futu endpoint, account, or credential
+configuration. A five-second timeout and
+cross-platform concurrent pipe readers enforce one combined 256 KiB stdout/stderr limit while the
+worker is running; overflow kills the worker and serializes only a stable reason code.
+
 The command never fetches a separate underlying price. Missing, cross-account, or disagreeing
 underlying rows keep money Delta and moneyness unknown. It excludes max profit/loss, breakeven,
 probability, margin, scenario P&L, beta adjustment, cash-secured puts, spreads, collars, and strategy

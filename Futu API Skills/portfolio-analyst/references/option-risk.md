@@ -38,13 +38,18 @@ selected contracts are omitted without another provider call. Remaining contract
 metrics and are marked budget-omitted, circuit-open, or unsupported.
 
 Static contract metadata is acquired separately by the package-owned quote-only
-`option_metadata_worker.py`. The parent sends a canonical list of at most 30 US/HK identities to
-`sys.executable -s`; the child creates only `OpenQuoteContext`, groups the request into at most one
+`option_metadata_worker.py`. The parent sends one canonical JSON object containing only the validated
+`FUTU_OPEND_HOST`, `FUTU_OPEND_PORT`, and at most 30 US/HK identities to `sys.executable -s`; no
+other Futu endpoint, account, or credential configuration is inherited. The child creates only
+`OpenQuoteContext` at that exact endpoint,
+groups the request into at most one
 US and one HK `get_stock_basicinfo(..., SecurityType.OPTION, code_list=...)` call, closes the context,
 and returns only code, lot size, stock owner, option type, strike date, and strike price. No account,
 portfolio, order, credential, or trade context crosses this boundary. The parent applies a five-second
-timeout, a 256 KiB stdout/stderr response budget, a controlled environment, strict identity-set and
-field validation, and stable sanitized failures.
+timeout and a cross-platform, running 256 KiB combined stdout/stderr budget. Concurrent bounded pipe
+readers kill the worker immediately on overflow and never accumulate or spool unbounded output. The
+parent also applies a controlled environment, strict identity-set and field validation, and stable
+sanitized failures.
 
 ## Raw units and calculations
 
@@ -85,6 +90,10 @@ For each account and exact underlying, short-Call or long-Put required shares ar
 all relevant legs once (`abs(quantity) * multiplier`) before comparison with positive stock quantity.
 The result is `FULL`, `PARTIAL`, `NONE`, or `UNKNOWN`. Long Calls and short Puts are
 `NOT_APPLICABLE`. The report does not infer cash-secured puts, spreads, collars, margin, or payoff.
+Underlying rows are indexed once by `(account_ref, market-qualified identity)`; duplicate rows retain
+the same strict price/currency/FX agreement rule. Quality reasons are deduplicated by
+`(code, scope, detail)`, sorted by that key, and capped at 128 with an explicit deterministic
+truncation reason if the unique set ever exceeds the bound.
 
 ## Status and freshness
 

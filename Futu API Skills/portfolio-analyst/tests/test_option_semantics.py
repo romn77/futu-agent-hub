@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from portfolio_analyst.option_risk import analyze_option_risk
+from portfolio_analyst.option_risk import _bounded_quality_reasons, analyze_option_risk
 from portfolio_analyst.option_metadata import OptionMetadataProviderError
 from portfolio_analyst.schema import ReportSemanticError, validate_option_risk_document
 from test_option_risk import Clock, Provider, _position, _snapshot
@@ -231,6 +231,83 @@ def test_schema_replay_rejects_tampered_derived_fields_and_metadata_evidence():
         mutator(tampered)
         with pytest.raises(ReportSemanticError):
             validate_option_risk_document(tampered)
+
+
+def test_conflict_reasons_are_stably_deduplicated_and_schema_bounded_for_129_accounts():
+    option = "US.AAPL260116C00150000"
+    positions = tuple(
+        _position(
+            option.removeprefix("US."),
+            account_ref="acct-a" if index == 0 else f"acct-{index:03d}",
+            quantity="1",
+            market_value="1",
+        )
+        for index in range(129)
+    )
+    report = analyze_option_risk(
+        _snapshot(positions),
+        quote_provider=Provider(rows={option: {"option_type": "PUT"}}),
+        metadata_provider=MetadataProvider({option: _metadata(option)}),
+        clock=Clock(),
+    ).to_dict()
+
+    conflicts = [
+        reason for reason in report["quality_reasons"]
+        if reason["code"] == "OPTION_METADATA_CONFLICT"
+    ]
+    assert conflicts == [{
+        "code": "OPTION_METADATA_CONFLICT",
+        "scope": option,
+        "detail": "quote and static metadata disagree for option_type",
+    }]
+    assert len(report["quality_reasons"]) <= 128
+    validate_option_risk_document(report)
+
+
+def test_quality_reason_unique_bound_has_deterministic_truncation_marker():
+    reasons = [
+        {"code": "TEST_REASON", "scope": f"scope-{index:03d}", "detail": "detail"}
+        for index in range(200)
+    ]
+
+    forward = _bounded_quality_reasons(reasons + reasons[:3])
+    reverse = _bounded_quality_reasons(list(reversed(reasons)))
+
+    assert forward == reverse
+    assert len(forward) == 128
+    marker = next(item for item in forward if item["code"] == "QUALITY_REASONS_TRUNCATED")
+    assert marker["detail"] == "73 additional unique quality reasons omitted by deterministic bound"
+
+
+def test_underlying_binding_builds_one_linear_index(monkeypatch):
+    import portfolio_analyst.option_risk as module
+
+    identities = [f"US.OPT{index:02d}" for index in range(30)]
+    options = tuple(
+        _position(identity.removeprefix("US."), quantity="-1", market_value="-1")
+        for identity in identities
+    )
+    stocks = tuple(_stock(quantity="100", price="150") for _ in range(100))
+    source = _snapshot(options + stocks)
+    metadata = MetadataProvider({identity: _metadata(identity) for identity in identities})
+    original = module._identity
+    calls = 0
+
+    def counted(position):
+        nonlocal calls
+        calls += 1
+        return original(position)
+
+    monkeypatch.setattr(module, "_identity", counted)
+    report = analyze_option_risk(
+        source,
+        quote_provider=Provider(),
+        metadata_provider=metadata,
+        clock=Clock(),
+    ).to_dict()
+
+    assert report["underlying_relationships"][0]["status"] == "FULL"
+    assert calls <= len(source.positions)
 
 
 def test_new_reports_are_v11_and_legacy_v10_reports_remain_replayable():

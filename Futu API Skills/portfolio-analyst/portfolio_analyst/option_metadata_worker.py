@@ -9,6 +9,7 @@ from typing import Callable
 
 
 _FIELDS = ("code", "lot_size", "stock_owner", "option_type", "strike_time", "strike_price")
+_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]*")
 
 
 def _plain_scalar(value: object) -> object:
@@ -34,37 +35,66 @@ def _canonical_identities(values: object) -> list[str]:
     return sorted(values)
 
 
-def _parse_request(raw: bytes) -> list[str]:
+def _endpoint(host: object, port: object) -> tuple[str, int]:
+    if (
+        not isinstance(host, str)
+        or not host
+        or host != host.strip()
+        or len(host.encode("utf-8")) > 253
+        or _HOST.fullmatch(host) is None
+        or isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise ValueError("OPTION_METADATA_REQUEST_INVALID")
+    return host, port
+
+
+def _parse_request(raw: bytes) -> tuple[str, int, list[str]]:
     try:
         values = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise ValueError("OPTION_METADATA_REQUEST_INVALID") from None
-    requested = _canonical_identities(values)
-    canonical = json.dumps(requested, ensure_ascii=False, separators=(",", ":")).encode()
+    if not isinstance(values, dict) or set(values) != {"host", "identities", "port"}:
+        raise ValueError("OPTION_METADATA_REQUEST_INVALID")
+    host, port = _endpoint(values["host"], values["port"])
+    requested = _canonical_identities(values["identities"])
+    canonical = json.dumps(
+        {"host": host, "identities": requested, "port": port},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     if raw != canonical:
         raise ValueError("OPTION_METADATA_REQUEST_INVALID")
-    return requested
+    return host, port, requested
 
 
 def collect_option_metadata(
     identities: object,
     *,
-    context_factory: Callable[[], object] | None = None,
+    context_factory: Callable[..., object] | None = None,
     option_security_type: object | None = None,
+    host: str,
+    port: int,
 ) -> dict[str, object]:
     requested = _canonical_identities(identities)
+    try:
+        host, port = _endpoint(host, port)
+    except ValueError:
+        raise ValueError("OPTION_METADATA_REQUEST_INVALID") from None
     market_values: dict[str, object] = {"US": "US", "HK": "HK"}
     if context_factory is None:
         from futu import Market, OpenQuoteContext, SecurityType
 
-        def context_factory() -> object:
-            return OpenQuoteContext(host="127.0.0.1", port=11111)
+        def context_factory(*, host: str, port: int) -> object:
+            return OpenQuoteContext(host=host, port=port)
 
         market_values = {"US": Market.US, "HK": Market.HK}
         option_security_type = SecurityType.OPTION
     if option_security_type is None:
         option_security_type = "OPTION"
-    context = context_factory()
+    context = context_factory(host=host, port=port)
     result_rows: list[dict[str, object]] = []
     try:
         for market in ("HK", "US"):
@@ -94,8 +124,8 @@ def main() -> int:
         raw = sys.stdin.buffer.read(16 * 1024 + 1)
         if len(raw) > 16 * 1024:
             return 2
-        payload = _parse_request(raw)
-        result = collect_option_metadata(payload)
+        host, port, identities = _parse_request(raw)
+        result = collect_option_metadata(identities, host=host, port=port)
         encoded = json.dumps(
             result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode()

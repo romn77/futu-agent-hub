@@ -42,6 +42,7 @@ TOTAL_WALL_SECONDS = 30.0
 CIRCUIT_BREAKER_FAILURES = 3
 MAX_SINGLE_RESPONSE_BYTES = 256 * 1024
 MAX_TOTAL_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_QUALITY_REASONS = 128
 _MARKET_TIMEZONES = {"US": ZoneInfo("America/New_York"), "HK": ZoneInfo("Asia/Hong_Kong")}
 _QUOTE_EVIDENCE_FIELDS = frozenset(
     {"code", *GREEKS, "option_type", "expire_time", "strike_price", "implied_volatility"}
@@ -562,29 +563,77 @@ def _collect_metadata(
     return {**base, "status": "UNAVAILABLE", "reason_code": reason}, {}
 
 
+@dataclass(frozen=True)
+class _UnderlyingBinding:
+    quantity: Decimal
+    price: Decimal
+    currency: str
+    fx: Decimal
+
+
+def _build_underlying_index(
+    snapshot: PortfolioSnapshot,
+) -> dict[tuple[str, str], _UnderlyingBinding | None]:
+    index: dict[tuple[str, str], _UnderlyingBinding | None] = {}
+    for item in snapshot.positions:
+        if item.security_type != "STOCK" or item.quantity <= 0:
+            continue
+        key = (item.account_ref, _identity(item))
+        current = index.get(key)
+        if key in index and current is None:
+            continue
+        if current is None:
+            index[key] = _UnderlyingBinding(
+                item.quantity, item.last_price_local, item.currency, item.fx_to_base
+            )
+            continue
+        if (
+            current.price != item.last_price_local
+            or current.currency != item.currency
+            or current.fx != item.fx_to_base
+        ):
+            index[key] = None
+            continue
+        quantity = current.quantity + item.quantity
+        _require_structural_decimals(quantity)
+        index[key] = _UnderlyingBinding(
+            quantity,
+            current.price,
+            current.currency,
+            current.fx,
+        )
+    return index
+
+
 def _bound_underlying(
-    snapshot: PortfolioSnapshot, account_ref: str, identity: str
+    index: Mapping[tuple[str, str], _UnderlyingBinding | None],
+    account_ref: str,
+    identity: str,
 ) -> tuple[Decimal, Decimal, Decimal] | None:
-    rows = [
-        item
-        for item in snapshot.positions
-        if item.account_ref == account_ref
-        and item.security_type == "STOCK"
-        and item.quantity > 0
-        and _identity(item) == identity
-    ]
-    if not rows:
+    binding = index.get((account_ref, identity))
+    if binding is None or binding.quantity <= 0 or binding.price <= 0 or binding.fx <= 0:
         return None
-    signatures = {(item.last_price_local, item.currency, item.fx_to_base) for item in rows}
-    if len(signatures) != 1:
-        return None
-    price, _currency, fx = next(iter(signatures))
-    if price <= 0 or fx <= 0:
-        return None
-    quantity = sum((item.quantity for item in rows), Decimal(0))
-    if quantity <= 0:
-        return None
-    return quantity, price, fx
+    return binding.quantity, binding.price, binding.fx
+
+
+def _bounded_quality_reasons(reasons: list[dict[str, str]]) -> list[dict[str, str]]:
+    unique = {
+        (item["code"], item["scope"], item["detail"]): item
+        for item in reasons
+    }
+    ordered = [unique[key] for key in sorted(unique)]
+    if len(ordered) <= MAX_QUALITY_REASONS:
+        return ordered
+    omitted = len(ordered) - (MAX_QUALITY_REASONS - 1)
+    retained = ordered[: MAX_QUALITY_REASONS - 1]
+    retained.append(
+        _reason(
+            "QUALITY_REASONS_TRUNCATED",
+            "option_report",
+            f"{omitted} additional unique quality reasons omitted by deterministic bound",
+        )
+    )
+    return sorted(retained, key=lambda item: (item["code"], item["scope"], item["detail"]))
 
 
 def _moneyness(option_type: str | None, strike: Decimal | None, price: Decimal | None) -> str:
@@ -640,6 +689,9 @@ def analyze_option_risk(
             "response_byte_count": 0,
             "response": None,
         }, {}
+    underlying_index = (
+        _build_underlying_index(snapshot) if report_schema_version == "1.1" else {}
+    )
 
     reasons: list[dict[str, str]] = []
     if unknown_count:
@@ -737,7 +789,9 @@ def analyze_option_risk(
         bound = (
             None
             if static is None
-            else _bound_underlying(snapshot, leg["account_ref"], static.underlying_identity)
+            else _bound_underlying(
+                underlying_index, leg["account_ref"], static.underlying_identity
+            )
         )
         underlying_price = None if bound is None else bound[1]
         underlying_fx = None if bound is None else bound[2]
@@ -804,15 +858,10 @@ def analyze_option_risk(
         required = sum(
             (abs(item["quantity"]) * item["contract_multiplier"] for item in legs), Decimal(0)
         )
-        bound = _bound_underlying(snapshot, account_ref, owner)
+        bound = _bound_underlying(underlying_index, account_ref, owner)
         available = None if bound is None else bound[0]
-        exact_positive_rows = any(
-            item.account_ref == account_ref
-            and item.security_type == "STOCK"
-            and item.quantity > 0
-            and _identity(item) == owner
-            for item in snapshot.positions
-        )
+        _require_structural_decimals(required, available)
+        exact_positive_rows = (account_ref, owner) in underlying_index
         if available is None:
             relationship_status = "UNKNOWN" if exact_positive_rows else "NONE"
         elif available >= required:
@@ -1028,7 +1077,7 @@ def analyze_option_risk(
         "implied_volatility_coverage": implied_volatility_coverage,
         "option_type_buckets": type_buckets,
         "expiry_buckets": expiry_buckets,
-        "quality_reasons": sorted(reasons, key=lambda item: (item["code"], item["scope"])),
+        "quality_reasons": _bounded_quality_reasons(reasons),
         "formulas": {
             "leg_greek": "signed_snapshot_quantity * unit_greek",
             "contract_adjusted_delta_units": (

@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 
 import pytest
 
 from portfolio_analyst.option_metadata import (
     FutuOptionMetadataProvider,
+    MAX_METADATA_RESPONSE_BYTES,
     OptionMetadataContractError,
     OptionMetadataProviderError,
+    _bounded_subprocess_run,
     parse_option_metadata_response,
 )
 from portfolio_analyst.option_metadata_worker import _parse_request, collect_option_metadata
@@ -62,7 +65,8 @@ def test_worker_batches_only_us_and_hk_and_returns_allowlisted_fields():
         },
     ]
 
-    def factory():
+    def factory(*, host, port):
+        assert (host, port) == ("10.0.0.8", 22222)
         context = _QuoteContext(calls, rows)
         contexts.append(context)
         return context
@@ -71,6 +75,8 @@ def test_worker_batches_only_us_and_hk_and_returns_allowlisted_fields():
         ["HK.00700260116P00300000", "US.AAPL260116C00150000"],
         context_factory=factory,
         option_security_type="OPTION",
+        host="10.0.0.8",
+        port=22222,
     )
 
     assert calls == [
@@ -113,7 +119,11 @@ def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
     context = _QuoteContext([], rows)
 
     result = collect_option_metadata(
-        ["US.A"], context_factory=lambda: context, option_security_type="OPTION"
+        ["US.A"],
+        context_factory=lambda **_endpoint: context,
+        option_security_type="OPTION",
+        host="127.0.0.1",
+        port=11111,
     )
 
     json.dumps(result, allow_nan=False)
@@ -126,12 +136,24 @@ def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
 )
 def test_worker_rejects_noncanonical_or_unbounded_requests_before_context(identities):
     with pytest.raises(ValueError, match="^OPTION_METADATA_REQUEST_INVALID$"):
-        collect_option_metadata(identities, context_factory=lambda: pytest.fail("no context"))
+        collect_option_metadata(
+            identities,
+            context_factory=lambda **_endpoint: pytest.fail("no context"),
+            host="127.0.0.1",
+            port=11111,
+        )
 
 
-def test_worker_requires_exact_canonical_json_bytes():
-    assert _parse_request(b'["HK.B","US.A"]') == ["HK.B", "US.A"]
-    for raw in (b'[ "US.A" ]', b'["US.A","HK.B"]', b'{"codes":["US.A"]}'):
+def test_worker_requires_exact_canonical_json_endpoint_request():
+    raw = b'{"host":"10.0.0.8","identities":["HK.B","US.A"],"port":22222}'
+    assert _parse_request(raw) == ("10.0.0.8", 22222, ["HK.B", "US.A"])
+    for raw in (
+        b'{ "host":"10.0.0.8","identities":["US.A"],"port":22222}',
+        b'{"host":"10.0.0.8","identities":["US.A","HK.B"],"port":22222}',
+        b'{"host":"bad/host","identities":["US.A"],"port":22222}',
+        b'{"host":"10.0.0.8","identities":["US.A"],"port":0}',
+        b'["US.A"]',
+    ):
         with pytest.raises(ValueError, match="^OPTION_METADATA_REQUEST_INVALID$"):
             _parse_request(raw)
 
@@ -157,13 +179,15 @@ def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(
             }]}).encode()
         )
 
-    provider = FutuOptionMetadataProvider(runner=runner)
+    provider = FutuOptionMetadataProvider(host="10.0.0.8", port=22222, runner=runner)
     payload = provider.metadata(["US.AAPL260116C00150000"], timeout=5.0)
 
     assert observed["command"][:2] == [sys.executable, "-s"]
     assert observed["shell"] is False
     assert observed["timeout"] == 5.0
-    assert observed["input"] == b'["US.AAPL260116C00150000"]'
+    assert observed["input"] == (
+        b'{"host":"10.0.0.8","identities":["US.AAPL260116C00150000"],"port":22222}'
+    )
     assert set(observed["env"]) == {"PATH", "PYTHONIOENCODING", "PYTHONNOUSERSITE"}
     assert payload["data"][0]["lot_size"] == 100
 
@@ -190,6 +214,76 @@ def test_parent_classifies_invalid_request_before_starting_worker():
     with pytest.raises(OptionMetadataProviderError) as caught:
         provider.metadata(["SG.BAD"], timeout=5.0)
     assert caught.value.reason_code == "OPTION_METADATA_REQUEST_INVALID"
+
+
+@pytest.mark.parametrize(("host", "port"), [("bad/host", 11111), ("localhost", 0), ("", 11111)])
+def test_parent_rejects_invalid_endpoint_before_starting_worker(host, port):
+    provider = FutuOptionMetadataProvider(
+        host=host,
+        port=port,
+        runner=lambda *_a, **_k: pytest.fail("no process"),
+    )
+    with pytest.raises(OptionMetadataProviderError) as caught:
+        provider.metadata(["US.A"], timeout=5.0)
+    assert caught.value.reason_code == "OPTION_METADATA_ENDPOINT_INVALID"
+
+
+def test_parent_enforces_combined_stdout_stderr_budget_for_injected_runner():
+    provider = FutuOptionMetadataProvider(
+        runner=lambda *_a, **_k: _Completed(
+            stdout=b"x" * (200 * 1024), stderr=b"private" * (15 * 1024)
+        )
+    )
+    with pytest.raises(OptionMetadataProviderError) as caught:
+        provider.metadata(["US.A"], timeout=5.0)
+    assert caught.value.reason_code == "OPTION_METADATA_RESPONSE_TOO_LARGE"
+
+
+def test_cross_platform_bounded_runner_kills_during_combined_output(monkeypatch, tmp_path):
+    import portfolio_analyst.option_metadata as module
+
+    marker = tmp_path / "should-not-exist"
+    monkeypatch.setattr(module, "resource", None, raising=False)
+    program = (
+        "import os,sys\n"
+        "chunk=b'x'*65536\n"
+        "for _ in range(64):\n"
+        " os.write(1,chunk); os.write(2,chunk)\n"
+        f"open({str(marker)!r},'w').write('unbounded')\n"
+    )
+
+    completed = _bounded_subprocess_run(
+        [sys.executable, "-c", program],
+        input=b"",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=5.0,
+        shell=False,
+        env={"PATH": ""},
+        check=False,
+    )
+
+    assert len(completed.stdout) + len(completed.stderr) == MAX_METADATA_RESPONSE_BYTES + 1
+    assert not marker.exists()
+
+
+def test_bounded_runner_timeout_cleans_pipe_threads():
+    with pytest.raises(subprocess.TimeoutExpired):
+        _bounded_subprocess_run(
+            [sys.executable, "-c", "import time; time.sleep(2)"],
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=0.05,
+            shell=False,
+            env={"PATH": ""},
+            check=False,
+        )
+
+    assert not any(
+        thread.name.startswith("portfolio-option-metadata-")
+        for thread in threading.enumerate()
+    )
 
 
 @pytest.mark.parametrize(

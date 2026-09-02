@@ -11,15 +11,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
+import threading
 from typing import Callable, Iterable, Mapping
 
 from .models import _decimal_text, decimal_fits_report
-
-try:
-    import resource
-except ImportError:  # pragma: no cover - non-POSIX fallback is still post-validated.
-    resource = None
 
 
 MAX_METADATA_CONTRACTS = 30
@@ -31,46 +26,110 @@ METADATA_FIELDS = frozenset(
 _IDENTITY = re.compile(r"^(US|HK)\.[A-Z0-9][A-Z0-9.-]{0,63}$")
 
 
-def _limit_metadata_output() -> None:
-    if resource is not None:
-        maximum = MAX_METADATA_RESPONSE_BYTES + 1
-        resource.setrlimit(resource.RLIMIT_FSIZE, (maximum, maximum))
+def validate_opend_endpoint(host: object, port: object) -> tuple[str, int]:
+    if (
+        not isinstance(host, str)
+        or not host
+        or host != host.strip()
+        or len(host.encode("utf-8")) > 253
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", host) is None
+        or isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise ValueError("OPTION_METADATA_ENDPOINT_INVALID")
+    return host, port
 
 
 def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-    """Spool child output outside memory and enforce one combined evidence budget."""
+    """Drain both pipes concurrently and kill as soon as their combined budget is exceeded."""
 
-    supplied_input = kwargs.pop("input", None)
+    supplied_input = kwargs.pop("input", b"")
     kwargs.pop("stdout", None)
     kwargs.pop("stderr", None)
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        completed = subprocess.run(
-            command,
-            input=supplied_input,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            preexec_fn=_limit_metadata_output if resource is not None else None,
-            **kwargs,
+    timeout = kwargs.pop("timeout", None)
+    kwargs.pop("check", None)
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **kwargs,
+    )
+    chunks: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
+    state = {"size": 0, "overflow": False}
+    lock = threading.Lock()
+
+    def drain(name: str, stream: object) -> None:
+        while True:
+            chunk = stream.read(64 * 1024)  # type: ignore[attr-defined]
+            if not chunk:
+                return
+            should_kill = False
+            with lock:
+                remaining = MAX_METADATA_RESPONSE_BYTES - state["size"]
+                if remaining > 0:
+                    chunks[name].append(chunk[:remaining])
+                state["size"] += len(chunk)
+                if state["size"] > MAX_METADATA_RESPONSE_BYTES and not state["overflow"]:
+                    state["overflow"] = True
+                    should_kill = True
+            if should_kill:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
+    assert process.stdout is not None and process.stderr is not None and process.stdin is not None
+    readers = [
+        threading.Thread(
+            target=drain,
+            args=(name, stream),
+            daemon=True,
+            name=f"portfolio-option-metadata-{name}",
         )
-        stdout_file.seek(0, 2)
-        stderr_file.seek(0, 2)
-        stdout_size = stdout_file.tell()
-        stderr_size = stderr_file.tell()
-        if stdout_size + stderr_size > MAX_METADATA_RESPONSE_BYTES:
-            return subprocess.CompletedProcess(
-                completed.args,
-                completed.returncode,
-                b"x" * (MAX_METADATA_RESPONSE_BYTES + 1),
-                b"",
-            )
-        stdout_file.seek(0)
-        stderr_file.seek(0)
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        try:
+            if supplied_input:
+                process.stdin.write(supplied_input)  # type: ignore[arg-type]
+                process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            process.stdin.close()
+        try:
+            returncode = process.wait(timeout=timeout)  # type: ignore[arg-type]
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise subprocess.TimeoutExpired(command, timeout) from None
+    finally:
+        for reader in readers:
+            reader.join(timeout=2)
+        if any(reader.is_alive() for reader in readers):
+            process.kill()
+            process.wait()
+            process.stdout.close()
+            process.stderr.close()
+            for reader in readers:
+                reader.join(timeout=1)
+    if state["overflow"]:
         return subprocess.CompletedProcess(
-            completed.args,
-            completed.returncode,
-            stdout_file.read(stdout_size),
-            stderr_file.read(stderr_size),
+            process.args,
+            returncode,
+            b"x" * (MAX_METADATA_RESPONSE_BYTES + 1),
+            b"",
         )
+    return subprocess.CompletedProcess(
+        process.args,
+        returncode,
+        b"".join(chunks["stdout"]),
+        b"".join(chunks["stderr"]),
+    )
 
 
 class OptionMetadataContractError(ValueError):
@@ -181,20 +240,35 @@ class FutuOptionMetadataProvider:
     def __init__(
         self,
         *,
+        host: str = "127.0.0.1",
+        port: int = 11111,
         runner: Callable[..., object] | None = None,
         worker_path: Path | None = None,
     ) -> None:
+        self._endpoint_error: str | None = None
+        try:
+            self._host, self._port = validate_opend_endpoint(host, port)
+        except ValueError:
+            self._host, self._port = "", 0
+            self._endpoint_error = "OPTION_METADATA_ENDPOINT_INVALID"
         self._runner = runner or _bounded_subprocess_run
         self._worker_path = worker_path or Path(__file__).with_name("option_metadata_worker.py")
 
     def metadata(self, identities: Iterable[object], *, timeout: float) -> object:
+        if self._endpoint_error is not None:
+            raise OptionMetadataProviderError(self._endpoint_error)
         try:
             requested = canonical_option_identities(identities)
         except (TypeError, ValueError):
             raise OptionMetadataProviderError("OPTION_METADATA_REQUEST_INVALID") from None
         if timeout <= 0 or timeout > METADATA_TIMEOUT_SECONDS:
             raise OptionMetadataProviderError("OPTION_METADATA_REQUEST_INVALID")
-        encoded = json.dumps(requested, ensure_ascii=False, separators=(",", ":")).encode()
+        encoded = json.dumps(
+            {"host": self._host, "identities": requested, "port": self._port},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
         env = {
             "PATH": os.environ.get("PATH", ""),
             "PYTHONIOENCODING": "utf-8",
@@ -220,7 +294,7 @@ class FutuOptionMetadataProvider:
         returncode = getattr(completed, "returncode", 1)
         if not isinstance(stdout, bytes) or not isinstance(stderr, bytes):
             raise OptionMetadataProviderError("OPTION_METADATA_RESPONSE_INVALID")
-        if len(stdout) > MAX_METADATA_RESPONSE_BYTES or len(stderr) > MAX_METADATA_RESPONSE_BYTES:
+        if len(stdout) + len(stderr) > MAX_METADATA_RESPONSE_BYTES:
             raise OptionMetadataProviderError("OPTION_METADATA_RESPONSE_TOO_LARGE")
         if returncode != 0:
             raise OptionMetadataProviderError("OPTION_METADATA_SOURCE_UNAVAILABLE")
