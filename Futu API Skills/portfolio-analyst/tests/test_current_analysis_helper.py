@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,9 +12,11 @@ from portfolio_analyst.current_analysis import (
     CurrentAnalysisError,
     OwnedTemporaryRun,
     TemporaryCleanupError,
+    main,
     run_current_analysis,
 )
-from portfolio_analyst.settings import Settings
+from portfolio_analyst.private_home import PrivateHomeError
+from portfolio_analyst.settings import Settings, SettingsError
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX private-temp contract")
@@ -141,6 +145,29 @@ def test_cleanup_rejects_same_path_directory_replacement_and_reports_absolute_pa
     assert (moved_path / "snapshot.json").is_file()
 
 
+def test_cleanup_rechecks_directory_identity_immediately_before_unlink(tmp_path, monkeypatch):
+    home = _private_home(tmp_path)
+    owned = OwnedTemporaryRun.create(home)
+    owned.write_json("snapshot.json", _snapshot())
+    original_path = owned.path
+    moved_path = home / "moved-after-initial-validation"
+    original_validation = owned._validate_before_cleanup
+
+    def validate_then_replace():
+        original_validation()
+        original_path.rename(moved_path)
+        original_path.mkdir(mode=0o700)
+
+    monkeypatch.setattr(owned, "_validate_before_cleanup", validate_then_replace)
+
+    with pytest.raises(TemporaryCleanupError) as caught:
+        owned.cleanup()
+
+    assert str(original_path) in str(caught.value)
+    assert (moved_path / "snapshot.json").is_file()
+    assert original_path.is_dir()
+
+
 def test_setup_failure_retains_unverified_directory_and_reports_absolute_path(
     tmp_path, monkeypatch
 ):
@@ -180,6 +207,53 @@ def test_cleanup_rejects_file_identity_replacement_without_deleting_any_file(tmp
     assert original.is_file()
 
 
+def test_cleanup_rechecks_file_identity_immediately_before_unlink(tmp_path, monkeypatch):
+    home = _private_home(tmp_path)
+    owned = OwnedTemporaryRun.create(home)
+    owned.write_json("snapshot.json", _snapshot())
+    snapshot = owned.path / "snapshot.json"
+    original = home / "moved-after-initial-validation.json"
+    original_validation = owned._validate_before_cleanup
+
+    def validate_then_replace():
+        original_validation()
+        snapshot.rename(original)
+        snapshot.write_text("replacement", encoding="utf-8")
+        snapshot.chmod(0o600)
+
+    monkeypatch.setattr(owned, "_validate_before_cleanup", validate_then_replace)
+
+    with pytest.raises(TemporaryCleanupError) as caught:
+        owned.cleanup()
+
+    assert str(owned.path) in str(caught.value)
+    assert snapshot.read_text(encoding="utf-8") == "replacement"
+    assert original.is_file()
+
+
+def test_cleanup_reports_a_file_recreated_immediately_after_unlink(tmp_path, monkeypatch):
+    import portfolio_analyst.current_analysis as current_analysis
+
+    home = _private_home(tmp_path)
+    owned = OwnedTemporaryRun.create(home)
+    owned.write_json("snapshot.json", _snapshot())
+    snapshot = owned.path / "snapshot.json"
+    real_unlink = current_analysis.os.unlink
+
+    def unlink_then_recreate(name, *, dir_fd):
+        real_unlink(name, dir_fd=dir_fd)
+        snapshot.write_text("concurrent replacement", encoding="utf-8")
+        snapshot.chmod(0o600)
+
+    monkeypatch.setattr(current_analysis.os, "unlink", unlink_then_recreate)
+
+    with pytest.raises(TemporaryCleanupError, match="changed after unlink") as caught:
+        owned.cleanup()
+
+    assert str(owned.path) in str(caught.value)
+    assert snapshot.read_text(encoding="utf-8") == "concurrent replacement"
+
+
 def test_cleanup_rejects_unknown_content_without_deleting_owned_files(tmp_path):
     home = _private_home(tmp_path)
     owned = OwnedTemporaryRun.create(home)
@@ -213,5 +287,80 @@ def test_cleanup_implementation_never_uses_recursive_deletion():
 
     source = Path(current_analysis.__file__).read_text(encoding="utf-8")
     assert "rmtree" not in source
+    assert 'getattr(os, "O_DIRECTORY", 0)' in source
     assert re.search(r"os\.unlink\(.+dir_fd=", source)
     assert re.search(r"os\.rmdir\(.+dir_fd=", source)
+
+
+@pytest.mark.parametrize(
+    ("exception", "code", "message"),
+    [
+        (
+            SettingsError("sensitive /source/settings.py"),
+            "CONFIG_ERROR",
+            "portfolio configuration is invalid",
+        ),
+        (
+            PrivateHomeError("sensitive /private/path"),
+            "PRIVATE_HOME_ERROR",
+            "private portfolio data home is unavailable or unsafe",
+        ),
+        (OSError("sensitive /source/io.py"), "IO_ERROR", "current analysis I/O failed"),
+    ],
+)
+def test_main_maps_expected_configuration_and_io_errors_without_traceback_or_paths(
+    monkeypatch, capsys, exception, code, message
+):
+    import portfolio_analyst.current_analysis as current_analysis
+
+    def fail():
+        raise exception
+
+    monkeypatch.setattr(current_analysis, "run_current_analysis", fail)
+
+    assert main() == 2
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "error": {"code": code, "message": message},
+    }
+    assert "sensitive" not in captured.out
+    assert "Traceback" not in captured.out
+
+
+@pytest.mark.parametrize("exception_type", [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_main_does_not_swallow_programming_errors_or_control_flow(monkeypatch, exception_type):
+    import portfolio_analyst.current_analysis as current_analysis
+
+    def fail():
+        raise exception_type("stop")
+
+    monkeypatch.setattr(current_analysis, "run_current_analysis", fail)
+
+    with pytest.raises(exception_type):
+        main()
+
+
+def test_script_rejects_tmp_as_data_home_with_stable_json_and_no_traceback():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "current_analysis.py"
+    environment = os.environ.copy()
+    environment["PORTFOLIO_AGENT_HOME"] = "/tmp"
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout) == {
+        "ok": False,
+        "error": {
+            "code": "PRIVATE_HOME_ERROR",
+            "message": "private portfolio data home is unavailable or unsafe",
+        },
+    }
+    assert "Traceback" not in completed.stdout

@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from . import cli
-from .private_home import ensure_private_home, require_secure_platform_mutation
-from .settings import Settings
+from .private_home import PrivateHomeError, ensure_private_home, require_secure_platform_mutation
+from .settings import Settings, SettingsError
 
 
 _ALLOWED_FILES = frozenset({"snapshot.json", "risk.json", "options.json"})
-_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -148,21 +148,21 @@ class OwnedTemporaryRun:
             raise CurrentAnalysisError(f"temporary file is not owned: {self.path / name}")
         return str(Path(self.path.name) / name)
 
-    def _validate_before_cleanup(self) -> None:
+    def _validate_container_identity(self) -> None:
         try:
             home_path_metadata = self.home.lstat()
             home_fd_metadata = os.fstat(self._home_fd)
             path_metadata = self.path.lstat()
-            anchored_metadata = os.stat(
-                self.path.name, dir_fd=self._home_fd, follow_symlinks=False
-            )
+            anchored_metadata = os.stat(self.path.name, dir_fd=self._home_fd, follow_symlinks=False)
             directory_fd_metadata = os.fstat(self._directory_fd)
         except OSError as exc:
             raise self._cleanup_error(f"identity check failed: {exc}") from exc
 
-        if self.home.is_symlink() or not _same_identity(
-            home_path_metadata, self._home_identity
-        ) or not _same_identity(home_fd_metadata, self._home_identity):
+        if (
+            self.home.is_symlink()
+            or not _same_identity(home_path_metadata, self._home_identity)
+            or not _same_identity(home_fd_metadata, self._home_identity)
+        ):
             raise self._cleanup_error("private-home device/inode identity changed")
         if self.path.is_symlink() or any(
             not _same_identity(metadata, self._directory_identity)
@@ -175,49 +175,80 @@ class OwnedTemporaryRun:
         ):
             raise self._cleanup_error("temporary directory is not a private mode-0700 directory")
 
+    def _entries(self, *, context: str) -> set[str]:
         try:
-            entries = set(os.listdir(self._directory_fd))
+            return set(os.listdir(self._directory_fd))
         except OSError as exc:
-            raise self._cleanup_error(f"cannot enumerate owned directory: {exc}") from exc
+            raise self._cleanup_error(f"cannot enumerate directory {context}: {exc}") from exc
+
+    def _validate_owned_file(self, name: str) -> None:
+        expected_identity = self._files[name]
+        try:
+            metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise self._cleanup_error(f"cannot verify {name}: {exc}") from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or not _same_identity(metadata, expected_identity)
+        ):
+            raise self._cleanup_error(f"owned file identity or mode changed: {name}")
+
+    def _validate_before_cleanup(self) -> None:
+        self._validate_container_identity()
+        entries = self._entries(context="before cleanup")
         expected_entries = set(self._files)
         if entries != expected_entries:
             unknown = sorted(entries - expected_entries)
             missing = sorted(expected_entries - entries)
             raise self._cleanup_error(f"entry set changed; unknown={unknown}; missing={missing}")
 
-        for name, expected_identity in self._files.items():
-            try:
-                metadata = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
-            except OSError as exc:
-                raise self._cleanup_error(f"cannot verify {name}: {exc}") from exc
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_nlink != 1
-                or not _same_identity(metadata, expected_identity)
-            ):
-                raise self._cleanup_error(f"owned file identity or mode changed: {name}")
+        for name in self._files:
+            self._validate_owned_file(name)
+
+    def _verify_after_unlink(self, name: str, remaining: set[str]) -> None:
+        try:
+            os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise self._cleanup_error(f"cannot verify {name} after unlink: {exc}") from exc
+        else:
+            raise self._cleanup_error(f"entry changed after unlink: {name} is present")
+
+        self._validate_container_identity()
+        entries = self._entries(context=f"after unlink of {name}")
+        if entries != remaining:
+            unknown = sorted(entries - remaining)
+            missing = sorted(remaining - entries)
+            raise self._cleanup_error(
+                f"entry set changed after unlink of {name}; unknown={unknown}; missing={missing}"
+            )
 
     def cleanup(self) -> None:
         if self._closed:
             return
         try:
             self._validate_before_cleanup()
+            remaining = set(self._files)
             for name in sorted(self._files):
+                # Narrow the non-atomic stat/unlink window immediately before each exact-name unlink.
+                self._validate_container_identity()
+                self._validate_owned_file(name)
                 os.unlink(name, dir_fd=self._directory_fd)
-            os.close(self._directory_fd)
-            self._directory_fd = -1
-            try:
-                final_metadata = os.stat(
-                    self.path.name, dir_fd=self._home_fd, follow_symlinks=False
-                )
-            except OSError as exc:
-                raise self._cleanup_error(f"final directory identity check failed: {exc}") from exc
-            if not _same_identity(final_metadata, self._directory_identity):
-                raise self._cleanup_error(
-                    "temporary-directory identity changed before final removal"
-                )
+                remaining.remove(name)
+                self._verify_after_unlink(name, remaining)
+            self._validate_container_identity()
             os.rmdir(self.path.name, dir_fd=self._home_fd)
+            try:
+                os.stat(self.path.name, dir_fd=self._home_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise self._cleanup_error(f"cannot verify directory after rmdir: {exc}") from exc
+            else:
+                raise self._cleanup_error("directory path is present after rmdir")
         except TemporaryCleanupError:
             raise
         except OSError as exc:
@@ -342,9 +373,7 @@ def run_current_analysis(
 
         degradations: list[dict[str, Any]] = []
         risk: dict[str, Any] | None = None
-        risk_result = command(
-            ["risk", "--snapshot", snapshot_path, "--json", "--no-save"]
-        )
+        risk_result = command(["risk", "--snapshot", snapshot_path, "--json", "--no-save"])
         risk, risk_degradation = _component_result(risk_result, "risk")
         if risk is not None:
             owned.write_json("risk.json", risk)
@@ -375,16 +404,26 @@ def run_current_analysis(
 def main() -> int:
     try:
         envelope = run_current_analysis()
-    except (CurrentAnalysisError, TemporaryCleanupError) as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {"code": type(exc).__name__, "message": str(exc)},
-                },
-                ensure_ascii=False,
-            )
+    except SettingsError:
+        return _emit_stable_error("CONFIG_ERROR", "portfolio configuration is invalid")
+    except PrivateHomeError:
+        return _emit_stable_error(
+            "PRIVATE_HOME_ERROR",
+            "private portfolio data home is unavailable or unsafe",
         )
-        return 2
+    except OSError:
+        return _emit_stable_error("IO_ERROR", "current analysis I/O failed")
+    except (CurrentAnalysisError, TemporaryCleanupError) as exc:
+        return _emit_stable_error(type(exc).__name__, str(exc))
     print(json.dumps(envelope, ensure_ascii=False))
     return 0
+
+
+def _emit_stable_error(code: str, message: str) -> int:
+    print(
+        json.dumps(
+            {"ok": False, "error": {"code": code, "message": message}},
+            ensure_ascii=False,
+        )
+    )
+    return 2

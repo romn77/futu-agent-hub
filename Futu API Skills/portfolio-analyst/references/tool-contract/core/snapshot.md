@@ -17,6 +17,6 @@ Missing position currency, required FX, invalid/non-positive NAV, or unsafe sour
 closed instead of manufacturing valuation.
 
 For one-report binding, use `scripts/current_analysis.py`. Its owned temporary-state contract is in
-`references/workflow.md`; it passes an exact restricted snapshot to downstream reads and removes only
-verified owned files. This is orchestration, not a new snapshot CLI flag or canonical persistence
-mode.
+`references/workflow.md`; it passes an exact restricted snapshot to downstream reads and performs
+allowlisted identity-checked cleanup within that document's stated threat model. This is
+orchestration, not a new snapshot CLI flag or canonical persistence mode.

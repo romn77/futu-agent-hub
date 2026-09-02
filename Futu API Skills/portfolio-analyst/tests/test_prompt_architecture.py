@@ -44,9 +44,7 @@ def _read(relative: str) -> str:
 
 
 def _section(document: str, heading: str) -> str:
-    match = re.search(
-        rf"(?ms)^## {re.escape(heading)}\s*$\n(.*?)(?=^## |\Z)", document
-    )
+    match = re.search(rf"(?ms)^## {re.escape(heading)}\s*$\n(.*?)(?=^## |\Z)", document)
     assert match, f"missing section: {heading}"
     return match.group(1)
 
@@ -72,6 +70,7 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     assert "current USD US-stock account holdings" in skill
     assert "REAL" in skill and "USD" in skill
     assert "one bound snapshot" in skill
+    assert "guarded cleanup threat model" in skill
     assert "no default persistence" in skill
     assert "never unlock" in skill.lower()
     assert "place order" in skill.lower()
@@ -255,8 +254,16 @@ def test_workflow_routes_to_the_owned_current_analysis_helper():
         "device and inode",
         "explicit whitelist",
         "never recursively deletes",
+        "no portable atomic unlink-if-inode",
+        "immediately before each unlink",
+        "after each deletion",
+        "same-UID malicious concurrent mutation is outside",
         "risk and options failures are local degradation",
         "absolute retained path",
+        "CONFIG_ERROR",
+        "PRIVATE_HOME_ERROR",
+        "IO_ERROR",
+        "programming errors and process-control exceptions are not caught",
     ):
         assert requirement in workflow
     assert "rm -rf" not in workflow
@@ -267,11 +274,12 @@ def test_workflow_routes_to_the_owned_current_analysis_helper():
 def test_failure_policy_matches_fail_closed_owned_cleanup():
     policy = _read("references/failure-and-degradation.md")
 
-    assert "verified owned files" in policy
+    assert "detected path replacement, symlink, or non-cooperative accidental change" in policy
     assert "identity or entry-set validation fails" in policy
     assert "retain the remaining state" in policy
     assert "absolute path" in policy
     assert "recursively delete" in policy
+    assert "same-UID malicious concurrent mutation" in policy
 
 
 def test_tool_contracts_distinguish_current_cli_from_unavailable_capabilities():
@@ -349,8 +357,7 @@ def test_three_behavior_evals_have_machine_checkable_assertions():
     )
     assert option_case["fixture"]["option_tool_status"] == "COMPLETE"
     assert {
-        (item["type"], item["target"], item["value"])
-        for item in option_case["assertions"]
+        (item["type"], item["target"], item["value"]) for item in option_case["assertions"]
     } >= {
         ("equals", "trace.observations.options.tool_status", "COMPLETE"),
         ("contains", "trace.observations.options.capability_gaps", "multiplier"),
@@ -378,5 +385,13 @@ def test_eval_runner_and_audit_envelope_are_documented():
         "equals",
         "count_equals",
         "nonzero",
+        "external harness",
+        "does not execute the Skill",
+        "must not be supplied or self-reported by the model under test",
+        "runner_id",
+        "runner_version",
+        "generated_at",
+        "case_input_sha256",
+        "EXTERNAL_AUDIT_ENVELOPE_ONLY",
     ):
         assert requirement in readme

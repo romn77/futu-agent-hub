@@ -28,18 +28,29 @@ send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `sn
 `options` only when an option position is present. It never calls `analyze`, lifecycle, saved history,
 or a persistence flag.
 
+Expected startup failures return exit status 2 with a stable JSON envelope: `CONFIG_ERROR` for
+invalid settings, `PRIVATE_HOME_ERROR` for an unavailable/unsafe data home, and `IO_ERROR` for
+pre-acquisition I/O failure. These messages omit exception detail, tracebacks, and source paths.
+Unexpected programming errors and process-control exceptions are not caught.
+
 The helper resolves `Settings.from_env()` and calls
 `ensure_private_home(settings.data_home, create=True)`. It creates one direct mode-0700 temporary
 child and mode-0600 regular files. It records the device and inode of the private home, temporary
 directory, and every file at creation.
 
 Cleanup validates those identities through anchored directory descriptors before making any change.
-It requires the directory entries to equal its explicit whitelist, rechecks regular-file type, mode,
-link count, device, and inode, then unlinks each known file by exact name and removes the now-empty
-directory. It never recursively deletes. If the home/directory/file identity changed, a link or
-unknown entry appeared, or any check/removal failed, cleanup fails closed, preserves the remaining
-state, and returns an error containing the absolute retained path. No cleanup exception or error may
-omit that path.
+It requires the directory entries to equal its explicit whitelist and rechecks the directory and
+file identity immediately before each unlink. It verifies the directory identity and remaining entry
+set after each deletion, then rechecks before and after removing the empty directory.
+It never recursively deletes. If a checked identity changed, a link or unknown entry appeared, or a
+check/removal failed, cleanup fails closed, preserves the remaining state, and returns an error
+containing the absolute retained path. No cleanup exception or error may omit that path.
+
+Threat model: these checks defend against detected path replacement, symlinks, and accidental or
+non-cooperative changes. Portable POSIX APIs provide no portable atomic unlink-if-inode operation;
+therefore same-UID malicious concurrent mutation is outside this portable guarantee. The adjacent
+pre-unlink and post-deletion checks narrow that time-of-check/time-of-use window and detect many
+races, but do not claim an atomic owned-only deletion guarantee against such an attacker.
 
 Snapshot acquisition/validation failure stops because current holdings authority is unavailable.
 In contrast, risk and options failures are local degradation: the helper returns `risk` or `options`
@@ -75,5 +86,5 @@ triggers in `intent-routing.md`.
 
 Return the output-contract sections as Markdown in chat. Cite all account facts with the same
 `snapshot_id` and `as_of`; cite changing external facts with traceable links and timestamps. Show
-local gaps next to impacted conclusions and summarize them in the final gaps section. The helper has
-already removed its verified temporary state before returning a successful envelope.
+local gaps next to impacted conclusions and summarize them in the final gaps section. Before a
+successful envelope returns, the helper has completed guarded cleanup under the threat model above.

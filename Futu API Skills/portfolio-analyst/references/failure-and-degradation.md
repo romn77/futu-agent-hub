@@ -27,8 +27,13 @@ holdings table.
 
 ## Cleanup on failure
 
-On success or component failure, the owned helper removes only its verified owned files and then its
-empty temporary directory. It never recursively deletes. If identity or entry-set validation fails,
-cleanup must fail closed: retain the remaining state and report its absolute path. Cleanup does not
-delete canonical user history. Never switch to `--save`, `--latest`, a stale artifact, SIMULATE, or a
-different base currency merely to make the workflow continue.
+On success or component failure, the helper applies guarded identity and allowlist checks around
+exact-name deletion, then removes the empty temporary directory. It never recursively deletes. If
+identity or entry-set validation fails, cleanup must fail closed: retain the remaining state and
+report its absolute path.
+
+This protects against detected path replacement, symlink, or non-cooperative accidental change.
+It is not an atomic guarantee against same-UID malicious concurrent mutation racing the portable
+stat/unlink boundary. Cleanup does not delete canonical user history. Never switch to `--save`,
+`--latest`, a stale artifact, SIMULATE, or a different base currency merely to make the workflow
+continue.

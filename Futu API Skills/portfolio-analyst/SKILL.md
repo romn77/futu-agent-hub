@@ -36,7 +36,8 @@ For every new comprehensive analysis:
    [research](references/tool-contract/core/research.md), and
    [technical](references/tool-contract/core/technical.md).
 4. Run the owned one-shot helper in the workflow to acquire a fresh `REAL` / `USD` snapshot and local
-   risk/option results. It verifies and cleans its restricted temporary state before returning.
+   risk/option results. It applies the workflow's guarded cleanup threat model to restricted
+   temporary state before returning.
 5. Use one bound snapshot for the entire report: account facts, risk, holdings, options when
    applicable, and research selection must share its `snapshot_id` and `as_of`.
    There is **no default persistence** of snapshots, reports, history, or research artifacts.
