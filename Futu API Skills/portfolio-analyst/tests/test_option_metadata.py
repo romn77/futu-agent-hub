@@ -14,6 +14,7 @@ from portfolio_analyst.option_metadata import (
     MAX_METADATA_RESPONSE_BYTES,
     OptionMetadataContractError,
     OptionMetadataProviderError,
+    _POSIX_PROCESS_GROUPS,
     _bounded_subprocess_run,
     parse_option_metadata_response,
 )
@@ -241,11 +242,9 @@ def test_parent_enforces_combined_stdout_stderr_budget_for_injected_runner():
     assert caught.value.reason_code == "OPTION_METADATA_RESPONSE_TOO_LARGE"
 
 
-def test_cross_platform_bounded_runner_kills_during_combined_output(monkeypatch, tmp_path):
-    import portfolio_analyst.option_metadata as module
-
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_posix_process_group_bounded_runner_kills_during_combined_output(tmp_path):
     marker = tmp_path / "should-not-exist"
-    monkeypatch.setattr(module, "resource", None, raising=False)
     program = (
         "import os,sys\n"
         "chunk=b'x'*65536\n"
