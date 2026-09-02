@@ -310,6 +310,7 @@ def _preflight_technical_shape(payload: Any) -> None:
     max_string_bytes = 1024 * 1024
     max_key_bytes = 512
     max_total_string_bytes = 4 * 1024 * 1024
+    max_json_bytes = 4 * 1024 * 1024
 
     def fail(detail: str) -> NoReturn:
         raise ReportSemanticError(f"technical validation preflight failed: {detail}")
@@ -317,6 +318,44 @@ def _preflight_technical_shape(payload: Any) -> None:
     nodes = 0
     operations = 0
     string_bytes = 0
+    json_bytes = 0
+
+    def consume_json_bytes(amount: int) -> None:
+        nonlocal json_bytes
+        json_bytes += amount
+        if json_bytes > max_json_bytes:
+            fail("4 MiB document budget exceeded")
+
+    def string_sizes(value: str, *, maximum: int, label: str) -> tuple[int, int]:
+        """Return UTF-8 content and compact ensure-ascii-false JSON byte sizes."""
+
+        content = 0
+        encoded = 2  # surrounding JSON quotes
+        for character in value:
+            codepoint = ord(character)
+            if 0xD800 <= codepoint <= 0xDFFF:
+                fail("invalid Unicode string")
+            if codepoint <= 0x7F:
+                content += 1
+                if character in {'"', "\\"} or character in "\b\f\n\r\t":
+                    encoded += 2
+                elif codepoint < 0x20:
+                    encoded += 6
+                else:
+                    encoded += 1
+            elif codepoint <= 0x7FF:
+                content += 2
+                encoded += 2
+            elif codepoint <= 0xFFFF:
+                content += 3
+                encoded += 3
+            else:
+                content += 4
+                encoded += 4
+            if content > maximum:
+                fail(f"{label} byte budget exceeded")
+        return content, encoded
+
     active_containers: set[int] = set()
     stack: list[tuple[bool, Any, int]] = [(False, payload, 0)]
     while stack:
@@ -338,19 +377,28 @@ def _preflight_technical_shape(payload: Any) -> None:
                 fail("cyclic container")
             if len(value) > max_width:
                 fail("container width exceeded")
+            consume_json_bytes(2 + max(len(value) - 1, 0))
+            if isinstance(value, dict):
+                consume_json_bytes(len(value))  # one colon per mapping entry
             active_containers.add(identity)
             stack.append((True, value, depth))
             if isinstance(value, dict):
                 children: list[Any] = []
                 for key, child in value.items():
+                    operations += 1
+                    if operations > max_operations:
+                        fail("operation budget exceeded")
                     if not isinstance(key, str):
                         fail("mapping key is not a string")
                     if len(key) > max_key_bytes:
                         fail("mapping key byte budget exceeded")
-                    encoded_key = key.encode("utf-8")
-                    if len(encoded_key) > max_key_bytes:
-                        fail("mapping key byte budget exceeded")
-                    string_bytes += len(encoded_key)
+                    content_size, encoded_size = string_sizes(
+                        key,
+                        maximum=max_key_bytes,
+                        label="mapping key",
+                    )
+                    string_bytes += content_size
+                    consume_json_bytes(encoded_size)
                     children.append(child)
                 for child in reversed(children):
                     stack.append((False, child, depth + 1))
@@ -360,18 +408,30 @@ def _preflight_technical_shape(payload: Any) -> None:
         elif isinstance(value, str):
             if len(value) > max_string_bytes:
                 fail("single string byte budget exceeded")
-            encoded = value.encode("utf-8")
-            if len(encoded) > max_string_bytes:
-                fail("single string byte budget exceeded")
-            string_bytes += len(encoded)
-        elif value is None or isinstance(value, bool):
-            pass
+            content_size, encoded_size = string_sizes(
+                value,
+                maximum=max_string_bytes,
+                label="single string",
+            )
+            string_bytes += content_size
+            consume_json_bytes(encoded_size)
+        elif value is None:
+            consume_json_bytes(4)
+        elif isinstance(value, bool):
+            consume_json_bytes(4 if value else 5)
         elif isinstance(value, int):
-            if value.bit_length() > 4096:
+            bit_length = value.bit_length()
+            if bit_length > 4096:
                 fail("integer scalar budget exceeded")
+            decimal_digits_upper_bound = max(
+                1,
+                (bit_length * 30_103) // 100_000 + 1,
+            )
+            consume_json_bytes(decimal_digits_upper_bound + int(value < 0))
         elif isinstance(value, float):
             if not math.isfinite(value):
                 fail("non-finite numeric scalar")
+            consume_json_bytes(len(repr(value)))
         else:
             fail("non-JSON scalar")
         if string_bytes > max_total_string_bytes:
@@ -384,11 +444,17 @@ def _preflight_technical_shape(payload: Any) -> None:
             separators=(",", ":"),
             allow_nan=False,
         )
-    except (RecursionError, TypeError, ValueError) as exc:
+    except (RecursionError, TypeError, UnicodeEncodeError, ValueError) as exc:
         raise ReportSemanticError(
             "technical validation preflight failed: JSON encoding refused"
         ) from exc
-    if len(body.encode("utf-8")) > 4 * 1024 * 1024:
+    try:
+        exact_size = len(body.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ReportSemanticError(
+            "technical validation preflight failed: JSON encoding refused"
+        ) from exc
+    if exact_size > max_json_bytes:
         fail("4 MiB document budget exceeded")
     if isinstance(payload, dict):
         instruments = payload.get("instruments")

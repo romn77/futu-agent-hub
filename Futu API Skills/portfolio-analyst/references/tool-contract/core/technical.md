@@ -93,6 +93,9 @@ unknown. Never use this technical context alone for advice.
 The strict JSON report embeds the source snapshot, optional validated risk report, selected
 identities, normalized raw bars, and a SHA-256 digest for every series. It binds the snapshot ID,
 risk-report digest when present, cutoff, adjustment, session, and algorithm version. Runtime
-validation preflights 4 MiB, eight symbols, and 2,160 raw bars, then applies JSON Schema and fully
-replays selection, normalization, averages, pivots, congestion, zones, quality, hashes, and report
-identity. Tampered raw or derived evidence fails validation.
+validation first applies an iterative conservative 4 MiB encoded-JSON budget, counting container
+punctuation, escaped UTF-8 keys and values, and scalar representations before materializing the
+document as JSON. Lone Unicode surrogates fail closed. A compact `ensure_ascii=False` serialization
+then enforces the exact 4 MiB limit. The validator also preflights eight symbols and 2,160 raw bars,
+then applies JSON Schema and fully replays selection, normalization, averages, pivots, congestion,
+zones, quality, hashes, and report identity. Tampered raw or derived evidence fails validation.

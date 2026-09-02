@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_DOWN, ROUND_UP, localcontext
+import json
 import subprocess
 
 import pytest
@@ -562,3 +563,50 @@ def test_untrusted_preflight_rejects_depth_width_strings_cycles_and_non_json_sca
         for series in item["evidence"].values()
     ) == 8 * (160 + 105)
     validate_technical_document(near_bar_budget)
+
+
+@pytest.mark.parametrize(
+    "addition",
+    (
+        json.loads(r'{"hostile":"\ud800"}'),
+        json.loads(r'{"\ud800":"hostile"}'),
+    ),
+)
+def test_untrusted_preflight_rejects_lone_surrogates_as_semantic_errors(addition):
+    report = analyze_technical(_portfolio([("AAA", ".30")]), provider=Provider()).to_dict()
+    report.update(addition)
+
+    with pytest.raises(
+        ReportSemanticError,
+        match="technical validation preflight failed: invalid Unicode string",
+    ):
+        validate_technical_document(report)
+
+
+def test_untrusted_preflight_rejects_large_integer_body_before_final_json_dump(monkeypatch):
+    report = analyze_technical(_portfolio([("AAA", ".30")]), provider=Provider()).to_dict()
+    integer_visits = 0
+
+    class CountedLargeInt(int):
+        def bit_length(self):
+            nonlocal integer_visits
+            integer_visits += 1
+            return super().bit_length()
+
+    report["hostile"] = [CountedLargeInt((1 << 4095) - 1)] * 20_000
+    final_dump_called = False
+
+    def forbidden_final_dump(*args, **kwargs):
+        nonlocal final_dump_called
+        final_dump_called = True
+        raise AssertionError("final json.dumps must not run after the preflight budget is exceeded")
+
+    monkeypatch.setattr("portfolio_analyst.schema.json.dumps", forbidden_final_dump)
+
+    with pytest.raises(
+        ReportSemanticError,
+        match="technical validation preflight failed: 4 MiB document budget exceeded",
+    ):
+        validate_technical_document(report)
+    assert final_dump_called is False
+    assert 0 < integer_visits < 20_000
