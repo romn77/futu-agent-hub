@@ -1,7 +1,7 @@
 ---
 name: portfolio-analyst
 description: Review and diagnose the user's current USD US-stock account holdings from one fresh read-only Futu snapshot, with complete holdings coverage and selective evidence-backed research.
-allowed-tools: Bash Read
+allowed-tools: Bash Read WebSearch WebFetch
 metadata:
   version: 0.6.0
 ---
@@ -30,7 +30,6 @@ For every new comprehensive analysis:
    [failure and degradation](references/failure-and-degradation.md).
 3. Read the current core tool contracts:
    [snapshot](references/tool-contract/core/snapshot.md),
-   [analyze](references/tool-contract/core/analyze.md),
    [risk](references/tool-contract/core/risk.md),
    [research](references/tool-contract/core/research.md), and
    [technical](references/tool-contract/core/technical.md).
@@ -44,6 +43,11 @@ For every new comprehensive analysis:
 
 The default path does not load optional workflows. It also does not load option or recommendation
 policy unless its condition below is met.
+
+This default route runs `risk` against the bound snapshot and composes the Markdown report directly;
+run `options` only when held option positions make that conditional route applicable. Do not run the
+bundled `analyze` command: it also reads lifecycle records and snapshot history, which are explicit-
+only workflows.
 
 ## Conditional routes
 

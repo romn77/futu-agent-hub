@@ -68,7 +68,7 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     skill = _read("SKILL.md")
     assert len(skill.splitlines()) <= 250
     assert re.search(r"(?m)^name: portfolio-analyst$", skill)
-    assert re.search(r"(?m)^allowed-tools: Bash Read$", skill)
+    assert re.search(r"(?m)^allowed-tools: Bash Read WebSearch WebFetch$", skill)
     assert "current USD US-stock account holdings" in skill
     assert "REAL" in skill and "USD" in skill
     assert "one bound snapshot" in skill
@@ -85,13 +85,13 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
         "references/output-contract.md",
         "references/failure-and-degradation.md",
         "tool-contract/core/snapshot.md",
-        "tool-contract/core/analyze.md",
         "tool-contract/core/risk.md",
         "tool-contract/core/research.md",
         "tool-contract/core/technical.md",
     ):
         assert required in default_route
     assert "optional-workflows/" not in default_route
+    assert "tool-contract/core/analyze.md" not in default_route
     assert "options-policy.md" not in default_route
     assert "recommendation-policy.md" not in default_route
 
@@ -100,6 +100,20 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     assert "recommendation-policy.md" in conditional_route
     for optional in OPTIONAL_WORKFLOWS:
         assert f"optional-workflows/{optional}" in conditional_route
+
+
+def test_default_workflow_uses_risk_not_analyze_and_keeps_options_conditional():
+    skill = _read("SKILL.md")
+    workflow = _read("references/workflow.md")
+    analyze = _read("references/tool-contract/core/analyze.md")
+
+    assert "default route runs `risk`" in skill
+    assert "run `options` only" in skill
+    assert "`risk`" in workflow
+    assert "Do not run `analyze`" in workflow
+    assert "`options`" in workflow and "only when" in workflow
+    assert "lifecycle repository/history" in analyze
+    assert "not used by the default comprehensive route" in analyze
 
 
 def test_default_analysis_policy_matches_the_narrow_product_contract():
@@ -211,6 +225,10 @@ def test_tool_contracts_distinguish_current_cli_from_unavailable_capabilities():
     assert "options --snapshot" in options and "RAW_CONTRACT_UNITS_NO_MULTIPLIER" in options
     assert "No dedicated research CLI is currently exposed" in research
     assert "No dedicated technical CLI is currently exposed" in technical
+    for capability in (research, technical):
+        assert "WebSearch" in capability
+        assert "WebFetch" in capability
+        assert "authorized read-only host tools" in capability
     assert "unavailable/degraded" in research
     assert "unavailable/degraded" in technical
 

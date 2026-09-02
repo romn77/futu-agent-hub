@@ -23,13 +23,15 @@ failure. Do not place it in canonical `snapshots/YYYY/MM` history.
 
 ## 3. Build the portfolio layer
 
-Validate current holdings, NAV, cash, USD basis, and snapshot identity. Run deterministic risk and
-analysis against the bound snapshot. Reconcile position count and ensure every nonzero current filled
-holding will appear in the final table. Keep cash outside the position table.
+Validate current holdings, NAV, cash, USD basis, and snapshot identity. Run deterministic `risk`
+against the bound snapshot, then compose the comprehensive Markdown from snapshot/risk evidence and
+the bounded research layers. Reconcile position count and ensure every nonzero current filled holding
+will appear in the final table. Keep cash outside the position table. Do not run `analyze`; it reads
+local lifecycle records and snapshot history even without output persistence.
 
-If stock shorts make the current deterministic analyzer unsupported, retain available snapshot facts,
-label full short-risk analysis unavailable, and continue the other reliable sections. Do not change
-the Python calculation or portray the unsupported result as complete.
+If stock shorts make the current deterministic risk calculation unsupported, retain available
+snapshot facts, label full short-risk analysis unavailable, and continue the other reliable sections.
+Do not change the Python calculation or portray the unsupported result as complete.
 
 ## 4. Select and gather deep evidence
 
@@ -39,7 +41,7 @@ Research failure for one name does not erase its baseline holding row.
 
 ## 5. Add conditional layers
 
-Load and run the option route only when option positions exist. Load recommendation/simulation,
+Run `options` only when option positions exist. Load recommendation/simulation,
 trades, performance, lifecycle, candidates, pending orders, or persistence only upon their explicit
 triggers in `intent-routing.md`.
 
