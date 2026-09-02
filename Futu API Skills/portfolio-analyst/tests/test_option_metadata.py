@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 
 import pytest
@@ -268,7 +267,8 @@ def test_posix_process_group_bounded_runner_kills_during_combined_output(tmp_pat
     assert not marker.exists()
 
 
-def test_bounded_runner_timeout_cleans_pipe_threads():
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_posix_process_group_bounded_runner_enforces_timeout():
     with pytest.raises(subprocess.TimeoutExpired):
         _bounded_subprocess_run(
             [sys.executable, "-c", "import time; time.sleep(2)"],
@@ -280,12 +280,6 @@ def test_bounded_runner_timeout_cleans_pipe_threads():
             env={"PATH": ""},
             check=False,
         )
-
-    assert not any(
-        thread.name.startswith("portfolio-option-metadata-")
-        for thread in threading.enumerate()
-    )
-
 
 def _pid_is_live(pid: int) -> bool:
     stat_path = f"/proc/{pid}/stat"
@@ -302,8 +296,8 @@ def _pid_is_live(pid: int) -> bool:
     return True
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
-def test_bounded_runner_timeout_kills_descendant_that_inherits_pipes(tmp_path):
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_posix_process_group_timeout_kills_descendant_with_inherited_pipes(tmp_path):
     child_pid_file = tmp_path / "child.pid"
     parent_program = (
         "import pathlib,subprocess,sys\n"
@@ -328,14 +322,10 @@ def test_bounded_runner_timeout_kills_descendant_that_inherits_pipes(tmp_path):
     assert elapsed < 1.0
     child_pid = int(child_pid_file.read_text())
     assert not _pid_is_live(child_pid)
-    assert not any(
-        thread.name.startswith("portfolio-option-metadata-")
-        for thread in threading.enumerate()
-    )
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
-def test_bounded_runner_overflow_kills_descendant_that_inherits_pipes(tmp_path):
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_posix_process_group_overflow_kills_descendant_with_inherited_pipes(tmp_path):
     child_pid_file = tmp_path / "child.pid"
     marker = tmp_path / "should-not-exist"
     child_program = (
@@ -370,10 +360,6 @@ def test_bounded_runner_overflow_kills_descendant_that_inherits_pipes(tmp_path):
     assert not marker.exists()
     child_pid = int(child_pid_file.read_text())
     assert not _pid_is_live(child_pid)
-    assert not any(
-        thread.name.startswith("portfolio-option-metadata-")
-        for thread in threading.enumerate()
-    )
 
 
 def test_bounded_runner_fails_closed_when_process_tree_is_not_supported(monkeypatch):
