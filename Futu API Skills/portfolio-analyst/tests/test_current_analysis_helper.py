@@ -324,6 +324,37 @@ def test_current_analysis_keeps_technical_failure_local_when_risk_is_unavailable
     assert list(home.iterdir()) == []
 
 
+def test_current_analysis_returns_technical_timeout_degradation_report_and_cleans_up(tmp_path):
+    home = _private_home(tmp_path)
+
+    def invoke(arguments):
+        if arguments[0] == "snapshot":
+            return CliResult(0, json.dumps(_snapshot()), "")
+        if arguments[0] == "risk":
+            return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+        if arguments[0] == "technical":
+            return CliResult(
+                0,
+                json.dumps(
+                    {
+                        "status": "UNAVAILABLE",
+                        "reason": "SOURCE_TIMEOUT",
+                    }
+                ),
+                "",
+            )
+        raise AssertionError(arguments)
+
+    envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
+
+    assert envelope["technical"] == {
+        "status": "UNAVAILABLE",
+        "reason": "SOURCE_TIMEOUT",
+    }
+    assert envelope["degradations"] == []
+    assert list(home.iterdir()) == []
+
+
 def test_cleanup_implementation_never_uses_recursive_deletion():
     import portfolio_analyst.current_analysis as current_analysis
 

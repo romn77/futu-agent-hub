@@ -30,8 +30,11 @@ The eligible population is nonzero held US stocks and ETFs. Account rows are gro
 5. within a rule break ties by weight descending, then canonical identity ascending; truncate at
    eight.
 
-The output records selection reasons, the tie-breaker, truncation, and omitted requested identities.
-These explain coverage; they are not scores, rankings, recommendations, or attention labels.
+The output records the bounded, deterministically sorted `explicit_requested` identities separately
+from selection reasons, the tie-breaker, truncation, and omitted requested identities. This field is
+authoritative even when the eight-name cap omits an explicit request, so replay never infers the
+request from selected rows. These explain coverage; they are not scores, rankings, recommendations,
+or attention labels.
 
 ## Audited K-line boundary
 

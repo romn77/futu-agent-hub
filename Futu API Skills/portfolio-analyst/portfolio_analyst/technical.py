@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
@@ -70,6 +71,7 @@ class SelectedHolding:
 @dataclass(frozen=True)
 class TechnicalSelection:
     selected: tuple[SelectedHolding, ...]
+    explicit_requested: tuple[str, ...]
     omitted: tuple[str, ...]
     eligible_count: int
     truncated: bool
@@ -321,6 +323,9 @@ def select_technical_holdings(
     )
     return TechnicalSelection(
         selected=selected,
+        explicit_requested=tuple(
+            sorted(explicit_identities, key=lambda value: (-grouped[value]["weight"], value))
+        ),
         omitted=tuple(requested[MAX_TECHNICAL_SYMBOLS:]),
         eligible_count=len(ordered),
         truncated=len(requested) > MAX_TECHNICAL_SYMBOLS,
@@ -662,7 +667,7 @@ def analyze_technical(
                     raise FutuReadError("source returned no bars")
                 parsed[interval] = normalized
                 evidence[label] = _available_evidence(interval, start, cutoff, normalized)
-            except TimeoutError:
+            except (TimeoutError, subprocess.TimeoutExpired):
                 evidence[label] = _unavailable_evidence(
                     interval, start, cutoff, "SOURCE_TIMEOUT"
                 )
@@ -763,6 +768,7 @@ def analyze_technical(
                 }
                 for item in selection.selected
             ],
+            "explicit_requested": list(selection.explicit_requested),
             "omitted": list(selection.omitted),
             "truncated": selection.truncated,
         },
@@ -790,11 +796,7 @@ def replay_technical_document(payload: Mapping[str, Any]) -> dict[str, Any]:
         item["identity"]: item["evidence"]
         for item in payload["instruments"]
     }
-    explicit = tuple(
-        item["identity"]
-        for item in payload["selection"]["selected"]
-        if "EXPLICIT_HELD_SYMBOL" in item["reasons"]
-    )
+    explicit = tuple(payload["selection"]["explicit_requested"])
     return analyze_technical(
         snapshot,
         provider=None,

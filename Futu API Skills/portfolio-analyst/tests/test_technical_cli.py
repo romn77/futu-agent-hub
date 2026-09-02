@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+import subprocess
 
 from portfolio_analyst import cli
 from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst.snapshot_repository import SnapshotRepository
 from portfolio_analyst.settings import Settings
 from test_risk_analysis import snapshot
-from test_technical_analysis import Provider
+from test_technical_analysis import Provider, _portfolio
 
 
 def test_technical_cli_reads_one_private_snapshot_and_emits_valid_json(monkeypatch, tmp_path, capsys):
@@ -80,3 +81,45 @@ def test_technical_cli_maps_invalid_private_risk_report_to_stable_input_error(
 
     assert result == 2
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "INVALID_TECHNICAL"
+
+
+def test_technical_cli_keeps_subprocess_timeout_local_and_preserves_omitted_explicit_request(
+    monkeypatch, tmp_path, capsys
+):
+    source = _portfolio(
+        [(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)]
+    )
+    home = tmp_path / "private"
+    home.mkdir(mode=0o700)
+    saved = SnapshotRepository(home).save(source)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "futuapi")
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+
+    class TimeoutProvider:
+        def bars(self, symbol, *, market, interval, as_of, timeout_seconds):
+            raise subprocess.TimeoutExpired(["private-command", "secret"], timeout_seconds)
+
+    monkeypatch.setattr(cli, "FutuTechnicalHistoryProvider", lambda _adapter: TimeoutProvider())
+
+    result = cli.main(
+        [
+            "technical",
+            "--snapshot",
+            saved.relative_to(home).as_posix(),
+            "--symbol",
+            "I8",
+            "--json",
+            "--no-save",
+        ],
+        trusted_now=datetime(2026, 8, 27, 12, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert payload["selection"]["explicit_requested"] == ["US.I8"]
+    assert payload["selection"]["omitted"] == ["US.I8"]
+    assert {item["status"] for item in payload["instruments"]} == {"UNAVAILABLE"}
+    assert "private-command" not in output
+    assert "secret" not in output

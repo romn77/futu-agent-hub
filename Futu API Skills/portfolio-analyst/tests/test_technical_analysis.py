@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
+import subprocess
 
 import pytest
 
@@ -254,6 +255,26 @@ def test_analysis_keeps_symbol_and_timeframe_failures_local_and_caps_raw_evidenc
     assert all(call[-1] == 5 for call in provider.calls)
 
 
+def test_subprocess_timeout_is_a_local_stable_gap_without_command_disclosure():
+    source = _portfolio([("AAA", ".30")])
+
+    class SubprocessTimeoutProvider:
+        def bars(self, symbol, *, market, interval, as_of, timeout_seconds):
+            raise subprocess.TimeoutExpired(
+                cmd=["python", "/private/secret.py", "--token", "secret-value"],
+                timeout=timeout_seconds,
+                output="secret-value",
+            )
+
+    report = analyze_technical(source, provider=SubprocessTimeoutProvider()).to_dict()
+    item = report["instruments"][0]
+
+    assert item["status"] == "UNAVAILABLE"
+    assert item["evidence"]["daily"]["reason"] == "SOURCE_TIMEOUT"
+    assert item["evidence"]["weekly"]["reason"] == "SOURCE_TIMEOUT"
+    assert "secret" not in str(report).lower()
+
+
 def test_empty_source_series_is_unavailable_not_successful_coverage():
     source = _portfolio([("AAA", ".30")])
 
@@ -297,6 +318,25 @@ def test_schema_replay_rejects_derived_or_raw_evidence_tampering():
 
     tampered = deepcopy(report)
     tampered["instruments"][0]["moving_averages"]["daily_20"] = "999"
+    with pytest.raises(ReportSemanticError):
+        validate_technical_document(tampered)
+
+
+def test_replay_preserves_explicit_requested_identity_even_when_cap_omits_it():
+    source = _portfolio(
+        [(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)]
+    )
+    report = analyze_technical(
+        source, provider=Provider(), explicit_symbols=("I8",)
+    ).to_dict()
+
+    assert len(report["selection"]["selected"]) == 8
+    assert report["selection"]["explicit_requested"] == ["US.I8"]
+    assert report["selection"]["omitted"] == ["US.I8"]
+    validate_technical_document(report)
+
+    tampered = deepcopy(report)
+    tampered["selection"]["explicit_requested"] = ["US.I0"]
     with pytest.raises(ReportSemanticError):
         validate_technical_document(tampered)
 

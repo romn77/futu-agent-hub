@@ -28,7 +28,7 @@
     "selection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["eligible_count", "max_symbols", "tie_breaker", "selected", "omitted", "truncated"],
+      "required": ["eligible_count", "max_symbols", "tie_breaker", "selected", "explicit_requested", "omitted", "truncated"],
       "properties": {
         "eligible_count": {"type": "integer", "minimum": 0, "maximum": 10000},
         "max_symbols": {"const": 8},
@@ -45,6 +45,7 @@
             }
           }
         },
+        "explicit_requested": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
         "omitted": {"type": "array", "maxItems": 10000, "uniqueItems": true, "items": {"$ref": "#/$defs/identity"}},
         "truncated": {"type": "boolean"}
       }
