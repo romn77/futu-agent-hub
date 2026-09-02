@@ -1,0 +1,79 @@
+{
+  "skill_name": "portfolio-analyst",
+  "schema_version": "1.0",
+  "evals": [
+    {
+      "id": "comprehensive-many-holdings",
+      "prompt": "全面分析我当前的美股账户。账户是 REAL/USD，有 37 个已成交非零持仓、现金，没有期权；其中 12 个持仓权重至少 5%。我没有要求保存，也没有要求调仓或推荐新股票。",
+      "fixture": {
+        "snapshot_position_count": 37,
+        "held_options": false,
+        "user_policy_supplied": false,
+        "persistence_requested": false
+      },
+      "expected_behavior": [
+        "Acquire one fresh REAL/USD snapshot and bind the whole report to its snapshot_id/as_of.",
+        "List all 37 holdings and keep cash at portfolio level.",
+        "Deep-research no more than eight names and disclose eligible omissions.",
+        "Return Markdown in chat without option, recommendation, simulation, or persistence workflows."
+      ],
+      "assertions": [
+        {"type": "equals", "target": "snapshot.trd_env", "value": "REAL"},
+        {"type": "equals", "target": "snapshot.base_currency", "value": "USD"},
+        {"type": "count_equals", "target": "response.complete_holdings_table.rows", "value": 37},
+        {"type": "equals", "target": "response.selected_deep_research.count_max", "value": 8},
+        {"type": "not_contains", "target": "loaded_references", "value": "references/options-policy.md"},
+        {"type": "not_contains", "target": "executed_commands", "value": "--save"},
+        {"type": "not_contains", "target": "response", "value": "ADD/HOLD/TRIM/EXIT"}
+      ]
+    },
+    {
+      "id": "conditional-options-degradation",
+      "prompt": "分析我当前 REAL/USD 美股持仓。快照中有股票、ETF 和三个期权腿；当前期权工具有原始 Greeks 和到期日，但没有 multiplier、Call/Put、underlying 或 ITM/OTM。",
+      "fixture": {
+        "held_options": true,
+        "option_tool_status": "PARTIAL",
+        "missing_option_fields": ["multiplier", "right", "underlying", "moneyness"]
+      },
+      "expected_behavior": [
+        "Load the options policy only after held options are identified.",
+        "Use the same snapshot_id/as_of for holdings and option inventory.",
+        "Report raw contract-unit Greeks with their unit limitation.",
+        "Mark missing intended fields unavailable/degraded while completing unaffected sections."
+      ],
+      "assertions": [
+        {"type": "contains", "target": "loaded_references", "value": "references/options-policy.md"},
+        {"type": "equals", "target": "response.option_risk.status", "value": "PARTIAL"},
+        {"type": "contains", "target": "response.option_risk", "value": "RAW_CONTRACT_UNITS_NO_MULTIPLIER"},
+        {"type": "contains", "target": "response.data_gaps", "value": "multiplier unavailable"},
+        {"type": "not_contains", "target": "response.option_risk", "value": "covered call confirmed"},
+        {"type": "equals", "target": "workflow.stop", "value": false}
+      ]
+    },
+    {
+      "id": "explicit-rebalance-request",
+      "prompt": "分析我当前 REAL/USD 美股账户，并模拟把 US.AAPL 调整到 NAV 的 12%；只要一个情景，不保存，也不要推荐未持有股票。",
+      "fixture": {
+        "held_options": false,
+        "target": {"symbol": "US.AAPL", "target_weight": "0.12"},
+        "scenario_count_requested": 1,
+        "persistence_requested": false
+      },
+      "expected_behavior": [
+        "Load recommendation and rebalance-simulation references because the request is explicit and quantified.",
+        "Run one non-executable simulation against the fresh bound snapshot.",
+        "Disclose resulting weights, turnover, cash impact, assumptions, and unsupported costs.",
+        "Do not persist, place orders, or propose unheld candidates."
+      ],
+      "assertions": [
+        {"type": "contains", "target": "loaded_references", "value": "references/recommendation-policy.md"},
+        {"type": "contains", "target": "loaded_references", "value": "references/optional-workflows/rebalance-simulation.md"},
+        {"type": "count_equals", "target": "response.simulation.scenarios", "value": 1},
+        {"type": "equals", "target": "response.simulation.target_weight", "value": "0.12"},
+        {"type": "not_contains", "target": "executed_commands", "value": "place_order"},
+        {"type": "not_contains", "target": "executed_commands", "value": "--save"},
+        {"type": "equals", "target": "response.unheld_candidates.count", "value": 0}
+      ]
+    }
+  ]
+}
