@@ -253,6 +253,31 @@ def test_invalid_metadata_endpoint_degrades_options_without_internal_error(
     assert payload["metadata_evidence"]["reason_code"] == "OPTION_METADATA_ENDPOINT_INVALID"
 
 
+def test_unsupported_process_tree_degrades_options_without_internal_error(
+    monkeypatch, tmp_path, capsys
+):
+    import portfolio_analyst.option_metadata as option_metadata
+
+    home = tmp_path / "private"
+    _save(home, (_position("A260116C1"),))
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
+    monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
+    monkeypatch.setattr(
+        cli, "validate_option_quote_capability", lambda _path: type("Trust", (), {"valid": True})()
+    )
+    monkeypatch.setattr(cli, "FutuAdapter", lambda _path: object())
+    monkeypatch.setattr(cli, "FutuOptionQuoteProvider", lambda _adapter: Provider())
+    monkeypatch.setattr(option_metadata, "_POSIX_PROCESS_GROUPS", False)
+
+    assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "COMPLETE"
+    assert (
+        payload["metadata_evidence"]["reason_code"]
+        == "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
+    )
+
+
 def test_options_cli_keeps_many_account_conflicts_schema_valid(monkeypatch, tmp_path, capsys):
     home = tmp_path / "private"
     positions = tuple(

@@ -371,6 +371,10 @@ def test_bounded_runner_overflow_kills_descendant_that_inherits_pipes(tmp_path):
     assert not marker.exists()
     child_pid = int(child_pid_file.read_text())
     assert not _pid_is_live(child_pid)
+    assert not any(
+        thread.name.startswith("portfolio-option-metadata-")
+        for thread in threading.enumerate()
+    )
 
 
 def test_bounded_runner_fails_closed_when_process_tree_is_not_supported(monkeypatch):
