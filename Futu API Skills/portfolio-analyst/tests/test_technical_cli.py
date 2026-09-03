@@ -13,7 +13,9 @@ from test_risk_analysis import snapshot
 from test_technical_analysis import Provider, _portfolio
 
 
-def test_technical_cli_reads_one_private_snapshot_and_emits_valid_json(monkeypatch, tmp_path, capsys):
+def test_technical_cli_reads_one_private_snapshot_and_emits_valid_json(
+    monkeypatch, tmp_path, capsys
+):
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
     saved = SnapshotRepository(home).save(snapshot())
@@ -119,9 +121,7 @@ def test_technical_cli_rejects_semantically_reordered_private_risk_report(
 def test_technical_cli_keeps_subprocess_timeout_local_and_preserves_omitted_explicit_request(
     monkeypatch, tmp_path, capsys
 ):
-    source = _portfolio(
-        [(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)]
-    )
+    source = _portfolio([(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)])
     home = tmp_path / "private"
     home.mkdir(mode=0o700)
     saved = SnapshotRepository(home).save(source)

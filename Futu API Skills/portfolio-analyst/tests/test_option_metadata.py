@@ -86,24 +86,26 @@ def test_worker_batches_only_us_and_hk_and_returns_allowlisted_fields():
         ("US", "OPTION", ("US.AAPL260116C00150000",)),
     ]
     assert all(context.closed for context in contexts)
-    assert result == {"data": [
-        {
-            "code": "HK.00700260116P00300000",
-            "lot_size": 100,
-            "stock_owner": "HK.00700",
-            "option_type": "PUT",
-            "strike_time": "2026-01-16",
-            "strike_price": 300,
-        },
-        {
-            "code": "US.AAPL260116C00150000",
-            "lot_size": 100,
-            "stock_owner": "US.AAPL",
-            "option_type": "CALL",
-            "strike_time": "2026-01-16",
-            "strike_price": 150.0,
-        },
-    ]}
+    assert result == {
+        "data": [
+            {
+                "code": "HK.00700260116P00300000",
+                "lot_size": 100,
+                "stock_owner": "HK.00700",
+                "option_type": "PUT",
+                "strike_time": "2026-01-16",
+                "strike_price": 300,
+            },
+            {
+                "code": "US.AAPL260116C00150000",
+                "lot_size": 100,
+                "stock_owner": "US.AAPL",
+                "option_type": "CALL",
+                "strike_time": "2026-01-16",
+                "strike_price": 150.0,
+            },
+        ]
+    }
 
 
 def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
@@ -114,10 +116,16 @@ def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
         def item(self):
             return self.value
 
-    rows = [{
-        "code": "US.A", "lot_size": Scalar(100), "stock_owner": "US.AAPL",
-        "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": Scalar(150.0),
-    }]
+    rows = [
+        {
+            "code": "US.A",
+            "lot_size": Scalar(100),
+            "stock_owner": "US.AAPL",
+            "option_type": "CALL",
+            "strike_time": "2026-01-16",
+            "strike_price": Scalar(150.0),
+        }
+    ]
     context = _QuoteContext([], rows)
 
     result = collect_option_metadata(
@@ -174,11 +182,20 @@ def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(
         observed["command"] = command
         observed.update(kwargs)
         return _Completed(
-            stdout=json.dumps({"data": [{
-                "code": "US.AAPL260116C00150000", "lot_size": 100,
-                "stock_owner": "US.AAPL", "option_type": "CALL",
-                "strike_time": "2026-01-16", "strike_price": 150,
-            }]}).encode()
+            stdout=json.dumps(
+                {
+                    "data": [
+                        {
+                            "code": "US.AAPL260116C00150000",
+                            "lot_size": 100,
+                            "stock_owner": "US.AAPL",
+                            "option_type": "CALL",
+                            "strike_time": "2026-01-16",
+                            "strike_price": 150,
+                        }
+                    ]
+                }
+            ).encode()
         )
 
     provider = FutuOptionMetadataProvider(host="10.0.0.8", port=22222, runner=runner)
@@ -197,10 +214,19 @@ def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(
 @pytest.mark.parametrize(
     ("runner", "reason"),
     [
-        (lambda *_a, **_k: (_ for _ in ()).throw(subprocess.TimeoutExpired("x", 5)), "OPTION_METADATA_TIMEOUT"),
-        (lambda *_a, **_k: _Completed(stdout=b"x" * (256 * 1024 + 1)), "OPTION_METADATA_RESPONSE_TOO_LARGE"),
+        (
+            lambda *_a, **_k: (_ for _ in ()).throw(subprocess.TimeoutExpired("x", 5)),
+            "OPTION_METADATA_TIMEOUT",
+        ),
+        (
+            lambda *_a, **_k: _Completed(stdout=b"x" * (256 * 1024 + 1)),
+            "OPTION_METADATA_RESPONSE_TOO_LARGE",
+        ),
         (lambda *_a, **_k: _Completed(stdout=b"{"), "OPTION_METADATA_RESPONSE_INVALID"),
-        (lambda *_a, **_k: _Completed(returncode=2, stderr=b"private failure"), "OPTION_METADATA_SOURCE_UNAVAILABLE"),
+        (
+            lambda *_a, **_k: _Completed(returncode=2, stderr=b"private failure"),
+            "OPTION_METADATA_SOURCE_UNAVAILABLE",
+        ),
     ],
 )
 def test_parent_classifies_failures_without_exposing_raw_errors(runner, reason):
@@ -280,6 +306,7 @@ def test_posix_process_group_bounded_runner_enforces_timeout():
             env={"PATH": ""},
             check=False,
         )
+
 
 def _pid_is_live(pid: int) -> bool:
     stat_path = f"/proc/{pid}/stat"
@@ -378,10 +405,55 @@ def test_bounded_runner_fails_closed_when_process_tree_is_not_supported(monkeypa
     "payload",
     [
         {"data": []},
-        {"data": [{"code": "US.WRONG", "lot_size": 100, "stock_owner": "US.AAPL", "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 150}]},
-        {"data": [{"code": "US.A", "lot_size": 100, "stock_owner": "US.AAPL", "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 150, "extra": 1}]},
-        {"data": [{"code": "US.A", "lot_size": 0, "stock_owner": "US.AAPL", "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 150}]},
-        {"data": [{"code": "US.A", "lot_size": 100, "stock_owner": "HK.00700", "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 150}]},
+        {
+            "data": [
+                {
+                    "code": "US.WRONG",
+                    "lot_size": 100,
+                    "stock_owner": "US.AAPL",
+                    "option_type": "CALL",
+                    "strike_time": "2026-01-16",
+                    "strike_price": 150,
+                }
+            ]
+        },
+        {
+            "data": [
+                {
+                    "code": "US.A",
+                    "lot_size": 100,
+                    "stock_owner": "US.AAPL",
+                    "option_type": "CALL",
+                    "strike_time": "2026-01-16",
+                    "strike_price": 150,
+                    "extra": 1,
+                }
+            ]
+        },
+        {
+            "data": [
+                {
+                    "code": "US.A",
+                    "lot_size": 0,
+                    "stock_owner": "US.AAPL",
+                    "option_type": "CALL",
+                    "strike_time": "2026-01-16",
+                    "strike_price": 150,
+                }
+            ]
+        },
+        {
+            "data": [
+                {
+                    "code": "US.A",
+                    "lot_size": 100,
+                    "stock_owner": "HK.00700",
+                    "option_type": "CALL",
+                    "strike_time": "2026-01-16",
+                    "strike_price": 150,
+                }
+            ]
+        },
     ],
 )
 def test_parser_rejects_malformed_identity_mismatch_and_invalid_fields(payload):

@@ -59,10 +59,12 @@ def _stock(symbol="AAPL", *, account_ref="acct-a", quantity="100", price="151", 
 
 def test_static_metadata_derives_multiplier_money_delta_atm_and_covered_status():
     option = "US.AAPL260116C00150000"
-    source = _snapshot((
-        _position(option.removeprefix("US."), quantity="-1", market_value="-200"),
-        _stock(quantity="100", price="150.05"),
-    ))
+    source = _snapshot(
+        (
+            _position(option.removeprefix("US."), quantity="-1", market_value="-200"),
+            _stock(quantity="100", price="150.05"),
+        )
+    )
 
     report = analyze_option_risk(
         source,
@@ -151,35 +153,46 @@ def test_missing_or_disagreeing_underlying_rows_keep_money_delta_unknown():
 def test_relationships_aggregate_contract_requirements_once_per_account_underlying():
     call_a = "US.AAPL260116C00150000"
     call_b = "US.AAPL260220C00160000"
-    source = _snapshot((
-        _position(call_a.removeprefix("US."), quantity="-1", market_value="-100"),
-        _position(call_b.removeprefix("US."), quantity="-1", market_value="-100"),
-        _stock(quantity="150"),
-    ))
-    metadata = MetadataProvider({call_a: _metadata(call_a), call_b: _metadata(call_b, strike="160")})
+    source = _snapshot(
+        (
+            _position(call_a.removeprefix("US."), quantity="-1", market_value="-100"),
+            _position(call_b.removeprefix("US."), quantity="-1", market_value="-100"),
+            _stock(quantity="150"),
+        )
+    )
+    metadata = MetadataProvider(
+        {call_a: _metadata(call_a), call_b: _metadata(call_b, strike="160")}
+    )
 
     report = analyze_option_risk(
         source, quote_provider=Provider(), metadata_provider=metadata, clock=Clock()
     ).to_dict()
 
-    assert report["underlying_relationships"] == [{
-        "account_ref": "acct-a",
-        "underlying_identity": "US.AAPL",
-        "kind": "COVERED_CALL",
-        "option_identities": [call_a, call_b],
-        "required_underlying_units": "200",
-        "available_underlying_units": "150",
-        "status": "PARTIAL",
-    }]
-    assert [leg["relationship"]["status"] for leg in report["leg_exposures"]] == ["PARTIAL", "PARTIAL"]
+    assert report["underlying_relationships"] == [
+        {
+            "account_ref": "acct-a",
+            "underlying_identity": "US.AAPL",
+            "kind": "COVERED_CALL",
+            "option_identities": [call_a, call_b],
+            "required_underlying_units": "200",
+            "available_underlying_units": "150",
+            "status": "PARTIAL",
+        }
+    ]
+    assert [leg["relationship"]["status"] for leg in report["leg_exposures"]] == [
+        "PARTIAL",
+        "PARTIAL",
+    ]
 
 
 def test_relationship_does_not_borrow_underlying_from_another_account():
     option = "US.AAPL260116C00150000"
-    source = _snapshot((
-        _position(option.removeprefix("US."), quantity="-1", market_value="-100"),
-        _stock(account_ref="acct-b", quantity="100"),
-    ))
+    source = _snapshot(
+        (
+            _position(option.removeprefix("US."), quantity="-1", market_value="-100"),
+            _stock(account_ref="acct-b", quantity="100"),
+        )
+    )
     report = analyze_option_risk(
         source,
         quote_provider=Provider(),
@@ -198,10 +211,12 @@ def test_relationship_does_not_borrow_underlying_from_another_account():
 )
 def test_long_call_and_short_put_relationships_are_not_applicable(quantity, option_type, expected):
     option = f"US.AAPL260116{option_type[0]}00150000"
-    source = _snapshot((
-        _position(option.removeprefix("US."), quantity=quantity, market_value=quantity),
-        _stock(),
-    ))
+    source = _snapshot(
+        (
+            _position(option.removeprefix("US."), quantity=quantity, market_value=quantity),
+            _stock(),
+        )
+    )
     report = analyze_option_risk(
         source,
         quote_provider=Provider(rows={option: {"option_type": option_type}}),
@@ -225,7 +240,9 @@ def test_schema_replay_rejects_tampered_derived_fields_and_metadata_evidence():
 
     for mutator in (
         lambda value: value["leg_exposures"][0].__setitem__("contract_multiplier", "200"),
-        lambda value: value["metadata_evidence"]["response"]["data"][0].__setitem__("lot_size", 200),
+        lambda value: value["metadata_evidence"]["response"]["data"][0].__setitem__(
+            "lot_size", 200
+        ),
     ):
         tampered = deepcopy(report)
         mutator(tampered)
@@ -252,14 +269,17 @@ def test_conflict_reasons_are_stably_deduplicated_and_schema_bounded_for_129_acc
     ).to_dict()
 
     conflicts = [
-        reason for reason in report["quality_reasons"]
+        reason
+        for reason in report["quality_reasons"]
         if reason["code"] == "OPTION_METADATA_CONFLICT"
     ]
-    assert conflicts == [{
-        "code": "OPTION_METADATA_CONFLICT",
-        "scope": option,
-        "detail": "quote and static metadata disagree for option_type",
-    }]
+    assert conflicts == [
+        {
+            "code": "OPTION_METADATA_CONFLICT",
+            "scope": option,
+            "detail": "quote and static metadata disagree for option_type",
+        }
+    ]
     assert len(report["quality_reasons"]) <= 128
     validate_option_risk_document(report)
 

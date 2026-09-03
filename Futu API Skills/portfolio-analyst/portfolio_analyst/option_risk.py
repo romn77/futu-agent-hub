@@ -617,10 +617,7 @@ def _bound_underlying(
 
 
 def _bounded_quality_reasons(reasons: list[dict[str, str]]) -> list[dict[str, str]]:
-    unique = {
-        (item["code"], item["scope"], item["detail"]): item
-        for item in reasons
-    }
+    unique = {(item["code"], item["scope"], item["detail"]): item for item in reasons}
     ordered = [unique[key] for key in sorted(unique)]
     if len(ordered) <= MAX_QUALITY_REASONS:
         return ordered
@@ -682,16 +679,17 @@ def analyze_option_risk(
     if report_schema_version == "1.1":
         metadata_evidence, metadata = _collect_metadata(contracts, metadata_provider)
     else:
-        metadata_evidence, metadata = {
-            "request": [],
-            "status": "NOT_ACCESSED",
-            "reason_code": None,
-            "response_byte_count": 0,
-            "response": None,
-        }, {}
-    underlying_index = (
-        _build_underlying_index(snapshot) if report_schema_version == "1.1" else {}
-    )
+        metadata_evidence, metadata = (
+            {
+                "request": [],
+                "status": "NOT_ACCESSED",
+                "reason_code": None,
+                "response_byte_count": 0,
+                "response": None,
+            },
+            {},
+        )
+    underlying_index = _build_underlying_index(snapshot) if report_schema_version == "1.1" else {}
 
     reasons: list[dict[str, str]] = []
     if unknown_count:
@@ -789,9 +787,7 @@ def analyze_option_risk(
         bound = (
             None
             if static is None
-            else _bound_underlying(
-                underlying_index, leg["account_ref"], static.underlying_identity
-            )
+            else _bound_underlying(underlying_index, leg["account_ref"], static.underlying_identity)
         )
         underlying_price = None if bound is None else bound[1]
         underlying_fx = None if bound is None else bound[2]
@@ -835,9 +831,7 @@ def analyze_option_risk(
                 "implied_volatility": None if quote is None else quote.implied_volatility,
                 "greeks": greek_values,
                 "contract_multiplier": None if static is None else static.contract_multiplier,
-                "multiplier_provenance": (
-                    None if static is None else "FUTU_STATIC_INFO_LOT_SIZE"
-                ),
+                "multiplier_provenance": (None if static is None else "FUTU_STATIC_INFO_LOT_SIZE"),
                 "underlying_identity": None if static is None else static.underlying_identity,
                 "contract_adjusted_delta_units": adjusted_delta,
                 "notional_delta_local": notional_local,

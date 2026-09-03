@@ -433,9 +433,7 @@ def _quantize_price(value: Decimal, quantum: Decimal) -> Decimal:
         return value.quantize(quantum, rounding=ROUND_HALF_EVEN)
 
 
-def _pivot_evidence(
-    bars: Sequence[TechnicalBar], quantum: Decimal
-) -> list[dict[str, str]]:
+def _pivot_evidence(bars: Sequence[TechnicalBar], quantum: Decimal) -> list[dict[str, str]]:
     pivots: list[dict[str, str]] = []
     for index in range(2, len(bars) - 2):
         neighbors = bars[index - 2 : index] + bars[index + 1 : index + 3]
@@ -491,9 +489,7 @@ def _congestion_in_context(
     nodes = [
         {
             "price": _decimal_text(
-                _quantize_price(
-                    low + width * (Decimal(index) + Decimal("0.5")), quantum
-                )
+                _quantize_price(low + width * (Decimal(index) + Decimal("0.5")), quantum)
             ),
             "volume": _decimal_text(buckets[index]),
             "observations": observations[index],
@@ -564,7 +560,9 @@ def _zones_in_context(
     candidates: list[tuple[Decimal, str]] = [
         (Decimal(item["price"]), item["kind"]) for item in pivots
     ]
-    candidates.extend((Decimal(str(item["price"])), "VOLUME_CONGESTION") for item in congestion_nodes)
+    candidates.extend(
+        (Decimal(str(item["price"])), "VOLUME_CONGESTION") for item in congestion_nodes
+    )
 
     def build(kind: str, predicate: Any, reverse: bool) -> list[dict[str, Any]]:
         filtered = sorted(
@@ -640,7 +638,11 @@ def _derive_technical_context_in_context(
     weekly: Sequence[TechnicalBar],
     cutoff: date,
 ) -> dict[str, Any]:
-    if not current_price.is_finite() or current_price <= 0 or not decimal_fits_report(current_price):
+    if (
+        not current_price.is_finite()
+        or current_price <= 0
+        or not decimal_fits_report(current_price)
+    ):
         raise TechnicalInputError(f"current price is invalid for {identity}")
     normalized_daily = _normalize_bars(daily, cutoff=cutoff, maximum=DAILY_BAR_CAP)
     normalized_weekly = _normalize_bars(weekly, cutoff=cutoff, maximum=WEEKLY_BAR_CAP)
@@ -827,26 +829,26 @@ def _analyze_technical_in_context(
         ):
             start = cutoff - timedelta(days=start_days)
             try:
-                rows = None if source is None else source.bars(
-                    selected.symbol,
-                    market="US",
-                    interval=interval,
-                    as_of=cutoff,
-                    timeout_seconds=5,
+                rows = (
+                    None
+                    if source is None
+                    else source.bars(
+                        selected.symbol,
+                        market="US",
+                        interval=interval,
+                        as_of=cutoff,
+                        timeout_seconds=5,
+                    )
                 )
                 if rows is None:
                     raise FutuReadError("source unavailable")
-                normalized = _normalize_bars(
-                    rows, start=start, cutoff=cutoff, maximum=maximum
-                )
+                normalized = _normalize_bars(rows, start=start, cutoff=cutoff, maximum=maximum)
                 if not normalized:
                     raise FutuReadError("source returned no bars")
                 parsed[interval] = normalized
                 evidence[label] = _available_evidence(interval, start, cutoff, normalized)
             except (TimeoutError, subprocess.TimeoutExpired):
-                evidence[label] = _unavailable_evidence(
-                    interval, start, cutoff, "SOURCE_TIMEOUT"
-                )
+                evidence[label] = _unavailable_evidence(interval, start, cutoff, "SOURCE_TIMEOUT")
             except (FutuReadError, TechnicalInputError, KeyError, TypeError, ValueError):
                 evidence[label] = _unavailable_evidence(
                     interval, start, cutoff, "SOURCE_OR_EVIDENCE_INVALID"
@@ -897,9 +899,7 @@ def _analyze_technical_in_context(
                 "resistance_zones": [],
                 "quality_reasons": ["CURRENT_PRICE_EVIDENCE_INVALID"],
             }
-        available = sum(
-            evidence[label]["status"] == "AVAILABLE" for label in ("daily", "weekly")
-        )
+        available = sum(evidence[label]["status"] == "AVAILABLE" for label in ("daily", "weekly"))
         status = "COMPLETE" if available == 2 else "PARTIAL" if available else "UNAVAILABLE"
         if current_price is None and status == "COMPLETE":
             status = "PARTIAL"
@@ -915,9 +915,7 @@ def _analyze_technical_in_context(
                 "selection_reasons": list(selected.reasons),
                 "status": status,
                 "current_price": (
-                    _decimal_text(
-                        _quantize_price(current_price, Decimal(context["price_quantum"]))
-                    )
+                    _decimal_text(_quantize_price(current_price, Decimal(context["price_quantum"])))
                     if current_price is not None and context["price_quantum"] is not None
                     else None
                 ),
@@ -979,7 +977,9 @@ def _analyze_technical_in_context(
         },
     }
     identity_body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    payload["technical_report_id"] = "ta-" + hashlib.sha256(identity_body.encode("utf-8")).hexdigest()[:24]
+    payload["technical_report_id"] = (
+        "ta-" + hashlib.sha256(identity_body.encode("utf-8")).hexdigest()[:24]
+    )
     return TechnicalReport(MappingProxyType(payload))
 
 
@@ -987,10 +987,7 @@ def replay_technical_document(payload: Mapping[str, Any]) -> dict[str, Any]:
     from .snapshot_io import snapshot_from_document
 
     snapshot = snapshot_from_document(dict(payload["provenance"]["source_snapshot"]))
-    evidence = {
-        item["identity"]: item["evidence"]
-        for item in payload["instruments"]
-    }
+    evidence = {item["identity"]: item["evidence"] for item in payload["instruments"]}
     explicit = tuple(payload["selection"]["explicit_requested"])
     return analyze_technical(
         snapshot,

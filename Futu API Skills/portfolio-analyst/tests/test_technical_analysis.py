@@ -81,8 +81,17 @@ class Provider:
 
 def test_selection_applies_threshold_top_five_risk_and_stable_max_eight():
     source = _portfolio(
-        [("AA", ".20"), ("AB", ".15"), ("AC", ".10"), ("AD", ".08"),
-         ("AE", ".07"), ("AF", ".04"), ("AG", ".03"), ("AH", ".02"), ("AI", ".01")]
+        [
+            ("AA", ".20"),
+            ("AB", ".15"),
+            ("AC", ".10"),
+            ("AD", ".08"),
+            ("AE", ".07"),
+            ("AF", ".04"),
+            ("AG", ".03"),
+            ("AH", ".02"),
+            ("AI", ".01"),
+        ]
     )
     risk = {
         "source_snapshot_id": source.snapshot_id,
@@ -90,13 +99,20 @@ def test_selection_applies_threshold_top_five_risk_and_stable_max_eight():
             {"affected_positions": ["US.AI", "US.AH"]},
             {"affected_positions": ["US.AG"]},
             {"affected_positions": ["US.AF"]},
-        ]
+        ],
     }
 
     selection = select_technical_holdings(source, risk_document=risk, explicit_symbols=("AG",))
 
     assert [item.identity for item in selection.selected] == [
-        "US.AA", "US.AB", "US.AC", "US.AD", "US.AE", "US.AF", "US.AG", "US.AH"
+        "US.AA",
+        "US.AB",
+        "US.AC",
+        "US.AD",
+        "US.AE",
+        "US.AF",
+        "US.AG",
+        "US.AH",
     ]
     assert selection.omitted == ("US.AI",)
     assert selection.truncated is True
@@ -105,13 +121,23 @@ def test_selection_applies_threshold_top_five_risk_and_stable_max_eight():
 
 def test_selection_fills_to_five_and_rejects_unheld_or_non_equity_explicit_symbols():
     source = _portfolio(
-        [("AAA", ".30"), ("BBB", ".04"), ("CCC", ".03"), ("DDD", ".02"),
-         ("EEE", ".01"), ("OPT", ".01")],
+        [
+            ("AAA", ".30"),
+            ("BBB", ".04"),
+            ("CCC", ".03"),
+            ("DDD", ".02"),
+            ("EEE", ".01"),
+            ("OPT", ".01"),
+        ],
         security_types={"OPT": "OPTION"},
     )
     selected = select_technical_holdings(source)
     assert [item.identity for item in selected.selected] == [
-        "US.AAA", "US.BBB", "US.CCC", "US.DDD", "US.EEE"
+        "US.AAA",
+        "US.BBB",
+        "US.CCC",
+        "US.DDD",
+        "US.EEE",
     ]
     assert selected.selected[0].reasons == ("WEIGHT_AT_LEAST_5_PERCENT_NAV",)
     with pytest.raises(TechnicalInputError, match="held US stock or ETF"):
@@ -205,11 +231,7 @@ def test_all_derived_price_evidence_uses_input_bounded_quantum(places, quantum):
     )
 
     assert context["price_quantum"] == quantum
-    price_texts = [
-        value
-        for value in context["moving_averages"].values()
-        if value is not None
-    ]
+    price_texts = [value for value in context["moving_averages"].values() if value is not None]
     if context["atr14"] is not None:
         price_texts.append(context["atr14"])
     price_texts.extend(item["price"] for item in context["swing_pivots"])
@@ -328,7 +350,10 @@ def test_sparse_and_zero_volume_series_are_explicitly_unknown_without_prediction
     )
 
     assert context["moving_averages"] == {
-        "daily_20": None, "daily_50": None, "weekly_20": None, "weekly_40": None
+        "daily_20": None,
+        "daily_50": None,
+        "weekly_20": None,
+        "weekly_40": None,
     }
     assert context["volume_congestion"]["status"] == "UNAVAILABLE"
     assert context["support_zones"] == []
@@ -449,9 +474,7 @@ def test_invalid_snapshot_price_suppresses_zones_as_a_local_gap():
     assert item["support_zones"] == []
     assert item["resistance_zones"] == []
     assert item["quality_reasons"] == ["CURRENT_PRICE_EVIDENCE_INVALID"]
-    report_note = analyze_technical(source, provider=Provider()).to_dict()[
-        "data_quality_notes"
-    ][0]
+    report_note = analyze_technical(source, provider=Provider()).to_dict()["data_quality_notes"][0]
     assert "current price" in report_note
 
 
@@ -475,21 +498,15 @@ def test_analyze_and_validator_reject_semantically_invalid_embedded_risk():
     with pytest.raises(TechnicalInputError, match="risk report is invalid"):
         analyze_technical(source, provider=Provider(), risk_document=invalid_risk)
 
-    report = analyze_technical(
-        source, provider=Provider(), risk_document=valid_risk
-    ).to_dict()
+    report = analyze_technical(source, provider=Provider(), risk_document=valid_risk).to_dict()
     report["provenance"]["source_risk_report"]["top_risks"].reverse()
     with pytest.raises(ReportSemanticError, match="embedded risk report is invalid"):
         validate_technical_document(report)
 
 
 def test_replay_preserves_explicit_requested_identity_even_when_cap_omits_it():
-    source = _portfolio(
-        [(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)]
-    )
-    report = analyze_technical(
-        source, provider=Provider(), explicit_symbols=("I8",)
-    ).to_dict()
+    source = _portfolio([(f"I{index}", ".10" if index < 8 else ".01") for index in range(9)])
+    report = analyze_technical(source, provider=Provider(), explicit_symbols=("I8",)).to_dict()
 
     assert len(report["selection"]["selected"]) == 8
     assert report["selection"]["explicit_requested"] == ["US.I8"]

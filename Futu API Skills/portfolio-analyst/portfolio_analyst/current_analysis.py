@@ -388,13 +388,9 @@ def run_current_analysis(
             "--no-save",
         ]
         if risk is not None:
-            technical_arguments.extend(
-                ("--risk-report", owned.relative_path("risk.json"))
-            )
+            technical_arguments.extend(("--risk-report", owned.relative_path("risk.json")))
         technical_result = command(technical_arguments)
-        technical, technical_degradation = _component_result(
-            technical_result, "technical"
-        )
+        technical, technical_degradation = _component_result(technical_result, "technical")
         if technical is not None:
             owned.write_json("technical.json", technical)
         elif technical_degradation is not None:

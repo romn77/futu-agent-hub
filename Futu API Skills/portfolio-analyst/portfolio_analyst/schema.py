@@ -1343,7 +1343,12 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
     metadata_response = metadata_evidence["response"]
     metadata_bytes = metadata_evidence["response_byte_count"]
     if metadata_status == "NOT_ACCESSED":
-        if metadata_evidence["request"] or metadata_reason is not None or metadata_response is not None or metadata_bytes:
+        if (
+            metadata_evidence["request"]
+            or metadata_reason is not None
+            or metadata_response is not None
+            or metadata_bytes
+        ):
             raise ReportSemanticError("unaccessed option metadata evidence is inconsistent")
         metadata_provider: Any = None
     elif metadata_status == "SUCCESS":
@@ -1355,7 +1360,10 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
         class ReplayMetadataProvider:
             def metadata(self, identities: list[str], *, timeout: float) -> object:
-                if identities != metadata_evidence["request"] or timeout != METADATA_TIMEOUT_SECONDS:
+                if (
+                    identities != metadata_evidence["request"]
+                    or timeout != METADATA_TIMEOUT_SECONDS
+                ):
                     raise ReportSemanticError("option metadata replay request is inconsistent")
                 return metadata_response
 
@@ -1369,7 +1377,10 @@ def _replay_option_risk(payload: dict[str, Any]) -> dict[str, Any]:
 
             class FailedMetadataProvider:
                 def metadata(self, identities: list[str], *, timeout: float) -> object:
-                    if identities != metadata_evidence["request"] or timeout != METADATA_TIMEOUT_SECONDS:
+                    if (
+                        identities != metadata_evidence["request"]
+                        or timeout != METADATA_TIMEOUT_SECONDS
+                    ):
                         raise ReportSemanticError("option metadata replay request is inconsistent")
                     raise OptionMetadataProviderError(metadata_reason)
 

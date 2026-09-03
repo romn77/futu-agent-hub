@@ -186,9 +186,7 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     technical.add_argument(
         "--symbol", action="append", default=[], help="additional held US stock/ETF"
     )
-    technical.add_argument(
-        "--json", action="store_true", dest="as_json", default=argparse.SUPPRESS
-    )
+    technical.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS)
     technical.add_argument("--output", help="relative output directory under data home")
     technical.add_argument("--no-save", action="store_true")
     technical.add_argument("--verbose", action="store_true")
@@ -781,7 +779,9 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                         ),
                     },
                 )
-            print(rendered if args.as_json else report.to_markdown(), end="\n" if args.as_json else "")
+            print(
+                rendered if args.as_json else report.to_markdown(), end="\n" if args.as_json else ""
+            )
             return 0
 
         if args.command in {"risk", "analyze"}:

@@ -77,11 +77,7 @@ def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.
     timed_out = False
     selector = selectors.DefaultSelector()
 
-    assert (
-        process.stdout is not None
-        and process.stderr is not None
-        and process.stdin is not None
-    )
+    assert process.stdout is not None and process.stderr is not None and process.stdin is not None
 
     def terminate_process_group() -> None:
         try:
@@ -287,9 +283,7 @@ def parse_option_metadata_response(
         strike = _decimal(row["strike_price"])
         if strike < 0:
             raise OptionMetadataContractError("strike invalid")
-        parsed[identity] = OptionMetadata(
-            identity, multiplier, owner, option_type, expiry, strike
-        )
+        parsed[identity] = OptionMetadata(identity, multiplier, owner, option_type, expiry, strike)
     if set(parsed) != set(requested):
         raise OptionMetadataContractError("response identity set differs")
     return {identity: parsed[identity] for identity in requested}
@@ -349,9 +343,7 @@ class FutuOptionMetadataProvider:
         except subprocess.TimeoutExpired:
             raise OptionMetadataProviderError("OPTION_METADATA_TIMEOUT") from None
         except _OptionMetadataProcessTreeUnsupported:
-            raise OptionMetadataProviderError(
-                "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
-            ) from None
+            raise OptionMetadataProviderError("OPTION_METADATA_PROCESS_TREE_UNSUPPORTED") from None
         except Exception:
             raise OptionMetadataProviderError("OPTION_METADATA_SOURCE_UNAVAILABLE") from None
         stdout = getattr(completed, "stdout", b"")

@@ -138,20 +138,23 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
     class Metadata:
         def metadata(self, identities, *, timeout):
             metadata_calls.append((identities, timeout))
-            return {"data": [{
-                "code": identities[0],
-                "lot_size": 100,
-                "stock_owner": "US.A",
-                "option_type": "CALL",
-                "strike_time": "2026-01-16",
-                "strike_price": 1,
-            }]}
+            return {
+                "data": [
+                    {
+                        "code": identities[0],
+                        "lot_size": 100,
+                        "stock_owner": "US.A",
+                        "option_type": "CALL",
+                        "strike_time": "2026-01-16",
+                        "strike_price": 1,
+                    }
+                ]
+            }
+
     monkeypatch.setattr(
         Settings,
         "from_env",
-        classmethod(
-            lambda cls: Settings(data_home=home, opend_host="10.0.0.8", opend_port=22222)
-        ),
+        classmethod(lambda cls: Settings(data_home=home, opend_host="10.0.0.8", opend_port=22222)),
     )
     monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
     monkeypatch.setattr(
@@ -200,10 +203,18 @@ def test_standalone_options_passes_settings_endpoint_to_metadata_provider(
 
     class Metadata:
         def metadata(self, identities, *, timeout):
-            return {"data": [{
-                "code": identities[0], "lot_size": 100, "stock_owner": "US.A",
-                "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 1,
-            }]}
+            return {
+                "data": [
+                    {
+                        "code": identities[0],
+                        "lot_size": 100,
+                        "stock_owner": "US.A",
+                        "option_type": "CALL",
+                        "strike_time": "2026-01-16",
+                        "strike_price": 1,
+                    }
+                ]
+            }
 
     monkeypatch.setattr(
         Settings,
@@ -272,10 +283,7 @@ def test_unsupported_process_tree_degrades_options_without_internal_error(
     assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "COMPLETE"
-    assert (
-        payload["metadata_evidence"]["reason_code"]
-        == "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
-    )
+    assert payload["metadata_evidence"]["reason_code"] == "OPTION_METADATA_PROCESS_TREE_UNSUPPORTED"
 
 
 def test_options_cli_keeps_many_account_conflicts_schema_valid(monkeypatch, tmp_path, capsys):
@@ -292,10 +300,18 @@ def test_options_cli_keeps_many_account_conflicts_schema_valid(monkeypatch, tmp_
 
     class Metadata:
         def metadata(self, identities, *, timeout):
-            return {"data": [{
-                "code": identities[0], "lot_size": 100, "stock_owner": "US.A",
-                "option_type": "CALL", "strike_time": "2026-01-16", "strike_price": 1,
-            }]}
+            return {
+                "data": [
+                    {
+                        "code": identities[0],
+                        "lot_size": 100,
+                        "stock_owner": "US.A",
+                        "option_type": "CALL",
+                        "strike_time": "2026-01-16",
+                        "strike_price": 1,
+                    }
+                ]
+            }
 
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: Settings(data_home=home)))
     monkeypatch.setattr(cli, "discover_futuapi_skill", lambda: tmp_path / "audited-skill")
@@ -308,9 +324,7 @@ def test_options_cli_keeps_many_account_conflicts_schema_valid(monkeypatch, tmp_
         "FutuOptionQuoteProvider",
         lambda _adapter: Provider(rows={"US.A260116C1": {"option_type": "PUT"}}),
     )
-    monkeypatch.setattr(
-        cli, "FutuOptionMetadataProvider", lambda **_endpoint: Metadata()
-    )
+    monkeypatch.setattr(cli, "FutuOptionMetadataProvider", lambda **_endpoint: Metadata())
 
     assert cli.main(["options", "--snapshot", "snapshots/source.json", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
