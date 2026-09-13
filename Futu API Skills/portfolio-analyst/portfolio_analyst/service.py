@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .account_alias import AccountAliasError, AccountAliasStore, AccountAliaser
 from .classification import Classification, ClassificationMapper
@@ -40,7 +41,7 @@ def _load_json_object(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"required configuration is missing: {path.name}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ConfigError(f"configuration is unreadable or invalid JSON: {path.name}") from exc
     if not isinstance(payload, dict):
         raise ConfigError(f"configuration root must be an object: {path.name}")
@@ -97,16 +98,28 @@ def load_currency_converter(data_home: Path) -> CurrencyConverter:
 
 def load_classifications(data_home: Path) -> ClassificationMapper:
     path = data_home / "config" / "classifications.json"
-    if not path.exists():
-        return ClassificationMapper({})
-    payload = _load_json_object(path)
+    try:
+        if not path.exists():
+            return ClassificationMapper({})
+        payload = _load_json_object(path)
+    except (ConfigError, OSError):
+        return ClassificationMapper(
+            {},
+            warnings=("classifications.json is unavailable or invalid; classification is UNKNOWN",),
+        )
     mappings: dict[str, Classification] = {}
+    invalid_rows = False
     for code, raw in payload.items():
-        if not isinstance(raw, dict):
-            raise ConfigError(f"classification must be an object: {code}")
+        if not isinstance(raw, dict) or any(
+            not isinstance(raw.get(field, "UNKNOWN"), str)
+            for field in ("sector", "industry", "region", "asset_class")
+        ):
+            invalid_rows = True
+            continue
         themes = raw.get("themes", ["UNKNOWN"])
         if not isinstance(themes, list) or not all(isinstance(item, str) for item in themes):
-            raise ConfigError(f"classification themes must be a string array: {code}")
+            invalid_rows = True
+            continue
         mappings[str(code).upper()] = Classification(
             sector=str(raw.get("sector", "UNKNOWN")) or "UNKNOWN",
             industry=str(raw.get("industry", "UNKNOWN")) or "UNKNOWN",
@@ -114,7 +127,14 @@ def load_classifications(data_home: Path) -> ClassificationMapper:
             themes=tuple(themes) or ("UNKNOWN",),
             asset_class=str(raw.get("asset_class", "UNKNOWN")) or "UNKNOWN",
         )
-    return ClassificationMapper(mappings)
+    return ClassificationMapper(
+        mappings,
+        warnings=(
+            "classifications.json contains invalid rows; affected classifications are UNKNOWN",
+        )
+        if invalid_rows
+        else (),
+    )
 
 
 def load_security_metadata(data_home: Path) -> SecurityMetadataMapper:
@@ -177,6 +197,8 @@ def generate_snapshot(
     discovery_complete: bool = False,
     persist_aliases: bool = False,
     account_currency_loader: Callable[[Path], Mapping[str, str]] | None = None,
+    account_ids: Sequence[str] | None = None,
+    security_type_provider: Any = None,
 ) -> PortfolioSnapshot:
     """Acquire one snapshot; preserve precise as_of while IDs encode its UTC whole second."""
 
@@ -202,25 +224,43 @@ def generate_snapshot(
         aliaser=private_aliaser,
         account_currencies=account_currencies,
         discovery_complete=discovery_complete,
-    ).read(trd_env=trd_env)
+    ).read(trd_env=trd_env, account_ids=account_ids)
     if not inputs.accounts:
         raise SourceDataError(inputs.data_quality.source_errors[0])
     if inputs.data_quality.status == "UNAVAILABLE":
         raise SourceDataError("no account portfolio data was available for snapshot valuation")
+    from .security_type_source import FutuSecurityTypeProvider, enrich_security_types
+
+    metadata_warnings = []
+    try:
+        metadata = load_security_metadata(settings.data_home)
+    except ConfigError:
+        metadata = SecurityMetadataMapper({})
+        metadata_warnings.append(
+            "security_metadata.json unavailable or invalid; using source facts only"
+        )
+    provider = security_type_provider
+    if provider is None and isinstance(reader, FutuAdapter):
+        provider = FutuSecurityTypeProvider()
+    positions, type_warnings = enrich_security_types(inputs.positions, metadata, provider)
     builder = PortfolioBuilder(
         base_currency=base_currency,
         converter=load_currency_converter(settings.data_home),
         classifications=load_classifications(settings.data_home),
-        security_metadata=load_security_metadata(settings.data_home),
+        security_metadata=metadata,
     )
     snapshot = builder.build(
         accounts=inputs.accounts,
+        account_navs=inputs.account_navs,
         cash_balances=inputs.cash_balances,
-        positions=inputs.positions,
+        positions=positions,
         as_of=as_of or datetime.now(timezone.utc),
         trd_env=trd_env.upper(),
         source_version=inputs.source_version,
-        data_quality=inputs.data_quality,
+        data_quality=replace(
+            inputs.data_quality,
+            warnings=(*inputs.data_quality.warnings, *metadata_warnings, *type_warnings),
+        ),
     )
     validate_snapshot_document(snapshot.to_dict())
     return snapshot

@@ -9,6 +9,12 @@ Default to the user's current REAL securities account, USD base currency, and US
 holdings. Ask only when an ambiguity prevents reliable account selection, current holdings, NAV, or
 USD valuation. A request such as “analyze/review/diagnose my portfolio” selects this route.
 
+Only one eligible account may be auto-selected. Multiple candidates require the user's account
+choice; `ACCOUNT_SELECTION_REQUIRED` is a clarification boundary, not permission to combine all
+accounts. Use the selected private ID only in local account commands, never in web queries or the
+final report. Invalid/unavailable choices are `ACCOUNT_SELECTION_INVALID`; do not substitute an
+account. Explicit aggregation reads exactly the requested accounts and fails if any is unreadable.
+
 ## 2. Diagnose and acquire once
 
 Run `doctor` when environment readiness is unknown. Do not substitute `--latest` or an old saved
@@ -22,6 +28,11 @@ From the Skill directory run:
 ```bash
 python scripts/current_analysis.py
 ```
+
+When an account has been selected, use `python scripts/current_analysis.py --acc-id ACCOUNT_ID`,
+replacing `ACCOUNT_ID` with the chosen private ID. Repeat `--acc-id` only when the user requests
+aggregation. The helper forwards the selection to its single snapshot acquisition; it does not
+create a saved account preference. An unspecified account remains valid only with one candidate.
 
 Capture its stdout as internal evidence for report composition; never paste the raw JSON into chat or
 send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`,
@@ -54,6 +65,10 @@ pre-unlink and post-deletion checks narrow that time-of-check/time-of-use window
 races, but do not claim an atomic owned-only deletion guarantee against such an attacker.
 
 Snapshot acquisition/validation failure stops because current holdings authority is unavailable.
+The helper validates the full snapshot schema, content identity and financial semantics before
+downstream commands. It validates each successful component's schema/semantics, snapshot ID/as-of,
+embedded snapshot when present, and the technical report's exact risk binding. A declared source
+mismatch is fatal; malformed component evidence is a local `INVALID_COMPONENT_OUTPUT` degradation.
 In contrast, risk, technical, and options failures are local degradation: the helper returns the
 failed component as `null`, records its structured error in `degradations`, continues with the
 reliable snapshot and other components, and still performs safe cleanup. In particular,
@@ -70,6 +85,12 @@ local lifecycle records and snapshot history even without output persistence.
 If risk is degraded, retain available snapshot facts, place the limitation beside affected
 conclusions, and continue every reliable section. Never portray an unavailable risk/short analysis as
 complete.
+
+Missing cash leaves portfolio cash and cash weight `null`, even when some selected accounts have
+known cash. Known per-account amounts remain usable only with their narrower scope. Missing cost,
+current price, or sellable quantity stays `null`; keep NAV, market values, holdings, and concentration
+where evidenced. Do not repair these gaps with arithmetic. Missing price degrades the affected
+technical/option calculations; missing cash or required price prevents rebalance simulation only.
 
 ## 4. Select and gather deep evidence
 

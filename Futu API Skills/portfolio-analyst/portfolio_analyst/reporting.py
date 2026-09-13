@@ -60,7 +60,7 @@ class PortfolioReport:
             f"- source_snapshot_id: `{md(data['source_snapshot_id'])}`",
             f"- As of: {data['as_of']}",
             f"- NAV: {data['summary']['nav_base']} {data['base_currency']}",
-            f"- Cash: {data['summary']['cash_base']} {data['base_currency']}",
+            f"- Cash: {data['summary']['cash_base'] if data['summary']['cash_base'] is not None else 'Unavailable'} {data['base_currency']}",
             f"- Position count: {data['summary']['position_count']}",
             "- All weights below use a NAV basis.",
             f"- Data range: point-in-time snapshot at {data['as_of']}; "

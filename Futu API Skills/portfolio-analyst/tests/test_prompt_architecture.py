@@ -66,7 +66,7 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     skill = _read("SKILL.md")
     assert len(skill.splitlines()) <= 250
     assert re.search(r"(?m)^name: portfolio-analyst$", skill)
-    assert re.search(r"(?m)^allowed-tools: Bash Read WebSearch WebFetch$", skill)
+    assert re.search(r"(?m)^allowed-tools: Bash Read WebSearch WebFetch web.run web_search$", skill)
     assert "current USD US-stock account holdings" in skill
     assert "REAL" in skill and "USD" in skill
     assert "one bound snapshot" in skill
@@ -76,7 +76,7 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     assert "place order" in skill.lower()
     assert "For account and brokerage data access, use only" in skill
     assert "bundled `portfolio-analyst` CLI" in skill
-    assert "For external research, use `WebSearch` and `WebFetch` only under" in skill
+    assert "host's authorized read-only search/page-reading capabilities" in skill
     assert "references/evidence-policy.md" in skill
 
     default_route = _section(skill, "Default comprehensive route")
@@ -340,20 +340,20 @@ def test_three_behavior_evals_have_machine_checkable_assertions():
             assert "value" in assertion
 
         required_headings = {
-            "## Scope and data time",
-            "## One-line conclusion",
-            "## Overview",
-            "## Three principal risks",
-            "## Complete holdings table",
-            "## Selected deep research",
-            "## Macro impact",
-            "## Observations",
-            "## Data gaps and sources",
+            "Scope and data time",
+            "One-line conclusion",
+            "Overview",
+            "Three principal risks",
+            "Complete holdings table",
+            "Selected deep research",
+            "Macro impact",
+            "Observations",
+            "Data gaps and sources",
         }
         markdown_assertions = {
             item["value"]
             for item in case["assertions"]
-            if item["type"] == "contains" and item["target"] == "response_markdown"
+            if item["type"] == "contains" and item["target"] == "trace.observations.report.sections"
         }
         assert required_headings <= markdown_assertions
 
@@ -368,8 +368,8 @@ def test_three_behavior_evals_have_machine_checkable_assertions():
         ("contains", "trace.observations.options.capability_gaps", "multiplier"),
         ("contains", "trace.observations.options.capability_gaps", "underlying"),
         ("contains", "trace.observations.options.capability_gaps", "moneyness"),
-        ("contains", "response_markdown", "Tool status: COMPLETE"),
-        ("contains", "response_markdown", "Analysis capability gaps"),
+        ("equals", "trace.observations.options.reported_tool_status", "COMPLETE"),
+        ("equals", "trace.observations.options.analysis_gaps_disclosed", True),
     }
 
 

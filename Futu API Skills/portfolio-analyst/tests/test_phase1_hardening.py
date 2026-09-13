@@ -13,7 +13,7 @@ from portfolio_analyst.account_alias import AccountAliasError, AccountAliasStore
 from portfolio_analyst.classification import Classification, ClassificationMapper
 from portfolio_analyst.fx import FxEvidenceError, StaticCurrencyConverter
 from portfolio_analyst.identity import snapshot_identity
-from portfolio_analyst.models import Account, CashBalance, DataQuality, Position
+from portfolio_analyst.models import Account, AccountNAV, CashBalance, DataQuality, Position
 from portfolio_analyst.persistence import SnapshotStore
 from portfolio_analyst.quality import compose_quality
 from portfolio_analyst.snapshot import PortfolioBuilder, UnsafeAggregationError
@@ -49,6 +49,7 @@ def _snapshot(builder=None, *, source_version="v1", quality=None):
     builder = builder or _builder()
     return builder.build(
         accounts=(Account("acct-private", "REAL", "MARGIN", "NORMAL", ("HK",), "ACTIVE"),),
+        account_navs=(AccountNAV("acct-private", "USD", Decimal("200")),),
         cash_balances=(CashBalance("acct-private", "USD", Decimal("100")),),
         positions=(
             Position(
@@ -125,6 +126,7 @@ def test_usd_only_snapshot_ignores_and_omits_unused_stale_or_future_hkd_rate(
     )
     snapshot = builder.build(
         accounts=(Account("acct-private", "REAL", "MARGIN", "NORMAL", ("US",), "ACTIVE"),),
+        account_navs=(AccountNAV("acct-private", "USD", Decimal("100")),),
         cash_balances=(CashBalance("acct-private", "USD", Decimal("100")),),
         positions=(),
         as_of=AS_OF,
@@ -270,6 +272,7 @@ def test_nonpositive_nav_fails_closed_without_inverted_weights():
     with pytest.raises(UnsafeAggregationError, match="NAV must be positive"):
         builder.build(
             accounts=(Account("acct-private", "REAL", "MARGIN", "NORMAL", ("US",), "ACTIVE"),),
+            account_navs=(AccountNAV("acct-private", "USD", Decimal("-100")),),
             cash_balances=(CashBalance("acct-private", "USD", Decimal("100")),),
             positions=(
                 Position(

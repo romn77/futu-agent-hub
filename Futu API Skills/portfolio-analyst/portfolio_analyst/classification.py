@@ -30,7 +30,10 @@ class Classification:
 class ClassificationMapper:
     """Resolve exact normalized codes without guessing from display names."""
 
-    def __init__(self, mappings: Mapping[str, Classification]) -> None:
+    def __init__(
+        self, mappings: Mapping[str, Classification], *, warnings: tuple[str, ...] = ()
+    ) -> None:
+        self.warnings = tuple(warnings)
         self._mappings = MappingProxyType(
             {str(code).upper(): classification for code, classification in mappings.items()}
         )

@@ -96,6 +96,6 @@
       ]
     },
     "topHoldings": {"type": "array", "maxItems": 5, "items": {"type": "object", "maxProperties": 3, "additionalProperties": false, "required": ["symbol", "weight", "market_value_base"], "properties": {"symbol": {"$ref": "#/$defs/positionIdentity"}, "weight": {"$ref": "#/$defs/decimal"}, "market_value_base": {"$ref": "#/$defs/decimal"}}}},
-    "summary": {"type": "object", "maxProperties": 5, "additionalProperties": false, "required": ["nav_base", "cash_base", "cash_weight", "position_count", "top_holdings"], "properties": {"nav_base": {"$ref": "#/$defs/decimal"}, "cash_base": {"$ref": "#/$defs/decimal"}, "cash_weight": {"$ref": "#/$defs/decimal"}, "position_count": {"type": "integer", "minimum": 0, "maximum": 10000}, "top_holdings": {"$ref": "#/$defs/topHoldings"}}}
+    "summary": {"type": "object", "maxProperties": 5, "additionalProperties": false, "required": ["nav_base", "cash_base", "cash_weight", "position_count", "top_holdings"], "properties": {"nav_base": {"$ref": "#/$defs/decimal"}, "cash_base": {"$ref": "#/$defs/nullableDecimal"}, "cash_weight": {"$ref": "#/$defs/nullableDecimal"}, "position_count": {"type": "integer", "minimum": 0, "maximum": 10000}, "top_holdings": {"$ref": "#/$defs/topHoldings"}}}
   }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://portfolio-analyst.local/schemas/portfolio_snapshot.schema.json",
-  "title": "Portfolio Snapshot 1.0",
+  "title": "Portfolio Snapshot 1.1 (OpenD NAV) and legacy 1.0",
   "type": "object",
   "maxProperties": 32,
   "additionalProperties": false,
@@ -12,7 +12,9 @@
     "net_exposure_base", "exposures", "data_quality"
   ],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"enum": ["1.0", "1.1"]},
+    "nav_source": {"const": "OPEND_TOTAL_ASSETS"},
+    "account_navs": {"type": "array", "minItems": 1, "maxItems": 10000, "items": {"$ref": "#/$defs/accountNAV"}},
     "snapshot_id": {"type": "string", "maxLength": 80, "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
     "as_of": {"type": "string", "maxLength": 64, "format": "date-time"},
     "source": {"const": "futuapi"},
@@ -24,8 +26,8 @@
     "cash_balances": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/cash"}},
     "positions": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/position"}},
     "nav_base": {"$ref": "#/$defs/decimal"},
-    "cash_base": {"$ref": "#/$defs/decimal"},
-    "cash_weight": {"$ref": "#/$defs/decimal"},
+    "cash_base": {"$ref": "#/$defs/nullableDecimal"},
+    "cash_weight": {"$ref": "#/$defs/nullableDecimal"},
     "long_exposure_base": {"$ref": "#/$defs/decimal"},
     "short_exposure_base": {"$ref": "#/$defs/decimal"},
     "gross_exposure_base": {"$ref": "#/$defs/decimal"},
@@ -44,6 +46,20 @@
     },
     "data_quality": {"$ref": "#/$defs/dataQuality"}
   },
+  "if": {"properties": {"schema_version": {"const": "1.1"}}},
+  "then": {"required": ["nav_source", "account_navs"]},
+  "else": {"properties": {
+    "nav_source": false, "account_navs": false,
+    "cash_base": {"$ref": "#/$defs/decimal"}, "cash_weight": {"$ref": "#/$defs/decimal"},
+    "cash_balances": {"items": {"properties": {
+      "amount_local": {"$ref": "#/$defs/decimal"},
+      "amount_base": {"$ref": "#/$defs/decimal"}, "weight": {"$ref": "#/$defs/decimal"}
+    }}},
+    "positions": {"items": {"properties": {
+      "can_sell_quantity": {"$ref": "#/$defs/decimal"},
+      "average_cost_local": {"$ref": "#/$defs/decimal"}, "last_price_local": {"$ref": "#/$defs/decimal"}
+    }}}
+  }},
   "$defs": {
     "decimal": {"type": "string", "maxLength": 512, "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
     "nullableDecimal": {"oneOf": [{"$ref": "#/$defs/decimal"}, {"type": "null"}]},
@@ -69,13 +85,24 @@
         "alias_provenance": {"enum": ["STABLE", "EPHEMERAL"]}
       }
     },
+    "accountNAV": {
+      "type": "object", "maxProperties": 5, "additionalProperties": false,
+      "required": ["account_ref", "currency", "total_assets_local", "fx_to_base", "total_assets_base"],
+      "properties": {
+        "account_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+        "currency": {"type": "string", "maxLength": 3, "pattern": "^[A-Z]{3}$"},
+        "total_assets_local": {"$ref": "#/$defs/decimal"},
+        "fx_to_base": {"$ref": "#/$defs/decimal"},
+        "total_assets_base": {"$ref": "#/$defs/decimal"}
+      }
+    },
     "cash": {
       "type": "object", "maxProperties": 7, "additionalProperties": false,
       "required": ["account_ref", "currency", "amount_local", "fx_to_base", "amount_base", "weight", "data_quality_notes"],
       "properties": {
         "account_ref": {"type": "string", "maxLength": 128}, "currency": {"type": "string", "maxLength": 3},
-        "amount_local": {"$ref": "#/$defs/decimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
-        "amount_base": {"$ref": "#/$defs/decimal"}, "weight": {"$ref": "#/$defs/decimal"},
+        "amount_local": {"$ref": "#/$defs/nullableDecimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
+        "amount_base": {"$ref": "#/$defs/nullableDecimal"}, "weight": {"$ref": "#/$defs/nullableDecimal"},
         "data_quality_notes": {"type": "array", "maxItems": 256, "items": {"type": "string", "maxLength": 512}}
       }
     },
@@ -85,8 +112,8 @@
       "properties": {
         "account_ref": {"type": "string", "maxLength": 128}, "symbol": {"type": "string", "maxLength": 256}, "name": {"type": "string", "maxLength": 1024},
         "market": {"type": "string", "maxLength": 8}, "security_type": {"type": "string", "maxLength": 32}, "currency": {"type": "string", "maxLength": 3}, "currency_provenance": {"enum": ["AUDITED_SOURCE", "USER_CONFIG"]},
-        "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/decimal"},
-        "average_cost_local": {"$ref": "#/$defs/decimal"}, "last_price_local": {"$ref": "#/$defs/decimal"},
+        "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/nullableDecimal"},
+        "average_cost_local": {"$ref": "#/$defs/nullableDecimal"}, "last_price_local": {"$ref": "#/$defs/nullableDecimal"},
         "market_value_local": {"$ref": "#/$defs/decimal"}, "unrealized_pl_local": {"$ref": "#/$defs/nullableDecimal"},
         "realized_pl_local": {"$ref": "#/$defs/nullableDecimal"}, "fx_to_base": {"$ref": "#/$defs/decimal"},
         "market_value_base": {"$ref": "#/$defs/decimal"}, "unrealized_pl_base": {"$ref": "#/$defs/nullableDecimal"}, "realized_pl_base": {"$ref": "#/$defs/nullableDecimal"},

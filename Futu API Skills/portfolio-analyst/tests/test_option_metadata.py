@@ -308,6 +308,41 @@ def test_posix_process_group_bounded_runner_enforces_timeout():
         )
 
 
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_bounded_runner_timeout_retains_captured_execution_evidence():
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        _bounded_subprocess_run(
+            [
+                sys.executable,
+                "-c",
+                "import os,time; os.write(1,b'event'); os.write(2,b'diagnostic'); time.sleep(2)",
+            ],
+            timeout=0.2,
+            shell=False,
+        )
+    assert caught.value.output == b"event"
+    assert caught.value.stderr == b"diagnostic"
+
+
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_bounded_runner_accepts_explicit_larger_eval_budget():
+    completed = _bounded_subprocess_run(
+        [sys.executable, "-c", "import os; os.write(1,b'x'*300000)"],
+        timeout=5,
+        max_output_bytes=400000,
+        shell=False,
+    )
+    assert completed.returncode == 0
+    assert len(completed.stdout) == 300000
+
+
+@pytest.mark.parametrize("budget", [0, -1, True, 8 * 1024 * 1024 + 1])
+@pytest.mark.skipif(not _POSIX_PROCESS_GROUPS, reason="POSIX process-group contract")
+def test_bounded_runner_rejects_invalid_budget_before_process_start(budget):
+    with pytest.raises(ValueError, match="output budget"):
+        _bounded_subprocess_run(["must-not-exist"], timeout=1, max_output_bytes=budget)
+
+
 def _pid_is_live(pid: int) -> bool:
     stat_path = f"/proc/{pid}/stat"
     try:

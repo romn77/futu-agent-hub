@@ -30,6 +30,16 @@ def _close(actual: Decimal, expected: Decimal, field: str) -> None:
         raise SnapshotSemanticError(f"{field} does not reconcile")
 
 
+def _require_unknown_quality(snapshot: PortfolioSnapshot, field: str) -> None:
+    if (
+        snapshot.schema_version != "1.1"
+        or snapshot.data_quality.status == "COMPLETE"
+        or field not in snapshot.data_quality.missing_fields
+        or not any(field in warning for warning in snapshot.data_quality.warnings)
+    ):
+        raise SnapshotSemanticError(f"unknown {field} requires explicit partial quality")
+
+
 def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
     if snapshot.as_of.tzinfo is None or snapshot.as_of.utcoffset() is None:
         raise SnapshotSemanticError("as_of must be timezone-aware")
@@ -112,19 +122,67 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
             raise SnapshotSemanticError("FX evidence contains conflicting rates")
         fx_rates[key] = rate
 
+    if snapshot.schema_version == "1.1":
+        if snapshot.nav_source != "OPEND_TOTAL_ASSETS" or not snapshot.account_navs:
+            raise SnapshotSemanticError("OpenD account NAV evidence is required")
+        nav_accounts = [item.account_ref for item in snapshot.account_navs]
+        nav_account_refs = set(nav_accounts)
+        if len(nav_accounts) != len(nav_account_refs) or not nav_account_refs <= known_accounts:
+            raise SnapshotSemanticError("OpenD NAV account aliases must be unique known accounts")
+        if any(
+            item.account_ref not in nav_account_refs
+            for item in (*snapshot.cash_balances, *snapshot.positions)
+        ):
+            raise SnapshotSemanticError("cash or positions lack OpenD account NAV evidence")
+        accounts_read = snapshot.data_quality.coverage.get("accounts_returned_read")
+        if accounts_read is not None and accounts_read != len(nav_accounts):
+            raise SnapshotSemanticError("OpenD NAV coverage does not match accounts read")
+        if len(nav_accounts) < len(known_accounts) and snapshot.data_quality.status == "COMPLETE":
+            raise SnapshotSemanticError("incomplete account NAV coverage cannot be COMPLETE")
+        total_nav = Decimal("0")
+        for account_nav in snapshot.account_navs:
+            assets = _finite(account_nav.total_assets_local, "OpenD total_assets")
+            rate = fx_rates.get((account_nav.currency, snapshot.base_currency))
+            if rate is None:
+                raise SnapshotSemanticError("OpenD NAV conversion lacks FX evidence")
+            _close(account_nav.fx_to_base, rate, "OpenD NAV fx_to_base")
+            _close(account_nav.total_assets_base, assets * rate, "OpenD NAV total_assets_base")
+            total_nav += account_nav.total_assets_base
+        _close(nav, total_nav, "OpenD account NAV total")
+    elif (
+        snapshot.schema_version != "1.0" or snapshot.account_navs or snapshot.nav_source is not None
+    ):
+        raise SnapshotSemanticError("snapshot NAV source/version is invalid")
+
     cash_total = Decimal("0")
+    cash_complete = {item.account_ref for item in snapshot.account_navs} <= {
+        cash.account_ref for cash in snapshot.cash_balances
+    }
     for cash in snapshot.cash_balances:
-        if cash.fx_to_base is None or cash.amount_base is None or cash.weight is None:
-            raise SnapshotSemanticError("converted cash fields must be present")
         rate = fx_rates.get((cash.currency, snapshot.base_currency))
         if rate is None:
             raise SnapshotSemanticError("cash conversion lacks FX evidence")
         _close(cash.fx_to_base, rate, "cash fx_to_base")
+        if cash.amount_local is None:
+            cash_complete = False
+            _require_unknown_quality(snapshot, "cash")
+            if cash.amount_base is not None or cash.weight is not None:
+                raise SnapshotSemanticError("unknown cash cannot have an amount or weight")
+            continue
+        if cash.amount_base is None or cash.weight is None:
+            raise SnapshotSemanticError("known cash requires converted amounts and weight")
         _close(cash.amount_base, cash.amount_local * rate, "cash amount_base")
         _close(cash.weight, cash.amount_base / nav, "cash weight")
         cash_total += cash.amount_base
-    _close(snapshot.cash_base, cash_total, "cash_base")
-    _close(snapshot.cash_weight, snapshot.cash_base / nav, "cash_weight")
+    if cash_complete:
+        _close(snapshot.cash_base, cash_total, "cash_base")
+        _close(snapshot.cash_weight, snapshot.cash_base / nav, "cash_weight")
+    else:
+        _require_unknown_quality(snapshot, "cash")
+        if snapshot.cash_base is not None or snapshot.cash_weight is not None:
+            raise SnapshotSemanticError(
+                "incomplete cash coverage cannot have aggregate cash values"
+            )
 
     long_exposure = Decimal("0")
     short_exposure = Decimal("0")
@@ -142,6 +200,12 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
             "duplicate account and canonical identity economic position leg"
         )
     for position in snapshot.positions:
+        for field in ("can_sell_quantity", "average_cost_local", "last_price_local"):
+            value = getattr(position, field)
+            if value is None:
+                _require_unknown_quality(snapshot, field)
+            else:
+                _finite(value, field)
         quantity = _finite(position.quantity, "position quantity")
         role = (position.position_role or "").upper()
         if quantity and ((role == "LONG" and quantity < 0) or (role == "SHORT" and quantity > 0)):
@@ -187,14 +251,17 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
     _close(snapshot.short_exposure_base, short_exposure, "short_exposure_base")
     _close(snapshot.gross_exposure_base, long_exposure + short_exposure, "gross_exposure_base")
     _close(snapshot.net_exposure_base, long_exposure - short_exposure, "net_exposure_base")
-    _close(snapshot.nav_base, snapshot.cash_base + snapshot.net_exposure_base, "NAV identity")
-    if not short_exposure:
-        _close(
-            sum((position.weight for position in snapshot.positions), Decimal("0"))
-            + snapshot.cash_weight,
-            Decimal("1"),
-            "long-only weights",
-        )
+    # Only legacy 1.0 history used reconstructed NAV. New snapshots preserve OpenD's NAV
+    # even when the exposed cash/position population does not account for every asset.
+    if snapshot.schema_version == "1.0":
+        _close(snapshot.nav_base, snapshot.cash_base + snapshot.net_exposure_base, "NAV identity")
+        if not short_exposure:
+            _close(
+                sum((position.weight for position in snapshot.positions), Decimal("0"))
+                + snapshot.cash_weight,
+                Decimal("1"),
+                "long-only weights",
+            )
 
     if set(snapshot.exposures) != set(exposure_maps):
         raise SnapshotSemanticError("snapshot exposure dimensions are incomplete")

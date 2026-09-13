@@ -2,21 +2,32 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
 import os
 import stat
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from jsonschema import ValidationError as JsonSchemaValidationError
+
 from . import cli
+from .child_environment import validate_account_id
 from .private_home import PrivateHomeError, ensure_private_home, require_secure_platform_mutation
 from .settings import Settings, SettingsError
+from .schema import (
+    ReportSemanticError,
+    validate_risk_document,
+    validate_technical_document,
+    validate_option_risk_document,
+)
+from .snapshot_io import InvalidSnapshot, snapshot_from_document
 
 
 _ALLOWED_FILES = frozenset({"snapshot.json", "risk.json", "technical.json", "options.json"})
@@ -26,6 +37,10 @@ _FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0
 
 class CurrentAnalysisError(RuntimeError):
     """Raised when the authoritative snapshot cannot be acquired."""
+
+
+class SnapshotBindingError(CurrentAnalysisError):
+    """Raised when a component declares evidence from a different source."""
 
 
 class TemporaryCleanupError(RuntimeError):
@@ -295,7 +310,11 @@ def _error_evidence(result: CliResult, component: str) -> dict[str, str]:
 
 
 def _component_result(
-    result: CliResult, component: str
+    result: CliResult,
+    component: str,
+    *,
+    snapshot: Mapping[str, Any],
+    risk: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if result.returncode != 0:
         return None, {
@@ -304,7 +323,33 @@ def _component_result(
             "error": _error_evidence(result, component),
         }
     try:
-        return _parse_object(result, component), None
+        payload = _parse_object(result, component)
+        # A declared conflicting source is fatal even if other fields are also invalid.
+        if any(
+            field in payload and payload[field] != expected
+            for field, expected in (
+                ("source_snapshot_id", snapshot["snapshot_id"]),
+                ("as_of", snapshot["as_of"]),
+            )
+        ):
+            raise SnapshotBindingError(f"{component} snapshot identity mismatch")
+        validators = {
+            "risk": validate_risk_document,
+            "technical": validate_technical_document,
+            "options": validate_option_risk_document,
+        }
+        try:
+            validators[component](payload)
+        except (JsonSchemaValidationError, ReportSemanticError, InvalidSnapshot, ValueError):
+            raise CurrentAnalysisError(f"{component} returned invalid report evidence") from None
+        if component in {"technical", "options"}:
+            if payload["provenance"]["source_snapshot"] != snapshot:
+                raise SnapshotBindingError(f"{component} snapshot identity mismatch")
+        if component == "technical" and payload["provenance"]["source_risk_report"] != risk:
+            raise SnapshotBindingError("technical snapshot risk binding mismatch")
+        return payload, None
+    except SnapshotBindingError:
+        raise
     except CurrentAnalysisError as exc:
         return None, {
             "component": component,
@@ -339,30 +384,58 @@ def _validate_snapshot_scope(snapshot: Mapping[str, Any]) -> None:
             raise CurrentAnalysisError(f"snapshot {field} is unavailable")
     if not isinstance(snapshot.get("positions"), list):
         raise CurrentAnalysisError("snapshot positions are unavailable")
+    quality = snapshot.get("data_quality", {})
+    if not isinstance(quality, Mapping) or not isinstance(quality.get("coverage", {}), Mapping):
+        raise CurrentAnalysisError("snapshot account coverage is unavailable")
+    coverage = quality.get("coverage", {})
+    selected = coverage.get("accounts_returned")
+    read = coverage.get("accounts_returned_read")
+    if selected is not None and (
+        type(selected) is not int or selected <= 0 or type(read) is not int or read != selected
+    ):
+        raise CurrentAnalysisError("selected account holdings are incomplete")
+    try:
+        snapshot_from_document(dict(snapshot))
+    except (InvalidSnapshot, JsonSchemaValidationError, ValueError, TypeError, KeyError):
+        raise CurrentAnalysisError(
+            "snapshot structure, identity or financial semantics is invalid"
+        ) from None
 
 
 def run_current_analysis(
     *,
     settings: Settings | None = None,
     invoke: Callable[[list[str]], CliResult] | None = None,
+    account_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Acquire one snapshot; make risk/technical/options failures local degradations."""
 
+    if account_ids is not None:
+        if isinstance(account_ids, (str, bytes)) or not account_ids:
+            raise CurrentAnalysisError("ACCOUNT_SELECTION_INVALID")
+        try:
+            for account_id in account_ids:
+                validate_account_id(account_id)
+            if len(set(account_ids)) != len(account_ids):
+                raise ValueError("duplicate account selection")
+        except (TypeError, ValueError):
+            raise CurrentAnalysisError("ACCOUNT_SELECTION_INVALID") from None
     resolved_settings = settings or Settings.from_env()
     command = invoke or _invoke_cli
     owned = OwnedTemporaryRun.create(resolved_settings.data_home)
     try:
-        snapshot_result = command(
-            [
-                "snapshot",
-                "--trd-env",
-                "REAL",
-                "--base-currency",
-                "USD",
-                "--json",
-                "--no-save",
-            ]
-        )
+        snapshot_arguments = [
+            "snapshot",
+            "--trd-env",
+            "REAL",
+            "--base-currency",
+            "USD",
+            "--json",
+            "--no-save",
+        ]
+        for account_id in account_ids or ():
+            snapshot_arguments.extend(("--acc-id", account_id))
+        snapshot_result = command(snapshot_arguments)
         if snapshot_result.returncode != 0:
             error = _error_evidence(snapshot_result, "snapshot")
             raise CurrentAnalysisError(f"snapshot failed: {error['code']}")
@@ -374,7 +447,7 @@ def run_current_analysis(
         degradations: list[dict[str, Any]] = []
         risk: dict[str, Any] | None = None
         risk_result = command(["risk", "--snapshot", snapshot_path, "--json", "--no-save"])
-        risk, risk_degradation = _component_result(risk_result, "risk")
+        risk, risk_degradation = _component_result(risk_result, "risk", snapshot=snapshot)
         if risk is not None:
             owned.write_json("risk.json", risk)
         elif risk_degradation is not None:
@@ -390,7 +463,9 @@ def run_current_analysis(
         if risk is not None:
             technical_arguments.extend(("--risk-report", owned.relative_path("risk.json")))
         technical_result = command(technical_arguments)
-        technical, technical_degradation = _component_result(technical_result, "technical")
+        technical, technical_degradation = _component_result(
+            technical_result, "technical", snapshot=snapshot, risk=risk
+        )
         if technical is not None:
             owned.write_json("technical.json", technical)
         elif technical_degradation is not None:
@@ -401,7 +476,9 @@ def run_current_analysis(
             options_result = command(
                 ["options", "--snapshot", snapshot_path, "--json", "--no-save"]
             )
-            options, options_degradation = _component_result(options_result, "options")
+            options, options_degradation = _component_result(
+                options_result, "options", snapshot=snapshot
+            )
             if options is not None:
                 owned.write_json("options.json", options)
             elif options_degradation is not None:
@@ -418,9 +495,25 @@ def run_current_analysis(
         owned.cleanup()
 
 
-def main() -> int:
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise SettingsError("invalid current-analysis arguments")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     try:
-        envelope = run_current_analysis()
+        parser = _ArgumentParser(
+            description="Read one explicitly scoped current portfolio", allow_abbrev=False
+        )
+        parser.add_argument(
+            "--acc-id",
+            action="append",
+            dest="account_ids",
+            metavar="ACCOUNT_ID",
+            help="select a private account ID; repeat only for explicitly requested aggregation",
+        )
+        args = parser.parse_args(argv)
+        envelope = run_current_analysis(account_ids=args.account_ids)
     except SettingsError:
         return _emit_stable_error("CONFIG_ERROR", "portfolio configuration is invalid")
     except PrivateHomeError:

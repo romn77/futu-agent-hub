@@ -24,6 +24,13 @@ covered-call/protective-put inventory relationships. These fields remain unknown
 contract is incomplete or conflicting; raw-Greek report status is not downgraded solely because
 static metadata is unavailable.
 
+Raw-Greek completeness is scoped to the selected account inventory. Verified full selected-account
+coverage plus complete quote fields can support COMPLETE raw Greeks even when classification,
+cash, cost, price, or sellable quantity makes the source snapshot PARTIAL. Preserve the source's
+PARTIAL status in its own evidence. Unknown security types, missing account/position population,
+source errors or stale authority still prevent complete aggregate claims. Missing underlying price
+continues to degrade notional Delta/moneyness locally; raw Greeks do not imply those are available.
+
 Never parse a contract code or label to manufacture a field. Do not infer cash-secured puts, spreads,
 collars, margin, payoff, probability, or advice. Missing evidence is **unavailable/degraded**.
 

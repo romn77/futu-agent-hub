@@ -579,6 +579,9 @@ def _build_underlying_index(
         if item.security_type != "STOCK" or item.quantity <= 0:
             continue
         key = (item.account_ref, _identity(item))
+        if item.last_price_local is None:
+            index[key] = None
+            continue
         current = index.get(key)
         if key in index and current is None:
             continue
@@ -643,6 +646,36 @@ def _moneyness(option_type: str | None, strike: Decimal | None, price: Decimal |
     if option_type == "CALL":
         return "ITM" if distance > 0 else "OTM"
     return "ITM" if distance < 0 else "OTM"
+
+
+def _complete_position_population(snapshot: PortfolioSnapshot) -> bool:
+    """Authorize only the selected inventory, independently of unrelated missing facts."""
+    quality = snapshot.data_quality
+    if quality.status not in {"COMPLETE", "PARTIAL"} or quality.source_errors:
+        return False
+    if set(quality.missing_fields) - {
+        "classification",
+        "cash",
+        "average_cost_local",
+        "can_sell_quantity",
+        "last_price_local",
+        "unrealized_pl",
+        "realized_pl",
+    }:
+        return False
+    coverage = quality.coverage
+    if "accounts_returned" in coverage or "accounts_returned_read" in coverage:
+        selected = coverage.get("accounts_returned")
+        read = coverage.get("accounts_returned_read")
+        return (
+            type(selected) is int
+            and type(read) is int
+            and selected == read == len(snapshot.accounts)
+            and selected > 0
+        )
+    # Historical COMPLETE snapshots predate explicit selected-account coverage.
+    # An unexplained PARTIAL status alone never proves population completeness.
+    return quality.status == "COMPLETE"
 
 
 def analyze_option_risk(
@@ -754,7 +787,7 @@ def analyze_option_risk(
         unknown_count == 0
         and not unsupported
         and not budget_omitted
-        and snapshot.data_quality.status == "COMPLETE"
+        and _complete_position_population(snapshot)
     )
     leg_exposures: list[dict[str, Any]] = []
     derived_greek_overflows = {name: {"leg_values": 0, "aggregate": False} for name in GREEKS}

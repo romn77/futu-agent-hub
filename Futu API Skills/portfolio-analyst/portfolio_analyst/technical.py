@@ -742,7 +742,9 @@ def _current_price(snapshot: PortfolioSnapshot, identity: str) -> Decimal:
         position_identity, _market, _symbol = _canonical_identity(position)
         if position_identity == identity:
             prices.append(position.last_price_local)
-    if not prices or any(price != prices[0] for price in prices[1:]):
+    if not prices or any(price is None for price in prices):
+        raise TechnicalInputError(f"current price evidence is unavailable for {identity}")
+    if any(price != prices[0] for price in prices[1:]):
         raise TechnicalInputError(f"current price evidence conflicts for {identity}")
     return prices[0]
 

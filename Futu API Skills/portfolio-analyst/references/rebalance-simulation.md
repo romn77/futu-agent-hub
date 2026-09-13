@@ -8,6 +8,12 @@ strict JSON request. Duplicate JSON keys, duplicate symbol changes, ambiguous id
 conflicting cross-account metadata, non-finite Decimal values, missing prices/FX, and path traversal
 fail closed.
 
+An OpenD snapshot may retain unknown cash or current price without blocking current-holdings
+analysis. Rebalance simulation requires both and rejects their absence with a domain error; it never
+substitutes zero or derives them from NAV. Unknown average cost or sellable quantity remains unknown
+and is disclosed in source quality. Neither is used to certify broker execution availability by this
+hypothetical simulator; mathematical feasibility is not an assertion that an order can be placed.
+
 Operations are deterministic:
 
 - `TARGET_WEIGHT`: final NAV times target weight minus current base-currency market value.
@@ -18,9 +24,13 @@ Operations are deterministic:
 All operations use canonical market-qualified identities. Position values, quantities, NAV, cash,
 weights, Top-1/3/5, HHI, and sector/region/full-theme/split-theme exposures are recomputed without
 requesting history. The original snapshot and request are frozen and never mutated. Runtime semantic
-validation rechecks operation formulas, cash plus positions equals NAV, state weights, additive
+validation rechecks operation formulas, source-bound NAV, state weights, additive
 exposures, concentration, cash/NAV/change deltas, risk deltas, constraint feasibility, quality
-status, and a simulation identity bound to the complete result body.
+status, and a simulation identity bound to the complete result body. With an OpenD-NAV snapshot
+(`1.1`), hypothetical NAV is the source NAV plus explicitly supplied new cash. Trading between cash
+and listed positions does not reconstruct or change that NAV. Cash plus listed holdings is not
+required to equal the broker's account total; the simulator does not assign any difference to cash
+or a fabricated holding. Legacy snapshot `1.0` retains its original cash-plus-positions identity.
 It first runs the complete Phase 1 snapshot schema, content identity, alias, FX, cash/NAV, weights,
 exposure, and quality semantics over the embedded source, then requires `before` cash, NAV,
 quantities, and market values to match it. Decimal ratios, weights, and signed exposure maps use one

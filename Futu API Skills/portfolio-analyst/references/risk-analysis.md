@@ -6,8 +6,9 @@ orders. Every JSON and Markdown report repeats the snapshot's `snapshot_id`, `as
 quality state, and quality notes. Snapshot bytes use descriptor-relative `O_NOFOLLOW` traversal with
 file and parent inode revalidation. Platforms without equivalent secure handles fail closed rather
 than falling back to path checks. After schema and full-body
-identity checks, a dedicated Phase 1 validator recomputes FX, valuation, weight, NAV, exposure,
-alias, and quality invariants before analysis trusts the document.
+identity checks, a dedicated Phase 1 validator checks FX, valuation, weight, NAV source evidence,
+exposure, alias, and quality invariants before analysis trusts the document. Snapshot `1.1` uses
+OpenD account totals as NAV; only legacy `1.0` validates a cash-plus-positions NAV identity.
 
 The snapshot ID timestamp is the UTC `as_of` floored to a whole second. A precise microsecond
 `as_of` remains in the body and therefore in its full-body digest; validators compare the readable
@@ -184,5 +185,6 @@ quote evidence, legs, per-Greek coverage/aggregates, expiry buckets, quality rea
 content identity from the embedded immutable snapshot. Schema 1.1 additionally replays static
 metadata, same-snapshot money Delta/moneyness, and aggregated underlying relationships; legacy 1.0
 reports retain their original raw-Greek-only replay. Only after that option evidence validates,
-the portfolio validator reconstructs NAV, cash, weight, position count, and Top-5 from its embedded
-source snapshot, and binds gaps and simulation candidates to the embedded risk report.
+the portfolio validator binds NAV and cash to the embedded source snapshot and checks weight,
+position count, and Top-5 from its positions. It never substitutes cash plus holdings for an
+OpenD-sourced NAV, and binds gaps and simulation candidates to the embedded risk report.

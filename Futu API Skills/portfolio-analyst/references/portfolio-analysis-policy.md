@@ -17,6 +17,10 @@ Report NAV, cash and cash weight, filled holding count, Top 1/3/5 concentration,
 concentration where evidenced, current cost, market value, unrealized P&L, and P&L contribution.
 Preserve the source's currency and availability semantics. Missing cost or P&L is unknown, not zero.
 
+Use the snapshot's OpenD-sourced NAV (`nav_source: OPEND_TOTAL_ASSETS`) directly. Do not recompute NAV
+from listed holdings and cash, or force their weights to total 100%. Account totals in `account_navs`
+are the valuation authority; the positions/cash fields describe the separately returned inventory.
+
 The rule is explicit: gain/loss alone cannot drive advice. Treat P&L as portfolio evidence alongside concentration,
 fundamentals, valuation, thesis, redundancy, cycle, macro sensitivity, and technical context.
 

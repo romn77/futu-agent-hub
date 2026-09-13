@@ -7,6 +7,10 @@ snapshot. Also stop on snapshot identity mismatch, inability to select the reque
 evidence that the snapshot population is not a reliable view of current filled holdings. Explain the
 specific missing authority and the smallest user/environment action needed.
 
+Account ambiguity requires selection with `--acc-id`; an unreadable selected account is not a
+local classification gap. Stop and retain the requested scope instead of excluding that account
+or falling back to another. Failure of an unselected account must not be queried or affect the run.
+
 ## Local degradation
 
 Failures in sector/theme classification, correlation, options, research, or technical evidence are
@@ -20,6 +24,7 @@ local. Continue all unaffected sections and place a limitation next to the affec
 | research source unavailable | baseline holding row and other sourced facts | current fundamental/news conclusion |
 | technical history unavailable | fundamental/portfolio evidence | current support/resistance or trend |
 | stock short unsupported by analyzer | signed snapshot facts and other positions | complete short-risk coverage |
+| cash/cost/price/sellable quantity unknown | OpenD NAV, known holdings/market values, structural concentration | zero cash/cost, complete cash weight, or unsupported price/availability conclusions |
 
 Missing facts are unknown, not zero. Preserve source status such as `PARTIAL`, `UNAVAILABLE`, or
 `STALE`; do not soften it in prose. A degraded deep-research name still appears in the complete

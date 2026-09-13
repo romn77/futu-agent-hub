@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Mapping, Protocol, Sequence
 
 from .account_alias import AccountAliaser
-from .models import Account, CashBalance, DataQuality, Position
+from .child_environment import validate_account_id
+from .models import Account, AccountNAV, CashBalance, DataQuality, Position
 from .skill_trust import audited_files
 
 
 class SourceDataError(ValueError):
     """Source facts are missing or unsafe to normalize."""
+
+
+class SourceNAVError(SourceDataError):
+    """An account's authoritative NAV is unavailable; reconstruction is forbidden."""
+
+
+class AccountSelectionError(SourceDataError):
+    """The requested account population cannot be selected safely."""
+
+
+class AccountSelectionRequired(AccountSelectionError):
+    """More than one eligible account requires explicit user selection."""
 
 
 class PrivateJsonReader(Protocol):
@@ -31,6 +45,7 @@ class PortfolioInputs:
     positions: tuple[Position, ...]
     data_quality: DataQuality
     source_version: str
+    account_navs: tuple[AccountNAV, ...]
 
 
 @dataclass(frozen=True)
@@ -55,10 +70,18 @@ def _decimal(value: object, field: str) -> Decimal:
 
 
 def _account_key(value: object) -> str:
-    text = str(value)
-    if not text.isdigit() or len(text) < 5:
-        raise SourceDataError("invalid source account identifier")
-    return text
+    try:
+        return validate_account_id(str(value))
+    except ValueError:
+        raise SourceDataError("invalid source account identifier") from None
+
+
+def _optional_decimal(value: object, field: str, notes: list[str]) -> Decimal | None:
+    try:
+        return _decimal(value, field)
+    except SourceDataError:
+        notes.append(f"{field} is unavailable or invalid in source; retained as unknown")
+        return None
 
 
 def _source_version() -> str:
@@ -85,8 +108,26 @@ class FutuPortfolioRepository:
         }
         self.discovery_complete = discovery_complete
 
-    def read(self, *, trd_env: str = "REAL", timeout: float = 30) -> PortfolioInputs:
+    def read(
+        self,
+        *,
+        trd_env: str = "REAL",
+        timeout: float = 30,
+        account_ids: Sequence[str] | None = None,
+    ) -> PortfolioInputs:
         environment = trd_env.upper()
+        requested: set[str] | None = None
+        if account_ids is not None:
+            if isinstance(account_ids, (str, bytes)) or not account_ids:
+                raise AccountSelectionError("account selection must be a nonempty list")
+            try:
+                requested = {_account_key(value) for value in account_ids}
+            except SourceDataError:
+                raise AccountSelectionError(
+                    "account selection contains an invalid identifier"
+                ) from None
+            if len(requested) != len(account_ids):
+                raise AccountSelectionError("account selection contains duplicate identifiers")
         accounts_payload = self.adapter.read_private_json(
             "get_accounts", ["--json"], timeout=timeout
         )
@@ -140,10 +181,22 @@ class FutuPortfolioRepository:
             )
 
         self.adapter.protect_sensitive_values(tuple(account.private_id for account in selected))
+        if requested is not None:
+            if not requested <= {account.private_id for account in selected}:
+                raise AccountSelectionError(
+                    "selected account is unavailable or outside the requested securities environment"
+                )
+            selected = [account for account in selected if account.private_id in requested]
+        elif len(selected) > 1:
+            raise AccountSelectionRequired(
+                "multiple eligible securities accounts; select with --acc-id "
+                "(repeat only for explicitly requested aggregation)"
+            )
         cash_balances: list[CashBalance] = []
         positions: list[Position] = []
         source_errors: list[str] = []
         accounts_read = 0
+        account_navs: list[AccountNAV] = []
         for account in selected:
             try:
                 if (
@@ -170,6 +223,7 @@ class FutuPortfolioRepository:
                 payload = self.adapter.read_private_json(
                     "get_portfolio", arguments, timeout=timeout
                 )
+                account_nav = self._parse_nav(payload.get("funds"), account.public.account_ref)
                 account_cash: list[CashBalance] = []
                 account_positions: list[Position] = []
                 self._parse_cash(payload.get("funds"), account.public.account_ref, account_cash)
@@ -179,24 +233,22 @@ class FutuPortfolioRepository:
                     account.private_id,
                     account_positions,
                 )
+            except SourceNAVError:
+                raise
             except Exception as exc:
-                source_errors.append(
-                    f"portfolio read failed for masked account {account.public.account_ref} "
+                raise SourceDataError(
+                    f"selected account portfolio is incomplete for masked account {account.public.account_ref} "
                     f"({type(exc).__name__})"
-                )
-                continue
+                ) from None
             cash_balances.extend(account_cash)
             positions.extend(account_positions)
+            account_navs.append(account_nav)
             accounts_read += 1
 
         expected = len(selected)
         if expected == 0:
             status = "UNAVAILABLE"
             source_errors = [f"no {environment} securities accounts were returned"]
-        elif accounts_read == 0:
-            status = "UNAVAILABLE"
-        elif accounts_read < expected:
-            status = "PARTIAL"
         elif not self.discovery_complete:
             status = "PARTIAL"
         else:
@@ -227,19 +279,36 @@ class FutuPortfolioRepository:
                 },
             ),
             source_version=_source_version(),
+            account_navs=tuple(account_navs),
         )
+
+    @staticmethod
+    def _parse_nav(raw_funds: object, account_ref: str) -> AccountNAV:
+        if not isinstance(raw_funds, Mapping) or not raw_funds:
+            raise SourceNAVError("OpenD account NAV is missing")
+        currency = str(raw_funds.get("currency", "")).upper()
+        if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
+            raise SourceNAVError("OpenD account NAV currency is unavailable")
+        try:
+            total_assets = _decimal(raw_funds.get("total_assets"), "total_assets")
+        except SourceDataError as exc:
+            raise SourceNAVError("OpenD total_assets is missing or invalid") from exc
+        return AccountNAV(account_ref, currency, total_assets)
 
     @staticmethod
     def _parse_cash(raw_funds: object, account_ref: str, destination: list[CashBalance]) -> None:
         if not isinstance(raw_funds, Mapping) or not raw_funds:
             raise SourceDataError("portfolio funds are missing")
         currency = str(raw_funds.get("currency", "")).upper()
-        cash = _decimal(raw_funds.get("cash", 0), "cash")
+        notes: list[str] = []
+        cash = _optional_decimal(raw_funds.get("cash"), "cash", notes)
         if currency in {"", "N/A", "NONE", "UNKNOWN"}:
             if cash:
                 raise SourceDataError("nonzero cash has no audited source currency")
             return
-        destination.append(CashBalance(account_ref, currency, cash))
+        destination.append(
+            CashBalance(account_ref, currency, cash, data_quality_notes=tuple(notes))
+        )
 
     @staticmethod
     def _parse_positions(
@@ -270,26 +339,39 @@ class FutuPortfolioRepository:
             if quantity < 0 and market_value > 0:
                 market_value = -market_value
                 notes.append("market value sign normalized from source short semantics")
+            currency = raw.get("currency")
+            if (
+                not isinstance(currency, str)
+                or not re.fullmatch(r"[A-Z]{3}", currency)
+                or currency == "NAN"
+            ):
+                currency = None
             destination.append(
                 Position(
                     account_ref=account_ref,
                     code=str(raw.get("code", "")),
                     name=str(raw.get("name", "")),
                     security_type="UNKNOWN",
-                    currency=None,
-                    currency_provenance="UNAVAILABLE",
+                    currency=currency,
+                    currency_provenance="AUDITED_SOURCE" if currency else "UNAVAILABLE",
                     quantity=quantity,
-                    can_sell_quantity=_decimal(raw.get("can_sell_qty", 0), "can_sell_qty"),
-                    average_cost_local=_decimal(raw.get("average_cost", 0), "average_cost"),
-                    last_price_local=_decimal(raw.get("nominal_price", 0), "nominal_price"),
+                    can_sell_quantity=_optional_decimal(
+                        raw.get("can_sell_qty"), "can_sell_qty", notes
+                    ),
+                    average_cost_local=_optional_decimal(
+                        raw.get("average_cost"), "average_cost", notes
+                    ),
+                    last_price_local=_optional_decimal(
+                        raw.get("nominal_price"), "nominal_price", notes
+                    ),
                     market_value_local=market_value,
                     unrealized_pl_local=(
-                        _decimal(raw["unrealized_pl"], "unrealized_pl")
+                        _optional_decimal(raw["unrealized_pl"], "unrealized_pl", notes)
                         if raw.get("unrealized_pl") is not None
                         else None
                     ),
                     realized_pl_local=(
-                        _decimal(raw["realized_pl"], "realized_pl")
+                        _optional_decimal(raw["realized_pl"], "realized_pl", notes)
                         if raw.get("realized_pl") is not None
                         else None
                     ),

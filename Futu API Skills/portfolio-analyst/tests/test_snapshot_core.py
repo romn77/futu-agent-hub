@@ -10,7 +10,7 @@ import pytest
 
 from portfolio_analyst.classification import Classification, ClassificationMapper
 from portfolio_analyst.fx import StaticCurrencyConverter
-from portfolio_analyst.models import Account, CashBalance, DataQuality, Position
+from portfolio_analyst.models import Account, AccountNAV, CashBalance, DataQuality, Position
 from portfolio_analyst.persistence import SnapshotAlreadyExists, SnapshotStore
 from portfolio_analyst.security_metadata import SecurityMetadata, SecurityMetadataMapper
 from portfolio_analyst.snapshot import PortfolioBuilder, UnsafeAggregationError, normalize_security
@@ -77,6 +77,7 @@ def test_builder_converts_every_currency_before_aggregation_and_weights_close():
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("1100")),),
         cash_balances=(
             CashBalance("acct-0001", "USD", Decimal("100")),
             CashBalance("acct-0001", "HKD", Decimal("800")),
@@ -146,6 +147,7 @@ def test_builder_uses_signed_short_market_value_and_explicit_nav_semantics():
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("100")),),
         cash_balances=(CashBalance("acct-0001", "USD", Decimal("300")),),
         positions=(
             Position(
@@ -192,6 +194,7 @@ def test_builder_stops_cross_currency_aggregation_when_fx_is_missing():
     with pytest.raises(UnsafeAggregationError, match="HKD.*USD"):
         builder.build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "HKD", Decimal("100")),),
             cash_balances=(CashBalance("acct-0001", "HKD", Decimal("100")),),
             positions=(),
             as_of=FX_EFFECTIVE_AT,
@@ -211,6 +214,7 @@ def test_builder_refuses_position_currency_inference_from_market_prefix():
     with pytest.raises(UnsafeAggregationError, match="currency unavailable.*US.AAPL"):
         builder.build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "USD", Decimal("110")),),
             cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
             positions=(
                 Position(
@@ -246,6 +250,7 @@ def test_builder_refuses_currency_without_auditable_provenance():
     with pytest.raises(UnsafeAggregationError, match="currency provenance unavailable"):
         builder.build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "USD", Decimal("110")),),
             cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
             positions=(
                 Position(
@@ -299,6 +304,7 @@ def test_position_currency_provenance_sentinels_and_unsupported_values_block(pro
             classifications=ClassificationMapper({}),
         ).build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "USD", Decimal("110")),),
             cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
             positions=(position,),
             as_of=FX_EFFECTIVE_AT,
@@ -351,8 +357,8 @@ def test_direct_security_metadata_currency_provenance_is_canonical_unknown(prove
         "US.AAPL",
         "Example",
         "STOCK",
-        "USD",
-        "AUDITED_SOURCE",
+        None,
+        "UNAVAILABLE",
         Decimal("1"),
         Decimal("1"),
         Decimal("1"),
@@ -364,6 +370,7 @@ def test_direct_security_metadata_currency_provenance_is_canonical_unknown(prove
     with pytest.raises(UnsafeAggregationError, match="currency provenance unavailable"):
         builder.build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "USD", Decimal("101")),),
             cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
             positions=(position,),
             as_of=FX_EFFECTIVE_AT,
@@ -388,6 +395,7 @@ def test_exact_security_metadata_uses_audited_source_code_before_market_normaliz
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("114")),),
         cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
         positions=(
             Position(
@@ -437,6 +445,7 @@ def test_realized_pl_base_uses_verified_non_base_fx_and_preserves_null():
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("120")),),
         cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
         positions=(
             Position(code="HK.00001", realized_pl_local=Decimal("16"), **common),
@@ -470,6 +479,7 @@ def test_builder_rejects_orphan_source_records_before_aggregation():
     with pytest.raises(UnsafeAggregationError, match="unknown masked account"):
         builder.build(
             accounts=(_account(),),
+            account_navs=(AccountNAV("acct-0001", "USD", Decimal("1")),),
             cash_balances=(CashBalance("acct-orphan", "USD", Decimal("1")),),
             positions=(),
             as_of=datetime.now(timezone.utc),
@@ -497,6 +507,7 @@ def test_unknown_security_type_degrades_quality_explicitly():
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("110")),),
         cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
         positions=(
             Position(
@@ -553,13 +564,14 @@ def test_all_security_type_sentinels_canonicalize_and_degrade_quality(security_t
     )
     snapshot = builder.build(
         accounts=(_account(),),
+        account_navs=(AccountNAV("acct-0001", "USD", Decimal("110")),),
         cash_balances=(CashBalance("acct-0001", "USD", Decimal("100")),),
         positions=(
             Position(
                 account_ref="acct-0001",
                 code="US.AAPL",
                 name="Example",
-                security_type="STOCK",
+                security_type=security_type,
                 currency="USD",
                 currency_provenance="AUDITED_SOURCE",
                 quantity=Decimal("1"),

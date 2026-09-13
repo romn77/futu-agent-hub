@@ -1767,6 +1767,18 @@ def _twr(
     )
 
 
+def require_compatible_nav_basis(snapshots: Sequence[PortfolioSnapshot]) -> None:
+    bases = {
+        "LEGACY_RECONSTRUCTED" if item.schema_version == "1.0" else item.nav_source
+        for item in snapshots
+    }
+    if len(bases) > 1:
+        raise AttributionInputError(
+            "NAV_BASIS_MISMATCH: select a period with one NAV source basis; "
+            "legacy snapshots must not be rewritten or recomputed"
+        )
+
+
 def analyze_performance(
     snapshots: Sequence[PortfolioSnapshot],
     *,
@@ -1785,6 +1797,7 @@ def analyze_performance(
         )
     interval = select_snapshot_interval(snapshots, start=start, end=end)
     selected = interval.snapshots
+    require_compatible_nav_basis(selected)
     first = selected[0]
     analysis_now = analysis_now if analysis_now is not None else (clock or _utc_now)()
     if analysis_now.tzinfo is None or analysis_now.utcoffset() is None:

@@ -23,7 +23,7 @@ from .private_home import (
 )
 from .reporting import build_portfolio_report
 from .rendering import terminal_text
-from .repository import SourceDataError
+from .repository import AccountSelectionError, AccountSelectionRequired, SourceDataError
 from .rebalance import RebalanceError, load_rebalance_request, simulate_rebalance
 from .risk import (
     PolicyConfigError,
@@ -121,6 +121,12 @@ def _parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     doctor.add_argument("--verbose", action="store_true", help="show check details")
     snapshot = subparsers.add_parser("snapshot", help="build a normalized portfolio snapshot")
     snapshot.add_argument("--trd-env", choices=["REAL", "SIMULATE"], default="REAL")
+    snapshot.add_argument(
+        "--acc-id",
+        action="append",
+        dest="account_ids",
+        help="select a private account ID; repeat only for explicitly requested aggregation",
+    )
     snapshot.add_argument(
         "--base-currency",
         choices=["HKD", "USD", "CNH", "JPY", "AUD", "CAD", "MYR", "SGD"],
@@ -1043,6 +1049,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
             trd_env=args.trd_env,
             base_currency=args.base_currency,
             persist_aliases=should_save,
+            account_ids=args.account_ids,
         )
         payload = snapshot.to_dict()
         rendered = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1107,6 +1114,10 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
         return _emit_error(args, "INVALID_SNAPSHOT", str(exc))
     except UnsafeAggregationError as exc:
         return _emit_error(args, "UNSAFE_AGGREGATION", str(exc))
+    except AccountSelectionRequired as exc:
+        return _emit_error(args, "ACCOUNT_SELECTION_REQUIRED", str(exc))
+    except AccountSelectionError as exc:
+        return _emit_error(args, "ACCOUNT_SELECTION_INVALID", str(exc))
     except (FutuReadError, SourceDataError) as exc:
         return _emit_error(args, "SOURCE_UNAVAILABLE", str(exc))
     except ValueError as exc:

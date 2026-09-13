@@ -23,16 +23,31 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX private-temp c
 
 
 def _snapshot(*, held_options: bool = False):
-    positions = []
+    from test_option_risk import _position, _snapshot as make_snapshot
+
+    positions = [_position("AAA", security_type="STOCK")]
     if held_options:
-        positions.append({"security_type": "OPTION", "quantity": "1", "symbol": "US.TEST"})
-    return {
-        "snapshot_id": "ps-test",
-        "as_of": "2026-09-02T00:00:00+00:00",
-        "trd_env": "REAL",
-        "base_currency": "USD",
-        "positions": positions,
-    }
+        positions.append(_position("AAPL260116C00150000"))
+    return make_snapshot(tuple(positions)).to_dict()
+
+
+def _component(command, *, held_options=False, risk_available=True):
+    from portfolio_analyst.snapshot_io import snapshot_from_document
+    from portfolio_analyst.risk import analyze_risk
+    from portfolio_analyst.technical import analyze_technical
+    from portfolio_analyst.option_risk import analyze_option_risk
+
+    source = snapshot_from_document(_snapshot(held_options=held_options))
+    risk = analyze_risk(source).to_dict() if risk_available else None
+    if command == "risk":
+        body = risk
+    elif command == "technical":
+        body = analyze_technical(source, provider=None, risk_document=risk).to_dict()
+    elif command == "options":
+        body = analyze_option_risk(source).to_dict()
+    else:
+        raise AssertionError(command)
+    return CliResult(0, json.dumps(body), "")
 
 
 def _private_home(tmp_path: Path) -> Path:
@@ -63,12 +78,16 @@ def test_component_failure_is_local_and_cleanup_still_runs(
                 json.dumps({"ok": False, "error": {"code": error_code, "message": "local"}}),
                 "",
             )
-        return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+        return _component(
+            command, held_options=held_options, risk_available=failing_component != "risk"
+        )
 
     envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
 
     assert envelope[failing_component] is None
-    assert envelope["snapshot"]["snapshot_id"] == "ps-test"
+    assert (
+        envelope["snapshot"]["snapshot_id"] == _snapshot(held_options=held_options)["snapshot_id"]
+    )
     assert envelope["degradations"] == [
         {
             "component": failing_component,
@@ -94,7 +113,9 @@ def test_invalid_component_output_is_local_and_cleanup_still_runs(
             return CliResult(0, json.dumps(_snapshot(held_options=held_options)), "")
         if command == invalid_component:
             return CliResult(0, "not-json", "")
-        return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+        return _component(
+            command, held_options=held_options, risk_available=invalid_component != "risk"
+        )
 
     envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
 
@@ -291,14 +312,14 @@ def test_current_analysis_runs_technical_after_risk_and_binds_available_risk(tmp
         calls.append(arguments)
         if arguments[0] == "snapshot":
             return CliResult(0, json.dumps(_snapshot()), "")
-        return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+        return _component(arguments[0])
 
     envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
 
     technical = next(arguments for arguments in calls if arguments[0] == "technical")
     assert "--risk-report" in technical
     assert technical.index("--risk-report") > technical.index("--snapshot")
-    assert envelope["technical"] == {"status": "COMPLETE"}
+    assert envelope["technical"] == json.loads(_component("technical").stdout)
     assert list(home.iterdir()) == []
 
 
@@ -324,33 +345,21 @@ def test_current_analysis_keeps_technical_failure_local_when_risk_is_unavailable
     assert list(home.iterdir()) == []
 
 
-def test_current_analysis_returns_technical_timeout_degradation_report_and_cleans_up(tmp_path):
+def test_current_analysis_returns_valid_technical_degradation_report_and_cleans_up(tmp_path):
     home = _private_home(tmp_path)
 
     def invoke(arguments):
         if arguments[0] == "snapshot":
             return CliResult(0, json.dumps(_snapshot()), "")
         if arguments[0] == "risk":
-            return CliResult(0, json.dumps({"status": "COMPLETE"}), "")
+            return _component("risk")
         if arguments[0] == "technical":
-            return CliResult(
-                0,
-                json.dumps(
-                    {
-                        "status": "UNAVAILABLE",
-                        "reason": "SOURCE_TIMEOUT",
-                    }
-                ),
-                "",
-            )
+            return _component("technical")
         raise AssertionError(arguments)
 
     envelope = run_current_analysis(settings=Settings(home), invoke=invoke)
 
-    assert envelope["technical"] == {
-        "status": "UNAVAILABLE",
-        "reason": "SOURCE_TIMEOUT",
-    }
+    assert envelope["technical"]["data_quality_status"] == "UNAVAILABLE"
     assert envelope["degradations"] == []
     assert list(home.iterdir()) == []
 
@@ -386,12 +395,12 @@ def test_main_maps_expected_configuration_and_io_errors_without_traceback_or_pat
 ):
     import portfolio_analyst.current_analysis as current_analysis
 
-    def fail():
+    def fail(**_kwargs):
         raise exception
 
     monkeypatch.setattr(current_analysis, "run_current_analysis", fail)
 
-    assert main() == 2
+    assert main([]) == 2
     captured = capsys.readouterr()
     assert captured.err == ""
     assert json.loads(captured.out) == {
@@ -406,13 +415,13 @@ def test_main_maps_expected_configuration_and_io_errors_without_traceback_or_pat
 def test_main_does_not_swallow_programming_errors_or_control_flow(monkeypatch, exception_type):
     import portfolio_analyst.current_analysis as current_analysis
 
-    def fail():
+    def fail(**_kwargs):
         raise exception_type("stop")
 
     monkeypatch.setattr(current_analysis, "run_current_analysis", fail)
 
     with pytest.raises(exception_type):
-        main()
+        main([])
 
 
 def test_script_rejects_tmp_as_data_home_with_stable_json_and_no_traceback():

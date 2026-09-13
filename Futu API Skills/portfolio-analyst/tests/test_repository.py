@@ -46,7 +46,7 @@ class FixtureAdapter:
 def test_repository_queries_each_real_securities_account_with_exact_firm_and_market():
     adapter = FixtureAdapter()
 
-    result = _repository(adapter).read(trd_env="REAL")
+    result = _repository(adapter).read(trd_env="REAL", account_ids=ACCOUNT_IDS)
 
     assert adapter.protected == ACCOUNT_IDS
     assert adapter.calls == [
@@ -163,7 +163,7 @@ def test_explicit_live_position_direction_conflicts_fail_closed(row):
         FutuPortfolioRepository._parse_positions([raw], "acct-a", "90000001", [])
 
 
-def test_per_account_failure_is_partial_and_never_echoes_any_discovered_id():
+def test_selected_account_failure_stops_and_never_echoes_any_discovered_id():
     class PartialAdapter(FixtureAdapter):
         def read_private_json(self, name, arguments, *, timeout=30):
             if name == "get_portfolio" and "90000002" in arguments:
@@ -172,11 +172,10 @@ def test_per_account_failure_is_partial_and_never_echoes_any_discovered_id():
                 )
             return super().read_private_json(name, arguments, timeout=timeout)
 
-    result = _repository(PartialAdapter()).read(trd_env="REAL")
+    with pytest.raises(SourceDataError, match="incomplete") as caught:
+        _repository(PartialAdapter()).read(trd_env="REAL", account_ids=ACCOUNT_IDS)
 
-    assert result.data_quality.status == "PARTIAL"
-    assert result.data_quality.coverage["accounts_returned_read"] == 1
-    exposed = json.dumps(result.data_quality.__dict__, default=str)
+    exposed = str(caught.value)
     assert all(account_id not in exposed for account_id in ACCOUNT_IDS)
     assert "masked account" in exposed
 
@@ -188,12 +187,8 @@ def test_all_per_account_failures_are_explicitly_unavailable():
                 raise FutuReadError("portfolio unavailable")
             return super().read_private_json(name, arguments, timeout=timeout)
 
-    result = _repository(UnavailableAdapter()).read(trd_env="REAL")
-
-    assert result.data_quality.status == "UNAVAILABLE"
-    assert result.data_quality.coverage["accounts_returned_read"] == 0
-    assert not result.cash_balances
-    assert not result.positions
+    with pytest.raises(SourceDataError, match="incomplete"):
+        _repository(UnavailableAdapter()).read(trd_env="REAL", account_ids=ACCOUNT_IDS)
 
 
 @pytest.mark.parametrize(
@@ -267,7 +262,9 @@ def test_initial_account_list_failure_redacts_ids_before_discovery(monkeypatch, 
 
 
 def test_live_repository_never_claims_complete_discovery():
-    result = _repository(FixtureAdapter(), discovery_complete=False).read(trd_env="REAL")
+    result = _repository(FixtureAdapter(), discovery_complete=False).read(
+        trd_env="REAL", account_ids=ACCOUNT_IDS
+    )
 
     assert result.data_quality.status == "PARTIAL"
     assert result.data_quality.coverage["discovery_status"] == "UNVERIFIED"
@@ -301,7 +298,7 @@ def test_futuca_account_uses_explicit_per_account_valuation_currency(valuation_c
                     ]
                 }
             return {
-                "funds": {"currency": valuation_currency, "cash": 100},
+                "funds": {"currency": valuation_currency, "cash": 100, "total_assets": 100},
                 "positions": [],
             }
 
@@ -318,11 +315,7 @@ def test_futuca_account_uses_explicit_per_account_valuation_currency(valuation_c
 
 
 def test_missing_required_account_currency_is_explicitly_unavailable():
-    result = _repository(FixtureAdapter(), currencies={}, discovery_complete=True).read(
-        trd_env="REAL"
-    )
-
-    assert result.data_quality.status == "UNAVAILABLE"
-    assert result.data_quality.coverage["accounts_returned_read"] == 0
-    assert not result.cash_balances
-    assert not result.positions
+    with pytest.raises(SourceDataError, match="incomplete"):
+        _repository(FixtureAdapter(), currencies={}, discovery_complete=True).read(
+            trd_env="REAL", account_ids=ACCOUNT_IDS
+        )

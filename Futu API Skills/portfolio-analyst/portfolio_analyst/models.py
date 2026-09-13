@@ -92,10 +92,21 @@ class Account:
 
 
 @dataclass(frozen=True)
+class AccountNAV:
+    """OpenD funds.total_assets and its explicit currency conversion, never reconstructed."""
+
+    account_ref: str
+    currency: str
+    total_assets_local: Decimal
+    fx_to_base: Decimal | None = None
+    total_assets_base: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class CashBalance:
     account_ref: str
     currency: str
-    amount_local: Decimal
+    amount_local: Decimal | None
     fx_to_base: Decimal | None = None
     amount_base: Decimal | None = None
     weight: Decimal | None = None
@@ -116,9 +127,9 @@ class Position:
     currency: str | None
     currency_provenance: str
     quantity: Decimal
-    can_sell_quantity: Decimal
-    average_cost_local: Decimal
-    last_price_local: Decimal
+    can_sell_quantity: Decimal | None
+    average_cost_local: Decimal | None
+    last_price_local: Decimal | None
     market_value_local: Decimal
     unrealized_pl_local: Decimal | None
     realized_pl_local: Decimal | None
@@ -147,9 +158,9 @@ class NormalizedPosition:
     currency: str
     currency_provenance: str
     quantity: Decimal
-    can_sell_quantity: Decimal
-    average_cost_local: Decimal
-    last_price_local: Decimal
+    can_sell_quantity: Decimal | None
+    average_cost_local: Decimal | None
+    last_price_local: Decimal | None
     market_value_local: Decimal
     unrealized_pl_local: Decimal | None
     realized_pl_local: Decimal | None
@@ -219,21 +230,29 @@ class PortfolioSnapshot:
     cash_balances: tuple[CashBalance, ...]
     positions: tuple[NormalizedPosition, ...]
     nav_base: Decimal
-    cash_base: Decimal
-    cash_weight: Decimal
+    cash_base: Decimal | None
+    cash_weight: Decimal | None
     long_exposure_base: Decimal
     short_exposure_base: Decimal
     gross_exposure_base: Decimal
     net_exposure_base: Decimal
     exposures: dict[str, dict[str, Decimal]]
     data_quality: DataQuality
+    account_navs: tuple[AccountNAV, ...] = ()
+    nav_source: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fx_evidence", tuple(self.fx_evidence))
         object.__setattr__(self, "accounts", tuple(self.accounts))
+        object.__setattr__(self, "account_navs", tuple(self.account_navs))
         object.__setattr__(self, "cash_balances", tuple(self.cash_balances))
         object.__setattr__(self, "positions", tuple(self.positions))
         object.__setattr__(self, "exposures", _deep_freeze(self.exposures))
 
     def to_dict(self) -> dict[str, Any]:
-        return _json_value(self)
+        payload = _json_value(self)
+        # Preserve the exact content identity of existing 1.0 history documents.
+        if self.schema_version == "1.0" and not self.account_navs and self.nav_source is None:
+            payload.pop("account_navs")
+            payload.pop("nav_source")
+        return payload

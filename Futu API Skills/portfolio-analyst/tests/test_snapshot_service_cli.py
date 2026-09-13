@@ -25,6 +25,8 @@ from portfolio_analyst.security_metadata import SecurityMetadata, SecurityMetada
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ACCOUNT_IDS = ("90000001", "90000002")
+SCOPE_ARGS = ["--acc-id", ACCOUNT_IDS[0], "--acc-id", ACCOUNT_IDS[1]]
 
 
 class FixtureAdapter:
@@ -167,6 +169,7 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
     home = _configured_home(tmp_path)
     snapshot = generate_snapshot(
         Settings(data_home=home),
+        account_ids=ACCOUNT_IDS,
         trd_env="REAL",
         base_currency="USD",
         adapter=FixtureAdapter(),
@@ -175,7 +178,7 @@ def test_service_generates_schema_snapshot_from_sanitized_fixtures(tmp_path):
         as_of=datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc),
     )
 
-    assert snapshot.schema_version == "1.0"
+    assert snapshot.schema_version == "1.1"
     assert snapshot.nav_base == 1250
     assert snapshot.cash_base == 150
     assert snapshot.gross_exposure_base == 1100
@@ -196,6 +199,7 @@ def test_snapshot_with_production_discovery_contract_never_overclaims_complete(t
     home = _configured_home(tmp_path)
     snapshot = generate_snapshot(
         Settings(data_home=home),
+        account_ids=ACCOUNT_IDS,
         adapter=FixtureAdapter(),
         aliaser=AccountAliaser.from_key(b"a" * 32),
         discovery_complete=False,
@@ -210,6 +214,7 @@ def test_persisting_snapshot_creates_and_reuses_stable_private_alias_key(tmp_pat
     home = _configured_home(tmp_path)
     first = generate_snapshot(
         Settings(data_home=home),
+        account_ids=ACCOUNT_IDS,
         adapter=FixtureAdapter(),
         discovery_complete=True,
         persist_aliases=True,
@@ -217,6 +222,7 @@ def test_persisting_snapshot_creates_and_reuses_stable_private_alias_key(tmp_pat
     )
     second = generate_snapshot(
         Settings(data_home=home),
+        account_ids=ACCOUNT_IDS,
         adapter=FixtureAdapter(),
         discovery_complete=True,
         persist_aliases=True,
@@ -240,9 +246,10 @@ def test_service_stops_when_no_discovered_account_portfolio_was_read(tmp_path):
                 raise FutuReadError("unavailable")
             return super().read_private_json(name, arguments, timeout=timeout)
 
-    with pytest.raises(SourceDataError, match="no account portfolio data"):
+    with pytest.raises(SourceDataError, match="incomplete"):
         generate_snapshot(
             Settings(data_home=home),
+            account_ids=ACCOUNT_IDS,
             adapter=UnavailableAdapter(),
             as_of=datetime.now(timezone.utc),
         )
@@ -377,6 +384,7 @@ def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
         "generate_snapshot",
         lambda *_args, **_kwargs: generate_snapshot(
             Settings(data_home=home),
+            account_ids=ACCOUNT_IDS,
             trd_env="REAL",
             base_currency="USD",
             adapter=FixtureAdapter(),
@@ -390,7 +398,7 @@ def test_snapshot_cli_json_defaults_to_no_save(monkeypatch, tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert not (home / "snapshots").exists()
 
 
@@ -425,7 +433,7 @@ def test_absent_fx_file_base_only_cli_succeeds_without_writes_and_uses_identity_
 
     monkeypatch.setattr(cli, "generate_snapshot", generate_base_only)
 
-    assert cli.main(["snapshot", "--json", "--no-save"]) == 0
+    assert cli.main(["snapshot", *SCOPE_ARGS, "--json", "--no-save"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert not home.exists()
     assert payload["fx_evidence"] == [
@@ -469,7 +477,7 @@ def test_absent_fx_file_cross_currency_cli_fails_closed_structurally(monkeypatch
 
     monkeypatch.setattr(cli, "generate_snapshot", generate_cross_currency)
 
-    assert cli.main(["snapshot", "--json", "--no-save"]) == 2
+    assert cli.main(["snapshot", *SCOPE_ARGS, "--json", "--no-save"]) == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "UNSAFE_AGGREGATION"
     assert "HKD" in payload["error"]["message"]
@@ -528,7 +536,7 @@ def test_first_successful_nonpersisting_snapshot_creates_no_filesystem_state(
 
     monkeypatch.setattr(cli, "generate_snapshot", ephemeral_snapshot)
 
-    assert cli.main(argv) == 0
+    assert cli.main([*argv, *SCOPE_ARGS]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert not home.exists()
     assert {account["alias_provenance"] for account in payload["accounts"]} == {"EPHEMERAL"}
@@ -558,6 +566,7 @@ def test_snapshot_cli_save_uses_immutable_default_name(monkeypatch, tmp_path, ca
         "generate_snapshot",
         lambda *_args, **_kwargs: generate_snapshot(
             Settings(data_home=home),
+            account_ids=ACCOUNT_IDS,
             trd_env="REAL",
             base_currency="USD",
             adapter=FixtureAdapter(),

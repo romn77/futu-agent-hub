@@ -518,6 +518,10 @@ class FutuAdapter:
                 str(snapshot_root / command_path),
                 *request.arguments,
             ]
+            if request.command == "get_portfolio" and "--json" in request.arguments:
+                # Keep the pinned official query path while preventing its helpers from
+                # collapsing missing source facts to zero before normalization sees them.
+                command.insert(2, str(Path(__file__).with_name("portfolio_source_worker.py")))
             try:
                 if resource is None:
                     process = subprocess.Popen(

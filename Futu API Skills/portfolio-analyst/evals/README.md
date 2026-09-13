@@ -42,7 +42,8 @@ One JSON file represents one case:
 Required fields are `schema_version`, `case_id`, `provenance`, `response_markdown`, `trace.snapshot`,
 `trace.loaded_references`, `trace.executed_commands`, and `trace.observations`. The first two trace
 arrays contain strings; snapshot and observations are objects. Observations are structured facts
-emitted by the harness, not prose scraped from the Markdown. Keep the sidecar local and do not place
+computed by the harness from host-observed tool receipts and independently inspected response
+sections, never copied from a model-authored audit or test verdict. Keep the sidecar local and do not place
 private account IDs, user identity, or raw snapshot bodies in it.
 
 `provenance.producer_kind` must be `external_harness`. `runner_id` and `runner_version` identify the
@@ -63,19 +64,62 @@ events must come from runner instrumentation or durable execution logs, not stat
 the model under test. The harness owns runner identity/version, timestamping, immutable input hash,
 artifact custody, and any independent review needed before calling the evidence trustworthy.
 
-This repository currently provides the case specifications, producer adapter contract, and
-validator, but no real model-execution producer. Consequently, running `run_evals.py` alone performs
+This repository provides `run_codex_evals.py`, a real Codex CLI producer over isolated synthetic
+fixtures, in addition to the case specifications, producer contract and validator.
+Running `run_evals.py` alone still performs
 only `EXTERNAL_AUDIT_ENVELOPE_ONLY` validation and must never be reported as a Skill behavior PASS.
 
+## Execute a synthetic Codex evaluation
+
+```bash
+python evals/run_codex_evals.py --case comprehensive-many-holdings --output /private/new-eval-run
+python evals/run_codex_evals.py --case conditional-options-degradation --output /private/new-options-run
+python evals/run_codex_evals.py --case explicit-rebalance-request --output /private/new-rebalance-run
+```
+
+The output directory must not exist. Each run copies only the Skill, references, package and schemas
+into an isolated workspace, replacing the CLI data boundary with a synthetic-only fixture. No
+forked account reader is copied, and no live brokerage or web access is requested. The synthetic
+NAV, holdings, risk/options/technical evidence and optional simulation use the real deterministic
+library. The model receives the case prompt and Skill, not assertions, expected answers or verdicts.
+
+The runner invokes `codex exec --json --ephemeral --sandbox read-only --ignore-user-config` with
+approvals disabled, a 300-second default deadline (maximum 600), and an 8 MiB combined output budget.
+Codex must already be installed/authenticated and able to initialize its own runtime. The runner
+does not change credentials, user configuration, install dependencies or loosen the model sandbox.
+CLI interface: [Codex non-interactive documentation](https://developers.openai.com/codex/noninteractive).
+
+Retained artifacts include input hashes, prompt, raw host JSONL events, stderr, final Markdown,
+audit and assertion results when execution completes. No recursive cleanup removes this evidence.
+Initialization/timeout/malformed event failures produce `EXECUTION_UNAVAILABLE`, `behavior_pass:
+false`, and nonzero exit status; an external envelope validator PASS never replaces a failed run.
+
+The producer recognizes completed `command_execution` receipts and `agent_message` output. A
+snapshot counts only after the actual fixture helper command returns the exact fixture body once.
+Reference loads require the full source text in a successful command's observed output. Holdings
+are counted from symbol cells in the holdings table; selected research names from level-three
+subheadings or research-table symbol cells; omission disclosure from the gaps section. English and
+Chinese heading aliases are recognized as Markdown headings or standalone bold titles. Simulation results must pass semantic and
+snapshot-binding validation. These conservative parsers may reject alternate layouts: inspect the
+retained trace/report, do not manufacture missing observations or edit evidence into a PASS.
+The execution gate also requires full default-reference reads, a single bound helper receipt,
+the source ID/time in the response, and complete unique holdings coverage. Duplicate rows cannot
+substitute for missing holdings. Changed fixture files or reported file-change events fail the run.
+
+`ASSERTIONS_PASSED` concerns only this synthetic routing/report boundary. Human review is still
+required for semantic quality, and this offline suite does not validate current citations, live
+web privacy/injection defenses, REAL accounts, SDK compatibility, or OpenD connectivity.
+
 `response_markdown` must be a non-empty, non-whitespace string. Bundled cases assert their required
-report headings directly against it; the options case also checks that authoritative tool status and
+sections through harness-observed `report.sections`; the options case also checks that authoritative tool status and
 broader analysis capability gaps remain visibly distinct in the user-facing Markdown.
 
 The bundled cases use these observation fields:
 
-- `holdings.symbols`, `deep_research.max_names`, and
+- `report.sections`, `holdings.symbols`, `deep_research.max_names`, and
   `deep_research.eligible_omissions_disclosed`;
-- `options.tool_status`, `options.unit_label`, `options.capability_gaps`, and `workflow.stop`;
+- `options.tool_status`, `options.reported_tool_status`, `options.analysis_gaps_disclosed`,
+  `options.unit_label`, `options.capability_gaps`, and `workflow.stop`;
 - `simulation.scenarios`, `simulation.target_weight`, and `unheld_candidates.count`.
 
 `simulation.scenarios` and `holdings.symbols` are arrays so `count_equals` measures real items.

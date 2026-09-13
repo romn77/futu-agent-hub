@@ -367,6 +367,12 @@ def simulate_rebalance(snapshot: PortfolioSnapshot, request: RebalanceRequest) -
         raise RebalanceError("request base currency does not match snapshot currency")
     if snapshot.nav_base <= 0:
         raise RebalanceError("source NAV must be positive")
+    if snapshot.cash_base is None or snapshot.cash_weight is None:
+        raise RebalanceError("source cash is unavailable; rebalance simulation requires known cash")
+    if any(position.last_price_local is None for position in snapshot.positions):
+        raise RebalanceError(
+            "source price is unavailable; rebalance simulation requires price evidence"
+        )
     metadata: dict[str, NormalizedPosition] = {}
     values: dict[str, Decimal] = {}
     quantities: dict[str, Decimal] = {}

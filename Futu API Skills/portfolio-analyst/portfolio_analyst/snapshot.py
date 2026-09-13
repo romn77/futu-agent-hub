@@ -12,6 +12,7 @@ from .fx import CurrencyConverter, FxEvidenceError
 from .identity import snapshot_identity
 from .models import (
     Account,
+    AccountNAV,
     CashBalance,
     DataQuality,
     FxRateEvidence,
@@ -88,6 +89,7 @@ class PortfolioBuilder:
         self,
         *,
         accounts: Iterable[Account],
+        account_navs: Iterable[AccountNAV],
         cash_balances: Iterable[CashBalance],
         positions: Iterable[Position],
         as_of: datetime,
@@ -100,6 +102,7 @@ class PortfolioBuilder:
         accounts_tuple = tuple(accounts)
         cash_input = tuple(cash_balances)
         position_input = tuple(positions)
+        nav_input = tuple(account_navs)
         account_refs = {account.account_ref for account in accounts_tuple}
         if len(account_refs) != len(accounts_tuple):
             raise UnsafeAggregationError("duplicate masked account references are unsafe")
@@ -107,7 +110,7 @@ class PortfolioBuilder:
             raise UnsafeAggregationError("account trading environment does not match snapshot")
         orphan_refs = {
             item.account_ref
-            for item in (*cash_input, *position_input)
+            for item in (*cash_input, *position_input, *nav_input)
             if item.account_ref not in account_refs
         }
         if orphan_refs:
@@ -115,13 +118,41 @@ class PortfolioBuilder:
 
         converted_cash: list[CashBalance] = []
         used_fx: dict[tuple[str, str], FxRateEvidence] = {}
-        cash_base = Decimal("0")
+        converted_navs: list[AccountNAV] = []
+        nav_refs = {item.account_ref for item in nav_input}
+        if not nav_input or len(nav_refs) != len(nav_input):
+            raise UnsafeAggregationError("unique OpenD account NAV evidence is required")
+        if any(item.account_ref not in nav_refs for item in (*cash_input, *position_input)):
+            raise UnsafeAggregationError("cash or positions lack OpenD account NAV evidence")
+        nav = Decimal("0")
+        for account_nav in nav_input:
+            if not account_nav.total_assets_local.is_finite():
+                raise UnsafeAggregationError("OpenD total_assets must be finite")
+            evidence = self._quote(account_nav.currency, as_of)
+            used_fx[(evidence.source_currency, evidence.target_currency)] = evidence
+            total_assets_base = account_nav.total_assets_local * evidence.rate
+            nav += total_assets_base
+            converted_navs.append(
+                replace(
+                    account_nav,
+                    currency=account_nav.currency.upper(),
+                    fx_to_base=evidence.rate,
+                    total_assets_base=total_assets_base,
+                )
+            )
+        if nav <= 0:
+            raise UnsafeAggregationError("NAV must be positive; OpenD total_assets is non-positive")
+        cash_total = Decimal("0")
+        cash_complete = nav_refs <= {cash.account_ref for cash in cash_input}
         for cash in cash_input:
             evidence = self._quote(cash.currency, as_of)
             rate = evidence.rate
             used_fx[(evidence.source_currency, evidence.target_currency)] = evidence
-            amount_base = cash.amount_local * rate
-            cash_base += amount_base
+            amount_base = cash.amount_local * rate if cash.amount_local is not None else None
+            if amount_base is None:
+                cash_complete = False
+            else:
+                cash_total += amount_base
             converted_cash.append(
                 replace(
                     cash, currency=cash.currency.upper(), fx_to_base=rate, amount_base=amount_base
@@ -134,7 +165,16 @@ class PortfolioBuilder:
             normalized_code = f"{market}.{symbol}"
             source_code = position.code.strip().upper()
             metadata = self.security_metadata.resolve(source_code)
-            currency = metadata.currency if metadata and metadata.currency else position.currency
+            if (
+                position.currency
+                and metadata
+                and metadata.currency
+                and position.currency.upper() != metadata.currency.upper()
+            ):
+                raise UnsafeAggregationError(
+                    f"currency source/config conflict for {normalized_code}"
+                )
+            currency = position.currency or (metadata.currency if metadata else None)
             if not currency:
                 raise UnsafeAggregationError(
                     f"currency unavailable for security {normalized_code}; "
@@ -142,9 +182,11 @@ class PortfolioBuilder:
                 )
             currency = currency.upper()
             currency_provenance = (
-                metadata.provenance
-                if metadata and metadata.currency
-                else position.currency_provenance
+                position.currency_provenance
+                if position.currency
+                else metadata.provenance
+                if metadata
+                else "UNAVAILABLE"
             )
             if not is_known_currency_provenance(currency_provenance):
                 raise UnsafeAggregationError(
@@ -152,7 +194,7 @@ class PortfolioBuilder:
                 )
             security_type = (
                 metadata.security_type
-                if metadata and metadata.security_type
+                if metadata and not is_unknown_sentinel(metadata.security_type)
                 else position.security_type
             )
             evidence = self._quote(currency, as_of)
@@ -196,9 +238,6 @@ class PortfolioBuilder:
         )
         gross_exposure = long_exposure + short_exposure
         net_exposure = long_exposure - short_exposure
-        nav = cash_base + net_exposure
-        if nav <= 0:
-            raise UnsafeAggregationError("NAV must be positive; weights are undefined")
 
         normalized_positions: list[NormalizedPosition] = []
         exposure_maps: dict[str, dict[str, Decimal]] = {
@@ -266,19 +305,30 @@ class PortfolioBuilder:
                         exposure_maps[dimension].get(label, Decimal("0")) + weight
                     )
 
-        cash_weight = cash_base / nav
-        converted_cash = [replace(cash, weight=cash.amount_base / nav) for cash in converted_cash]
-        if not short_exposure:
-            weight_total = sum((position.weight for position in normalized_positions), Decimal("0"))
-            if abs(weight_total + cash_weight - Decimal("1")) > self.WEIGHT_TOLERANCE:
-                raise UnsafeAggregationError("long-only portfolio weights do not reconcile to NAV")
+        cash_base = cash_total if cash_complete else None
+        cash_weight = cash_base / nav if cash_base is not None else None
+        converted_cash = [
+            replace(cash, weight=cash.amount_base / nav if cash.amount_base is not None else None)
+            for cash in converted_cash
+        ]
 
         reconstructed_signs = any(
             any("sign normalized" in note for note in position.data_quality_notes)
             for position in normalized_positions
         )
         missing_fields: list[str] = []
-        warnings: list[str] = []
+        warnings: list[str] = list(self.classifications.warnings)
+        if not cash_complete:
+            missing_fields.append("cash")
+            warnings.append(
+                "cash is unavailable for one or more accounts; cash totals/weight are unknown"
+            )
+        for field in ("can_sell_quantity", "average_cost_local", "last_price_local"):
+            if any(getattr(position, field) is None for position in normalized_positions):
+                missing_fields.append(field)
+                warnings.append(
+                    f"{field} is unavailable for one or more positions; retained as unknown"
+                )
         if unknown_classifications:
             missing_fields.append("classification")
             warnings.append("one or more classifications are UNKNOWN")
@@ -295,7 +345,7 @@ class PortfolioBuilder:
         )
 
         snapshot = PortfolioSnapshot(
-            schema_version="1.0",
+            schema_version="1.1",
             snapshot_id="",
             as_of=as_of,
             source="futuapi",
@@ -304,6 +354,8 @@ class PortfolioBuilder:
             base_currency=self.base_currency,
             fx_evidence=tuple(used_fx[key] for key in sorted(used_fx)),
             accounts=accounts_tuple,
+            account_navs=tuple(converted_navs),
+            nav_source="OPEND_TOTAL_ASSETS",
             cash_balances=tuple(converted_cash),
             positions=tuple(normalized_positions),
             nav_base=nav,

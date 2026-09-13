@@ -55,6 +55,9 @@ def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.
         raise _OptionMetadataProcessTreeUnsupported
 
     supplied_input = kwargs.pop("input", b"")
+    max_output_bytes = kwargs.pop("max_output_bytes", MAX_METADATA_RESPONSE_BYTES)
+    if type(max_output_bytes) is not int or not 1 <= max_output_bytes <= 8 * 1024 * 1024:
+        raise ValueError("invalid process output budget")
     kwargs.pop("stdout", None)
     kwargs.pop("stderr", None)
     timeout = kwargs.pop("timeout", None)
@@ -147,11 +150,11 @@ def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.
                     selector.unregister(stream)
                     stream.close()  # type: ignore[union-attr]
                     continue
-                remaining_bytes = MAX_METADATA_RESPONSE_BYTES - total_size
+                remaining_bytes = max_output_bytes - total_size
                 if remaining_bytes > 0:
                     chunks[key.data].append(chunk[:remaining_bytes])
                 total_size += len(chunk)
-                if total_size > MAX_METADATA_RESPONSE_BYTES:
+                if total_size > max_output_bytes:
                     overflow = True
                     break
             if overflow:
@@ -173,12 +176,17 @@ def _bounded_subprocess_run(command: list[str], **kwargs: object) -> subprocess.
                 pass
 
     if timed_out:
-        raise subprocess.TimeoutExpired(command, timeout)
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output=b"".join(chunks["stdout"]),
+            stderr=b"".join(chunks["stderr"]),
+        )
     if overflow:
         return subprocess.CompletedProcess(
             process.args,
             process.returncode,
-            b"x" * (MAX_METADATA_RESPONSE_BYTES + 1),
+            b"x" * (max_output_bytes + 1),
             b"",
         )
     return subprocess.CompletedProcess(

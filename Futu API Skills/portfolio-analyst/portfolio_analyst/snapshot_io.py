@@ -10,6 +10,7 @@ from typing import Any
 from .identity import snapshot_identity
 from .models import (
     Account,
+    AccountNAV,
     CashBalance,
     DataQuality,
     FxRateEvidence,
@@ -66,11 +67,22 @@ def snapshot_from_document(payload: dict[str, Any]) -> PortfolioSnapshot:
                 for item in payload["fx_evidence"]
             ),
             accounts=tuple(Account(**item) for item in payload["accounts"]),
+            account_navs=tuple(
+                AccountNAV(
+                    account_ref=item["account_ref"],
+                    currency=item["currency"],
+                    total_assets_local=Decimal(item["total_assets_local"]),
+                    fx_to_base=Decimal(item["fx_to_base"]),
+                    total_assets_base=Decimal(item["total_assets_base"]),
+                )
+                for item in payload.get("account_navs", ())
+            ),
+            nav_source=payload.get("nav_source"),
             cash_balances=tuple(
                 CashBalance(
                     account_ref=item["account_ref"],
                     currency=item["currency"],
-                    amount_local=Decimal(item["amount_local"]),
+                    amount_local=_decimal(item["amount_local"]),
                     fx_to_base=_decimal(item["fx_to_base"]),
                     amount_base=_decimal(item["amount_base"]),
                     weight=_decimal(item["weight"]),
@@ -106,8 +118,8 @@ def snapshot_from_document(payload: dict[str, Any]) -> PortfolioSnapshot:
                 for item in payload["positions"]
             ),
             nav_base=Decimal(payload["nav_base"]),
-            cash_base=Decimal(payload["cash_base"]),
-            cash_weight=Decimal(payload["cash_weight"]),
+            cash_base=_decimal(payload["cash_base"]),
+            cash_weight=_decimal(payload["cash_weight"]),
             long_exposure_base=Decimal(payload["long_exposure_base"]),
             short_exposure_base=Decimal(payload["short_exposure_base"]),
             gross_exposure_base=Decimal(payload["gross_exposure_base"]),

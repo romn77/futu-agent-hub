@@ -2205,6 +2205,7 @@ def validate_performance_document(
             _group_positions,
             _merge_multi_snapshot_trade_contributions,
             _snapshot_digest,
+            require_compatible_nav_basis,
         )
         from .snapshot_io import snapshot_from_document
 
@@ -2220,6 +2221,7 @@ def validate_performance_document(
             validated_sources = tuple(
                 sorted(validated_source_rows, key=lambda item: (item.as_of, item.snapshot_id))
             )
+            require_compatible_nav_basis(validated_sources)
             if tuple(item.snapshot_id for item in validated_sources) != tuple(
                 payload["source_snapshot_ids"]
             ):
@@ -4713,7 +4715,10 @@ def validate_rebalance_result_document(payload: dict[str, Any]) -> None:
                 identity: decimal(item["market_value_base"])
                 for identity, item in state["positions"].items()
             }
-            if sum(values.values(), Decimal(0)) + decimal(state["cash_base"]) != nav:
+            if (
+                embedded_snapshot.schema_version == "1.0"
+                and sum(values.values(), Decimal(0)) + decimal(state["cash_base"]) != nav
+            ):
                 raise ValueError("cash plus positions must equal NAV")
             for identity, item in state["positions"].items():
                 if not reconciles(decimal(item["weight"]), values[identity] / nav):
