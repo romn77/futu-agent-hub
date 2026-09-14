@@ -221,8 +221,14 @@ def test_runtime_validation_rejects_breached_policy_candidate_omitted_for_unrate
     payload["policy_status"] = "CONFIGURED"
     payload["policy_checks"] = {
         "single_position": {"measured": "0.4", "threshold": "0.3", "breached": True},
-        "theme_split": {"measured": "0.5", "threshold": "0.4", "breached": True},
+        "theme_split": {
+            "measured": "0.5",
+            "threshold": "0.4",
+            "breached": True,
+            "status": "BREACHED",
+        },
     }
+    payload["classification_coverage"]["theme_split"].update(threshold="0.4", status="BREACHED")
     payload["top_risks"][0]["severity"] = "HIGH"
     payload["top_risks"][0]["evidence"]["policy_threshold_applied"] = True
     payload["overall_risk"] = "HIGH"
@@ -238,9 +244,15 @@ def test_runtime_validation_rejects_nonbreaching_policy_candidate_omitted_for_un
     assert "THEME_CONCENTRATION" not in {finding["type"] for finding in payload["top_risks"]}
     payload["policy_status"] = "CONFIGURED"
     payload["policy_checks"] = {
-        "theme_split": {"measured": "0.5", "threshold": "0.8", "breached": False}
+        "theme_split": {
+            "measured": "0.5",
+            "threshold": "0.8",
+            "breached": False,
+            "status": "WITHIN_LIMIT",
+        }
     }
 
+    payload["classification_coverage"]["theme_split"].update(threshold="0.8", status="WITHIN_LIMIT")
     with pytest.raises(ValueError, match="policy candidate"):
         validate_risk_document(payload)
 

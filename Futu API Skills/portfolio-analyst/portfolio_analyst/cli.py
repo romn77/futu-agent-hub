@@ -380,7 +380,11 @@ def _human_risk_report(payload: dict[str, Any]) -> str:
         f"Top 1: {payload['concentration']['top_1']}",
         f"Top 3: {payload['concentration']['top_3']}",
         f"Top 5: {payload['concentration']['top_5']}",
-        f"HHI: {payload['concentration']['hhi']}",
+        f"HHI (NAV weights): {payload['concentration']['hhi']}",
+        f"Holdings HHI: {payload['concentration'].get('holdings_hhi', 'N/A (legacy report)')}",
+        f"Effective positions ({'holdings weights' if payload['schema_version'] == '1.1' else 'legacy NAV inverse-HHI'}): {payload['concentration']['effective_positions']}",
+        "Classification coverage and constraints: "
+        + safe(json.dumps(payload.get("classification_coverage", {}), sort_keys=True)),
         "Sector exposure: "
         + safe(json.dumps(payload["exposures"]["sector"]["weights"], sort_keys=True)),
         "Region exposure: "

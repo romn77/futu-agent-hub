@@ -23,3 +23,5 @@ expectations. It deliberately keeps portfolio return and IRR unavailable because
 external cash-flow source is present in the fixture. Phase 5 reconstruction tests use synthetic
 common adjusted closes and quantities only; they explicitly exclude realized/exited positions and
 cross-currency estimates without transaction-period FX.
+
+The `risk_report_v1_legacy.json` and `portfolio_report_v1_legacy.json` fixtures are complete synthetic reports generated with the pre-0.7.1 implementation from the existing test snapshot. They preserve version 1.0 inverse-NAV-HHI evidence for backward compatibility tests; they contain no actual account data.

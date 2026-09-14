@@ -1,0 +1,152 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-08-27T10:00:00Z",
+  "source_snapshot_id": "ps-20260827T100000Z-real-usd-c83c0f79139e9ddc",
+  "coverage": {
+    "source_holdings": 3,
+    "positions": 3,
+    "total_positions": 3,
+    "omitted_positions": 0,
+    "budget_status": "COMPLETE",
+    "budget_reason": null,
+    "classified_sector": 3,
+    "classified_region": 3,
+    "pnl_evidence_status": "PARTIAL",
+    "price_histories": {
+      "requested": 3,
+      "available": 0
+    }
+  },
+  "data_quality_status": "PARTIAL",
+  "data_quality_notes": [
+    "fixture warning",
+    "one or more classifications are UNKNOWN",
+    "missing field: classification",
+    "Adjusted daily price provider was not supplied; correlation was not inferred.",
+    "P&L evidence is incomplete; PNL_CONCENTRATION was not emitted."
+  ],
+  "overall_risk": "UNRATED",
+  "concentration": {
+    "status": "AVAILABLE",
+    "top_1": "0.4",
+    "top_3": "0.9",
+    "top_5": "0.9",
+    "hhi": "0.29",
+    "effective_positions": "3.44827586206896551724137931",
+    "note": "Nonnegative position NAV weights; cash is excluded from position concentration."
+  },
+  "exposures": {
+    "sector": {
+      "basis": "NAV",
+      "weights": {
+        "HEALTH": "0.2",
+        "TECH": "0.7"
+      }
+    },
+    "region": {
+      "basis": "NAV",
+      "weights": {
+        "EU": "0.2",
+        "US": "0.7"
+      }
+    },
+    "theme_full": {
+      "view": "OVERLAP_FULL_ALLOCATION",
+      "basis": "NAV",
+      "weights": {
+        "AI": "0.7",
+        "CLOUD": "0.4",
+        "UNKNOWN": "0.2"
+      }
+    },
+    "theme_split": {
+      "view": "ADDITIVE_SPLIT_ALLOCATION",
+      "basis": "NAV",
+      "weights": {
+        "AI": "0.5",
+        "CLOUD": "0.2",
+        "UNKNOWN": "0.2"
+      }
+    }
+  },
+  "correlation": {
+    "status": "UNAVAILABLE",
+    "lookback": 120,
+    "minimum_observations": 60,
+    "medium_threshold": "0.55",
+    "high_threshold": "0.75",
+    "adjusted_prices": true,
+    "coverage": {
+      "requested": 3,
+      "available": 0
+    },
+    "date_cutoffs": {
+      "US.AAA": "2026-08-26",
+      "US.BBB": "2026-08-26",
+      "US.CCC": "2026-08-26"
+    },
+    "matrix": {},
+    "pairs": [],
+    "inverse_pairs": [],
+    "clusters": [],
+    "notes": [
+      "Adjusted daily price provider was not supplied; correlation was not inferred."
+    ]
+  },
+  "top_risks": [
+    {
+      "type": "POSITION_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "Largest holding is the primary single-name concentration review signal.",
+      "evidence": {
+        "basis": "NAV",
+        "top_1": "0.4",
+        "top_3": "0.9",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB",
+        "US.CCC"
+      ],
+      "review_priority": "P1",
+      "simulation_direction": "Hypothetical only: simulate reducing the largest weight and recompute concentration."
+    },
+    {
+      "type": "REGION_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "US is the largest deterministic region exposure.",
+      "evidence": {
+        "basis": "NAV",
+        "region": "US",
+        "weight": "0.7",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB"
+      ],
+      "review_priority": "P2",
+      "simulation_direction": "Hypothetical only: simulate lower exposure to the largest region and recompute views."
+    },
+    {
+      "type": "SECTOR_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "TECH is the largest deterministic sector exposure.",
+      "evidence": {
+        "basis": "NAV",
+        "sector": "TECH",
+        "weight": "0.7",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB"
+      ],
+      "review_priority": "P2",
+      "simulation_direction": "Hypothetical only: simulate lower exposure to the largest sector and recompute views."
+    }
+  ],
+  "policy_status": "NOT_CONFIGURED",
+  "policy_checks": {}
+}

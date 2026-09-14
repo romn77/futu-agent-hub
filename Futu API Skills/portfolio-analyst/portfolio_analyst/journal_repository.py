@@ -207,7 +207,12 @@ class JournalRepository:
         journal_fd = self._journal_directory_fd(create=True)
         flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
         try:
-            file_fd = os.open(filename, flags, 0o600, dir_fd=journal_fd)
+            # Serialize first creation through O_EXCL. A concurrent creator opens the
+            # published file without O_CREAT; all paths retain O_NOFOLLOW validation.
+            try:
+                file_fd = os.open(filename, flags | os.O_EXCL, 0o600, dir_fd=journal_fd)
+            except FileExistsError:
+                file_fd = os.open(filename, flags & ~os.O_CREAT, dir_fd=journal_fd)
             try:
                 metadata = os.fstat(file_fd)
                 if (

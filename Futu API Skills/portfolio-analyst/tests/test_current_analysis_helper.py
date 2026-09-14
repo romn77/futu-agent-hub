@@ -424,10 +424,11 @@ def test_main_does_not_swallow_programming_errors_or_control_flow(monkeypatch, e
         main([])
 
 
-def test_script_rejects_tmp_as_data_home_with_stable_json_and_no_traceback():
+@pytest.mark.parametrize("data_home", ["/tmp", str(Path("/tmp").resolve())])
+def test_script_rejects_tmp_as_data_home_with_stable_json_and_no_traceback(data_home):
     script = Path(__file__).resolve().parents[1] / "scripts" / "current_analysis.py"
     environment = os.environ.copy()
-    environment["PORTFOLIO_AGENT_HOME"] = "/tmp"
+    environment["PORTFOLIO_AGENT_HOME"] = data_home
     completed = subprocess.run(
         [sys.executable, str(script)],
         check=False,
@@ -438,11 +439,15 @@ def test_script_rejects_tmp_as_data_home_with_stable_json_and_no_traceback():
 
     assert completed.returncode == 2
     assert completed.stderr == ""
+    # Settings rejects symlink components before private-directory permission checks.
+    linked = Path(data_home).absolute() != Path(data_home).resolve()
     assert json.loads(completed.stdout) == {
         "ok": False,
         "error": {
-            "code": "PRIVATE_HOME_ERROR",
-            "message": "private portfolio data home is unavailable or unsafe",
+            "code": "CONFIG_ERROR" if linked else "PRIVATE_HOME_ERROR",
+            "message": "portfolio configuration is invalid"
+            if linked
+            else "private portfolio data home is unavailable or unsafe",
         },
     }
     assert "Traceback" not in completed.stdout

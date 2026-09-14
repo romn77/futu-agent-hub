@@ -727,13 +727,43 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         raise ReportSemanticError(
             "exposure semantic validation failed: additive NAV views do not reconcile"
         )
+    current_metrics = payload["schema_version"] == "1.1"
+    if current_metrics:
+        from .risk_report_validation import validate_current_metrics
+
+        try:
+            validate_current_metrics(payload)
+        except ValueError as exc:
+            raise ReportSemanticError(str(exc)) from exc
+    else:
+        concentration = payload["concentration"]
+        if concentration["status"] == "AVAILABLE":
+            hhi = _finite_decimal(concentration["hhi"], "legacy NAV HHI")
+            effective = concentration["effective_positions"]
+            if hhi == 0:
+                if effective is not None:
+                    raise ReportSemanticError("legacy empty HHI requires null effective positions")
+            else:
+                from decimal import localcontext
+
+                with localcontext() as context:
+                    context.prec = 50
+                    expected = Decimal(1) / hhi
+                    if effective is None or abs(Decimal(effective) - expected) > max(
+                        Decimal(1), abs(expected)
+                    ) * Decimal("1e-24"):
+                        raise ReportSemanticError(
+                            "legacy effective positions must use inverse NAV HHI"
+                        )
     checks = payload["policy_checks"]
     if payload["policy_status"] == "NOT_CONFIGURED" and checks:
         raise ReportSemanticError("unconfigured policy cannot contain threshold checks")
     for name, check in checks.items():
         measured = _finite_decimal(check["measured"], f"policy {name} measured")
         threshold = _finite_decimal(check["threshold"], f"policy {name} threshold")
-        if check["breached"] != (measured > threshold):
+        if not (current_metrics and name in {"sector", "region", "theme_split"}) and check[
+            "breached"
+        ] != (measured > threshold):
             raise ReportSemanticError(f"policy breach boolean is inconsistent for {name}")
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNRATED": 4}
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -807,7 +837,7 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
             "HIGH"
             if any(checks[name]["breached"] for name in relevant)
             else "LOW"
-            if relevant
+            if relevant and all(checks[name]["breached"] is False for name in relevant)
             else "UNRATED"
         )
         if finding["severity"] != expected_severity:
@@ -824,10 +854,9 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         }.items()
         if check_name in checks
     }
-    required_candidate_types = set(policy_candidate_types)
+    required_candidate_types = set(policy_candidate_types) if coverage["positions"] else set()
     if coverage["positions"]:
         required_candidate_types.add("REGION_CONCENTRATION")
-    missing_candidates = required_candidate_types - finding_types
     candidate_priority = {
         "POSITION_CONCENTRATION": 1,
         "REGION_CONCENTRATION": 2,
@@ -840,6 +869,21 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
         "SECTOR_CONCENTRATION": ("sector",),
         "THEME_CONCENTRATION": ("theme_split",),
     }
+    if current_metrics:
+        for dimension, candidate_type in (
+            ("sector", "SECTOR"),
+            ("region", "REGION"),
+            ("theme_split", "THEME"),
+        ):
+            if not any(label != "UNKNOWN" for label in payload["exposures"][dimension]["weights"]):
+                old = candidate_type + "_CONCENTRATION"
+                gap = candidate_type + "_CLASSIFICATION_UNKNOWN"
+                if old in required_candidate_types:
+                    required_candidate_types.remove(old)
+                    required_candidate_types.add(gap)
+                candidate_priority[gap] = candidate_priority[old]
+                candidate_checks[gap] = ()
+    missing_candidates = required_candidate_types - finding_types
     if missing_candidates:
         worst_reported = (
             severity_order[findings[-1]["severity"]],
@@ -853,7 +897,7 @@ def _validate_report_semantics(payload: dict[str, Any]) -> None:
                 "HIGH"
                 if any(checks[name]["breached"] for name in relevant)
                 else "LOW"
-                if relevant
+                if relevant and all(checks[name]["breached"] is False for name in relevant)
                 else "UNRATED"
             )
             return severity_order[severity], candidate_priority[candidate_type], candidate_type
@@ -1449,6 +1493,13 @@ def validate_portfolio_report_document(payload: dict[str, Any]) -> None:
             raise ReportSemanticError(
                 f"embedded risk report does not match portfolio field {portfolio_field}"
             )
+    if payload["schema_version"] != embedded["schema_version"]:
+        raise ReportSemanticError("portfolio and embedded risk versions differ")
+    if (
+        payload["schema_version"] == "1.1"
+        and payload["classification_coverage"] != embedded["classification_coverage"]
+    ):
+        raise ReportSemanticError("portfolio classification evidence does not match embedded risk")
     lifecycle = payload["lifecycle"]
     if lifecycle.get("status") != "UNAVAILABLE_UNTIL_PHASE_4":
         validate_lifecycle_document(lifecycle)

@@ -344,6 +344,16 @@ def test_bounded_runner_rejects_invalid_budget_before_process_start(budget):
 
 
 def _pid_is_live(pid: int) -> bool:
+    # SIGKILL is asynchronous: allow bounded time for delivery and OS reaping.
+    deadline = time.monotonic() + 0.5
+    while _pid_present(pid):
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.005)
+    return False
+
+
+def _pid_present(pid: int) -> bool:
     stat_path = f"/proc/{pid}/stat"
     try:
         state = open(stat_path, encoding="utf-8").read().split()[2]

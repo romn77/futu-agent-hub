@@ -9,7 +9,9 @@ JSON or claim that a report/snapshot was saved. Keep the overview compact and th
 2. **One-line conclusion** — the most decision-relevant portfolio-level finding and its limitation.
 3. **Overview** — NAV, cash/cash weight, filled holding count, concentration, current costs, market
    values, unrealized P&L and contribution where supported.
-4. **Three principal risks** — exactly three, each tied to affected positions and evidence.
+4. **Three principal risks** — exactly three evidence items, each tied to affected positions and
+   evidence. Where a dimension cannot be assessed, explicitly show its data gap or lack of a
+   confirmable risk; never invent a concentration conclusion to fill three slots.
 5. **Complete holdings table** — every nonzero current filled holding.
 6. **Selected deep research** — why each name was selected, evidence, thesis/invalidation,
    redundancy, cycle/macro sensitivity, and technical context. Use the bound `technical` report's
@@ -38,3 +40,13 @@ negative quantity as a complete short-risk assessment.
 Account facts cite the same snapshot ID/as-of near the table or overview. Changing facts show source
 and source date; news/announcements use clickable direct links. Put a limitation beside any affected
 claim, then repeat it concisely in Data gaps and sources. Missing is “Unknown/Unavailable,” never 0.
+
+## Classification uncertainty and metric basis
+
+Show known/unknown classification coverage beside any sector, region or split-theme constraint.
+Keep BREACHED, WITHIN_LIMIT, UNKNOWN and NOT_CONFIGURED distinct. UNKNOWN is a missing-evidence
+bucket, never an actual industry or a confirmed limit breach. Do not treat a null breach boolean
+as false. Use the authoritative structured risk status in the final Markdown.
+
+Label NAV HHI separately from holdings-only HHI/effective positions. Cash affects invested capital,
+not the relative diversification metric; legacy inverse NAV-HHI reports require a legacy label.

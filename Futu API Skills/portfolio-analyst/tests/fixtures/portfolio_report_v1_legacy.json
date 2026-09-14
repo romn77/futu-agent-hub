@@ -1,0 +1,655 @@
+{
+  "schema_version": "1.0",
+  "portfolio_report_id": "pr-62748812bdfe3377a8b8",
+  "as_of": "2026-08-27T10:00:00Z",
+  "source_snapshot_id": "ps-20260827T100000Z-real-usd-c83c0f79139e9ddc",
+  "base_currency": "USD",
+  "coverage": {
+    "source_holdings": 3,
+    "positions": 3,
+    "total_positions": 3,
+    "omitted_positions": 0,
+    "budget_status": "COMPLETE",
+    "budget_reason": null,
+    "classified_sector": 3,
+    "classified_region": 3,
+    "pnl_evidence_status": "PARTIAL",
+    "price_histories": {
+      "requested": 3,
+      "available": 0
+    }
+  },
+  "data_quality_status": "PARTIAL",
+  "data_quality_notes": [
+    "fixture warning",
+    "one or more classifications are UNKNOWN",
+    "missing field: classification",
+    "Adjusted daily price provider was not supplied; correlation was not inferred.",
+    "P&L evidence is incomplete; PNL_CONCENTRATION was not emitted."
+  ],
+  "overall_risk": "UNRATED",
+  "policy_status": "NOT_CONFIGURED",
+  "policy_checks": {},
+  "summary": {
+    "nav_base": "1000",
+    "cash_base": "100",
+    "cash_weight": "0.1",
+    "position_count": 3,
+    "top_holdings": [
+      {
+        "symbol": "US.AAA",
+        "weight": "0.4",
+        "market_value_base": "400"
+      },
+      {
+        "symbol": "US.BBB",
+        "weight": "0.3",
+        "market_value_base": "300"
+      },
+      {
+        "symbol": "US.CCC",
+        "weight": "0.2",
+        "market_value_base": "200"
+      }
+    ]
+  },
+  "largest_risks": [
+    {
+      "type": "POSITION_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "Largest holding is the primary single-name concentration review signal.",
+      "evidence": {
+        "basis": "NAV",
+        "top_1": "0.4",
+        "top_3": "0.9",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB",
+        "US.CCC"
+      ],
+      "review_priority": "P1",
+      "simulation_direction": "Hypothetical only: simulate reducing the largest weight and recompute concentration."
+    },
+    {
+      "type": "REGION_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "US is the largest deterministic region exposure.",
+      "evidence": {
+        "basis": "NAV",
+        "region": "US",
+        "weight": "0.7",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB"
+      ],
+      "review_priority": "P2",
+      "simulation_direction": "Hypothetical only: simulate lower exposure to the largest region and recompute views."
+    },
+    {
+      "type": "SECTOR_CONCENTRATION",
+      "severity": "UNRATED",
+      "summary": "TECH is the largest deterministic sector exposure.",
+      "evidence": {
+        "basis": "NAV",
+        "sector": "TECH",
+        "weight": "0.7",
+        "policy_threshold_applied": false
+      },
+      "affected_positions": [
+        "US.AAA",
+        "US.BBB"
+      ],
+      "review_priority": "P2",
+      "simulation_direction": "Hypothetical only: simulate lower exposure to the largest sector and recompute views."
+    }
+  ],
+  "concentration": {
+    "status": "AVAILABLE",
+    "top_1": "0.4",
+    "top_3": "0.9",
+    "top_5": "0.9",
+    "hhi": "0.29",
+    "effective_positions": "3.44827586206896551724137931",
+    "note": "Nonnegative position NAV weights; cash is excluded from position concentration."
+  },
+  "exposures": {
+    "sector": {
+      "basis": "NAV",
+      "weights": {
+        "HEALTH": "0.2",
+        "TECH": "0.7"
+      }
+    },
+    "region": {
+      "basis": "NAV",
+      "weights": {
+        "EU": "0.2",
+        "US": "0.7"
+      }
+    },
+    "theme_full": {
+      "view": "OVERLAP_FULL_ALLOCATION",
+      "basis": "NAV",
+      "weights": {
+        "AI": "0.7",
+        "CLOUD": "0.4",
+        "UNKNOWN": "0.2"
+      }
+    },
+    "theme_split": {
+      "view": "ADDITIVE_SPLIT_ALLOCATION",
+      "basis": "NAV",
+      "weights": {
+        "AI": "0.5",
+        "CLOUD": "0.2",
+        "UNKNOWN": "0.2"
+      }
+    }
+  },
+  "correlation": {
+    "status": "UNAVAILABLE",
+    "lookback": 120,
+    "minimum_observations": 60,
+    "medium_threshold": "0.55",
+    "high_threshold": "0.75",
+    "adjusted_prices": true,
+    "coverage": {
+      "requested": 3,
+      "available": 0
+    },
+    "date_cutoffs": {
+      "US.AAA": "2026-08-26",
+      "US.BBB": "2026-08-26",
+      "US.CCC": "2026-08-26"
+    },
+    "matrix": {},
+    "pairs": [],
+    "inverse_pairs": [],
+    "clusters": [],
+    "notes": [
+      "Adjusted daily price provider was not supplied; correlation was not inferred."
+    ]
+  },
+  "lifecycle": {
+    "status": "UNAVAILABLE_UNTIL_PHASE_4"
+  },
+  "performance": {
+    "status": "NOT_INCLUDED_USE_PERFORMANCE_COMMAND"
+  },
+  "options": {
+    "schema_version": "1.1",
+    "option_risk_id": "720d14e2eaabef60af73",
+    "analysis_now": "2026-09-13T10:08:48.438724Z",
+    "quote_acquisition_started_at": "2026-09-13T10:08:48.438724Z",
+    "as_of": "2026-08-27T10:00:00Z",
+    "source_snapshot_id": "ps-20260827T100000Z-real-usd-c83c0f79139e9ddc",
+    "source_snapshot_digest": "f9bdb17f2f0f78e1e7643eb281770e030c7274f0d7eb4340e25236b3a5c30e51",
+    "base_currency": "USD",
+    "status": "NOT_APPLICABLE",
+    "data_quality": {
+      "status": "COMPLETE",
+      "freshness": "UNVERIFIED"
+    },
+    "coverage": {
+      "source_positions": 3,
+      "nonzero_positions": 3,
+      "unknown_security_type_positions": 0,
+      "option_legs": 0,
+      "unique_contracts": 0,
+      "supported_contracts": 0,
+      "selected_contracts": 0,
+      "quoted_contracts": 0,
+      "unsupported_contracts": 0,
+      "budget_omitted_contracts": 0
+    },
+    "provenance": {
+      "source_snapshot": {
+        "schema_version": "1.0",
+        "snapshot_id": "ps-20260827T100000Z-real-usd-c83c0f79139e9ddc",
+        "as_of": "2026-08-27T10:00:00Z",
+        "source": "futuapi",
+        "source_version": "fixture-v1",
+        "trd_env": "REAL",
+        "base_currency": "USD",
+        "fx_evidence": [
+          {
+            "source_currency": "USD",
+            "target_currency": "USD",
+            "rate": "1",
+            "source": "TEST",
+            "effective_at": "2026-08-27T10:00:00Z"
+          }
+        ],
+        "accounts": [
+          {
+            "account_ref": "acct-safe",
+            "trd_env": "REAL",
+            "account_type": "MARGIN",
+            "account_role": "NORMAL",
+            "markets": [
+              "US"
+            ],
+            "status": "ACTIVE",
+            "context_type": "SEC",
+            "security_firm": "UNKNOWN",
+            "alias_provenance": "STABLE"
+          }
+        ],
+        "cash_balances": [
+          {
+            "account_ref": "acct-safe",
+            "currency": "USD",
+            "amount_local": "100",
+            "fx_to_base": "1",
+            "amount_base": "100",
+            "weight": "0.1",
+            "data_quality_notes": []
+          }
+        ],
+        "positions": [
+          {
+            "account_ref": "acct-safe",
+            "symbol": "AAA",
+            "name": "Fixture AAA",
+            "market": "US",
+            "security_type": "STOCK",
+            "currency": "USD",
+            "currency_provenance": "USER_CONFIG",
+            "quantity": "1",
+            "can_sell_quantity": "1",
+            "average_cost_local": "400",
+            "last_price_local": "400",
+            "market_value_local": "400",
+            "unrealized_pl_local": null,
+            "realized_pl_local": null,
+            "fx_to_base": "1",
+            "market_value_base": "400",
+            "unrealized_pl_base": null,
+            "realized_pl_base": null,
+            "weight": "0.4",
+            "sector": "TECH",
+            "industry": "UNKNOWN",
+            "region": "US",
+            "themes": [
+              "AI",
+              "CLOUD"
+            ],
+            "asset_class": "EQUITY",
+            "position_role": null,
+            "data_quality_notes": []
+          },
+          {
+            "account_ref": "acct-safe",
+            "symbol": "BBB",
+            "name": "Fixture BBB",
+            "market": "US",
+            "security_type": "STOCK",
+            "currency": "USD",
+            "currency_provenance": "USER_CONFIG",
+            "quantity": "1",
+            "can_sell_quantity": "1",
+            "average_cost_local": "300",
+            "last_price_local": "300",
+            "market_value_local": "300",
+            "unrealized_pl_local": null,
+            "realized_pl_local": null,
+            "fx_to_base": "1",
+            "market_value_base": "300",
+            "unrealized_pl_base": null,
+            "realized_pl_base": null,
+            "weight": "0.3",
+            "sector": "TECH",
+            "industry": "UNKNOWN",
+            "region": "US",
+            "themes": [
+              "AI"
+            ],
+            "asset_class": "EQUITY",
+            "position_role": null,
+            "data_quality_notes": []
+          },
+          {
+            "account_ref": "acct-safe",
+            "symbol": "CCC",
+            "name": "Fixture CCC",
+            "market": "US",
+            "security_type": "STOCK",
+            "currency": "USD",
+            "currency_provenance": "USER_CONFIG",
+            "quantity": "1",
+            "can_sell_quantity": "1",
+            "average_cost_local": "200",
+            "last_price_local": "200",
+            "market_value_local": "200",
+            "unrealized_pl_local": null,
+            "realized_pl_local": null,
+            "fx_to_base": "1",
+            "market_value_base": "200",
+            "unrealized_pl_base": null,
+            "realized_pl_base": null,
+            "weight": "0.2",
+            "sector": "HEALTH",
+            "industry": "UNKNOWN",
+            "region": "EU",
+            "themes": [],
+            "asset_class": "EQUITY",
+            "position_role": null,
+            "data_quality_notes": []
+          }
+        ],
+        "nav_base": "1000",
+        "cash_base": "100",
+        "cash_weight": "0.1",
+        "long_exposure_base": "900",
+        "short_exposure_base": "0",
+        "gross_exposure_base": "900",
+        "net_exposure_base": "900",
+        "exposures": {
+          "sector": {
+            "TECH": "0.7",
+            "HEALTH": "0.2"
+          },
+          "region": {
+            "US": "0.7",
+            "EU": "0.2"
+          },
+          "theme": {
+            "AI": "0.7",
+            "CLOUD": "0.4"
+          },
+          "asset_class": {
+            "EQUITY": "0.9"
+          }
+        },
+        "data_quality": {
+          "status": "PARTIAL",
+          "warnings": [
+            "fixture warning",
+            "one or more classifications are UNKNOWN"
+          ],
+          "missing_fields": [
+            "classification"
+          ],
+          "source_errors": [],
+          "coverage": {}
+        }
+      },
+      "quote_source": "OFFICIAL_FUTUAPI_GET_OPTION_QUOTE",
+      "quote_script_sha256": "0ea054b6b8f6f37938885041b7257653627941408462fc9c3c53d0395d4c8fd8",
+      "quote_capability": "NOT_ACCESSED",
+      "quote_freshness": "UNVERIFIED",
+      "greek_unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+      "metadata_source": "FUTU_GET_STOCK_BASICINFO_OPTION"
+    },
+    "source_population": {
+      "net_market_value_base": "0",
+      "gross_market_value_base": "0",
+      "gross_to_nav": "0",
+      "contracts": []
+    },
+    "quote_evidence": [],
+    "metadata_evidence": {
+      "request": [],
+      "response_byte_count": 0,
+      "response": null,
+      "status": "NOT_ACCESSED",
+      "reason_code": null
+    },
+    "leg_exposures": [],
+    "underlying_relationships": [],
+    "greek_aggregates": {
+      "delta": {
+        "unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+        "status": "UNAVAILABLE",
+        "net": null,
+        "gross_abs": null,
+        "coverage": {
+          "available_legs": 0,
+          "total_legs": 0
+        }
+      },
+      "gamma": {
+        "unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+        "status": "UNAVAILABLE",
+        "net": null,
+        "gross_abs": null,
+        "coverage": {
+          "available_legs": 0,
+          "total_legs": 0
+        }
+      },
+      "vega": {
+        "unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+        "status": "UNAVAILABLE",
+        "net": null,
+        "gross_abs": null,
+        "coverage": {
+          "available_legs": 0,
+          "total_legs": 0
+        }
+      },
+      "theta": {
+        "unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+        "status": "UNAVAILABLE",
+        "net": null,
+        "gross_abs": null,
+        "coverage": {
+          "available_legs": 0,
+          "total_legs": 0
+        }
+      },
+      "rho": {
+        "unit": "RAW_CONTRACT_UNITS_NO_MULTIPLIER",
+        "status": "UNAVAILABLE",
+        "net": null,
+        "gross_abs": null,
+        "coverage": {
+          "available_legs": 0,
+          "total_legs": 0
+        }
+      }
+    },
+    "implied_volatility_coverage": {
+      "status": "NOT_APPLICABLE",
+      "available_legs": 0,
+      "total_legs": 0
+    },
+    "option_type_buckets": [],
+    "expiry_buckets": [],
+    "quality_reasons": [
+      {
+        "code": "SOURCE_SNAPSHOT_INCOMPLETE",
+        "scope": "snapshot",
+        "detail": "source snapshot quality is PARTIAL"
+      }
+    ],
+    "formulas": {
+      "leg_greek": "signed_snapshot_quantity * unit_greek",
+      "contract_adjusted_delta_units": "signed_snapshot_quantity * raw_delta * contract_multiplier",
+      "notional_delta_local": "contract_adjusted_delta_units * same_snapshot_underlying_price_local",
+      "notional_delta_base": "notional_delta_local * same_snapshot_underlying_fx_to_base",
+      "atm_tolerance": "max(abs(strike) * 0.001, 0.01 local currency units)",
+      "net_greek": "sum(leg_greek) only with complete population coverage",
+      "gross_abs_greek": "sum(abs(leg_greek)) only with complete population coverage",
+      "gross_to_nav": "gross_market_value_base / snapshot_nav_base",
+      "dte": "expiry_calendar_date - snapshot_as_of_market_local_date"
+    },
+    "limitations": [
+      "Raw Greek aggregates retain vendor contract units; multiplier-adjusted delta is separate.",
+      "Contract multiplier and underlying identity require Futu static option metadata.",
+      "Quote freshness is UNVERIFIED; only request start and finish windows are recorded.",
+      "Implied volatility is a raw vendor value and is not aggregated.",
+      "Implied volatility has no high/low interpretation and inherits UNVERIFIED quote freshness.",
+      "No bid/ask, max profit/loss, breakeven, probability, margin, scenario P/L, beta, strategy, or trading advice is provided.",
+      "DTE is calendar-day difference, not trading days."
+    ]
+  },
+  "hypothetical_simulation_candidates": [
+    "Hypothetical only: simulate reducing the largest weight and recompute concentration.",
+    "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
+    "Hypothetical only: simulate lower exposure to the largest sector and recompute views."
+  ],
+  "data_gaps": [
+    "fixture warning",
+    "one or more classifications are UNKNOWN",
+    "missing field: classification",
+    "Adjusted daily price provider was not supplied; correlation was not inferred.",
+    "P&L evidence is incomplete; PNL_CONCENTRATION was not emitted."
+  ],
+  "risk_report": {
+    "schema_version": "1.0",
+    "as_of": "2026-08-27T10:00:00Z",
+    "source_snapshot_id": "ps-20260827T100000Z-real-usd-c83c0f79139e9ddc",
+    "coverage": {
+      "source_holdings": 3,
+      "positions": 3,
+      "total_positions": 3,
+      "omitted_positions": 0,
+      "budget_status": "COMPLETE",
+      "budget_reason": null,
+      "classified_sector": 3,
+      "classified_region": 3,
+      "pnl_evidence_status": "PARTIAL",
+      "price_histories": {
+        "requested": 3,
+        "available": 0
+      }
+    },
+    "data_quality_status": "PARTIAL",
+    "data_quality_notes": [
+      "fixture warning",
+      "one or more classifications are UNKNOWN",
+      "missing field: classification",
+      "Adjusted daily price provider was not supplied; correlation was not inferred.",
+      "P&L evidence is incomplete; PNL_CONCENTRATION was not emitted."
+    ],
+    "overall_risk": "UNRATED",
+    "concentration": {
+      "status": "AVAILABLE",
+      "top_1": "0.4",
+      "top_3": "0.9",
+      "top_5": "0.9",
+      "hhi": "0.29",
+      "effective_positions": "3.44827586206896551724137931",
+      "note": "Nonnegative position NAV weights; cash is excluded from position concentration."
+    },
+    "exposures": {
+      "sector": {
+        "basis": "NAV",
+        "weights": {
+          "HEALTH": "0.2",
+          "TECH": "0.7"
+        }
+      },
+      "region": {
+        "basis": "NAV",
+        "weights": {
+          "EU": "0.2",
+          "US": "0.7"
+        }
+      },
+      "theme_full": {
+        "view": "OVERLAP_FULL_ALLOCATION",
+        "basis": "NAV",
+        "weights": {
+          "AI": "0.7",
+          "CLOUD": "0.4",
+          "UNKNOWN": "0.2"
+        }
+      },
+      "theme_split": {
+        "view": "ADDITIVE_SPLIT_ALLOCATION",
+        "basis": "NAV",
+        "weights": {
+          "AI": "0.5",
+          "CLOUD": "0.2",
+          "UNKNOWN": "0.2"
+        }
+      }
+    },
+    "correlation": {
+      "status": "UNAVAILABLE",
+      "lookback": 120,
+      "minimum_observations": 60,
+      "medium_threshold": "0.55",
+      "high_threshold": "0.75",
+      "adjusted_prices": true,
+      "coverage": {
+        "requested": 3,
+        "available": 0
+      },
+      "date_cutoffs": {
+        "US.AAA": "2026-08-26",
+        "US.BBB": "2026-08-26",
+        "US.CCC": "2026-08-26"
+      },
+      "matrix": {},
+      "pairs": [],
+      "inverse_pairs": [],
+      "clusters": [],
+      "notes": [
+        "Adjusted daily price provider was not supplied; correlation was not inferred."
+      ]
+    },
+    "top_risks": [
+      {
+        "type": "POSITION_CONCENTRATION",
+        "severity": "UNRATED",
+        "summary": "Largest holding is the primary single-name concentration review signal.",
+        "evidence": {
+          "basis": "NAV",
+          "top_1": "0.4",
+          "top_3": "0.9",
+          "policy_threshold_applied": false
+        },
+        "affected_positions": [
+          "US.AAA",
+          "US.BBB",
+          "US.CCC"
+        ],
+        "review_priority": "P1",
+        "simulation_direction": "Hypothetical only: simulate reducing the largest weight and recompute concentration."
+      },
+      {
+        "type": "REGION_CONCENTRATION",
+        "severity": "UNRATED",
+        "summary": "US is the largest deterministic region exposure.",
+        "evidence": {
+          "basis": "NAV",
+          "region": "US",
+          "weight": "0.7",
+          "policy_threshold_applied": false
+        },
+        "affected_positions": [
+          "US.AAA",
+          "US.BBB"
+        ],
+        "review_priority": "P2",
+        "simulation_direction": "Hypothetical only: simulate lower exposure to the largest region and recompute views."
+      },
+      {
+        "type": "SECTOR_CONCENTRATION",
+        "severity": "UNRATED",
+        "summary": "TECH is the largest deterministic sector exposure.",
+        "evidence": {
+          "basis": "NAV",
+          "sector": "TECH",
+          "weight": "0.7",
+          "policy_threshold_applied": false
+        },
+        "affected_positions": [
+          "US.AAA",
+          "US.BBB"
+        ],
+        "review_priority": "P2",
+        "simulation_direction": "Hypothetical only: simulate lower exposure to the largest sector and recompute views."
+      }
+    ],
+    "policy_status": "NOT_CONFIGURED",
+    "policy_checks": {}
+  }
+}

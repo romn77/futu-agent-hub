@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from .models import NormalizedPosition, PortfolioSnapshot, _json_value
 from .normalization import canonical_unknown
+from .risk_metrics import classification_coverage, holdings_diversification, policy_severity
 from .secure_config import PrivateConfigError, load_optional_json_object
 
 
@@ -272,6 +273,7 @@ class Concentration:
     hhi: Decimal | None
     effective_positions: Decimal | None
     note: str
+    holdings_hhi: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -333,6 +335,7 @@ class RiskReport:
     top_risks: tuple[RiskFinding, ...]
     policy_status: str = "NOT_CONFIGURED"
     policy_checks: Mapping[str, Any] = field(default_factory=dict)
+    classification_coverage: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = _json_value(self)
@@ -375,7 +378,7 @@ def _concentration(
     ranked = sorted(weights, reverse=True)
     top = lambda count: sum(ranked[:count], Decimal("0"))  # noqa: E731
     hhi = sum((weight * weight for weight in weights), Decimal("0"))
-    effective = Decimal("1") / hhi if hhi else None
+    holdings_hhi, effective = holdings_diversification(weights)
     return Concentration(
         "AVAILABLE",
         top(1),
@@ -383,7 +386,8 @@ def _concentration(
         top(5),
         hhi,
         effective,
-        "Nonnegative position NAV weights; cash is excluded from position concentration.",
+        "Top weights and HHI use NAV; holdings_hhi and effective_positions use relative nonnegative holdings weights, excluding cash.",
+        holdings_hhi,
     )
 
 
@@ -753,6 +757,7 @@ def _findings(
     policy_checks: Mapping[str, Any],
     high_correlation: Decimal,
     pnl_evidence_status: str,
+    classification: Mapping[str, Any],
 ) -> tuple[RiskFinding, ...]:
     positions = sorted(
         economic_positions, key=lambda position: (-abs(position.weight), position.identity)
@@ -767,19 +772,21 @@ def _findings(
                 (),
                 "P3",
             )
-            for finding_type, summary in (
+            for finding_type, summary in sorted(
                 (
-                    "POSITION_DATA_UNAVAILABLE",
-                    "No positions are present; position concentration has no risk population.",
-                ),
-                (
-                    "CLASSIFICATION_DATA_UNAVAILABLE",
-                    "No positions are present; sector, region, and theme review populations are empty.",
-                ),
-                (
-                    "CORRELATION_DATA_UNAVAILABLE",
-                    "No positions are present; adjusted-return correlation has no pair population.",
-                ),
+                    (
+                        "POSITION_DATA_UNAVAILABLE",
+                        "No positions are present; position concentration has no risk population.",
+                    ),
+                    (
+                        "CLASSIFICATION_DATA_UNAVAILABLE",
+                        "No positions are present; sector, region, and theme review populations are empty.",
+                    ),
+                    (
+                        "CORRELATION_DATA_UNAVAILABLE",
+                        "No positions are present; adjusted-return correlation has no pair population.",
+                    ),
+                )
             )
         )
     findings: list[RiskFinding] = []
@@ -815,56 +822,62 @@ def _findings(
                 "Hypothetical only: simulate reducing the largest weight and recompute concentration.",
             )
         )
-    sector, sector_weight = max(exposures.sector.items(), key=lambda item: (item[1], item[0]))
-    findings.append(
-        RiskFinding(
-            "SECTOR_CONCENTRATION",
-            (
-                "HIGH"
-                if policy_checks.get("sector", {}).get("breached")
-                else "LOW"
-                if "sector" in policy_checks
-                else "UNRATED"
+    for dimension, label_field, priority in (
+        ("sector", "sector", "P2"),
+        ("region", "region", "P2"),
+        ("theme_split", "theme", "P3"),
+    ):
+        weights = getattr(exposures, dimension)
+        known = {label: weight for label, weight in weights.items() if label != "UNKNOWN"}
+        coverage = classification[dimension]
+        if not known:
+            findings.append(
+                RiskFinding(
+                    f"{label_field.upper()}_CLASSIFICATION_UNKNOWN",
+                    "UNRATED",
+                    f"{label_field} classification is unavailable; concentration cannot be inferred.",
+                    MappingProxyType({"dimension": dimension, **coverage}),
+                    tuple(position.identity for position in positions),
+                    priority,
+                )
+            )
+            continue
+        label, weight = max(known.items(), key=lambda item: (item[1], item[0]))
+        check = policy_checks.get(dimension)
+        severity = policy_severity([check] if check is not None else [])
+        evidence = {
+            **(
+                {"view": "ADDITIVE_SPLIT_ALLOCATION"}
+                if dimension == "theme_split"
+                else {"basis": "NAV"}
             ),
-            f"{sector} is the largest deterministic sector exposure.",
-            MappingProxyType(
-                {
-                    "basis": "NAV",
-                    "sector": sector,
-                    "weight": sector_weight,
-                    "policy_threshold_applied": "sector" in policy_checks,
-                }
-            ),
-            tuple(position.identity for position in positions if position.sector == sector),
-            "P2",
-            "Hypothetical only: simulate lower exposure to the largest sector and recompute views.",
+            label_field: label,
+            "weight": weight,
+            "policy_threshold_applied": check is not None,
+        }
+        findings.append(
+            RiskFinding(
+                f"{label_field.upper()}_CONCENTRATION",
+                severity,
+                f"{label} is the largest known {label_field} exposure; constraint status: {coverage['status']}.",
+                MappingProxyType(evidence),
+                tuple(
+                    position.identity
+                    for position in positions
+                    if (
+                        label in position.themes
+                        if dimension == "theme_split"
+                        else getattr(position, dimension) == label
+                    )
+                ),
+                priority,
+                (
+                    f"Hypothetical only: simulate lower exposure to the largest known {label_field} and recompute views."
+                    if severity == "HIGH"
+                    else None
+                ),
+            )
         )
-    )
-    region, region_weight = max(exposures.region.items(), key=lambda item: (item[1], item[0]))
-    findings.append(
-        RiskFinding(
-            "REGION_CONCENTRATION",
-            (
-                "HIGH"
-                if policy_checks.get("region", {}).get("breached")
-                else "LOW"
-                if "region" in policy_checks
-                else "UNRATED"
-            ),
-            f"{region} is the largest deterministic region exposure.",
-            MappingProxyType(
-                {
-                    "basis": "NAV",
-                    "region": region,
-                    "weight": region_weight,
-                    "policy_threshold_applied": "region" in policy_checks,
-                }
-            ),
-            tuple(position.identity for position in positions if position.region == region),
-            "P2",
-            "Hypothetical only: simulate lower exposure to the largest region and recompute views.",
-        )
-    )
     if pnl_evidence_status == "COMPLETE":
         pnl_values = {
             position.identity: position.unrealized_pl_base + position.realized_pl_base
@@ -961,34 +974,6 @@ def _findings(
                 "Hypothetical only: simulate a shock shared by the correlated cluster.",
             )
         )
-    theme, theme_weight = max(exposures.theme_split.items(), key=lambda item: (item[1], item[0]))
-    findings.append(
-        RiskFinding(
-            "THEME_CONCENTRATION",
-            (
-                "HIGH"
-                if policy_checks.get("theme_split", {}).get("breached")
-                else "LOW"
-                if "theme_split" in policy_checks
-                else "UNRATED"
-            ),
-            f"{theme} is the largest additive split-allocation theme exposure.",
-            MappingProxyType(
-                {
-                    "view": "ADDITIVE_SPLIT_ALLOCATION",
-                    "theme": theme,
-                    "weight": theme_weight,
-                    "policy_threshold_applied": "theme_split" in policy_checks,
-                }
-            ),
-            tuple(
-                position.identity
-                for position in positions
-                if theme in (position.themes or ("UNKNOWN",))
-            ),
-            "P3",
-        )
-    )
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNRATED": 4}
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
     return tuple(
@@ -1053,15 +1038,22 @@ def analyze_risk(
         clock=clock,
         sleeper=sleeper,
     )
+    classification = MappingProxyType(
+        {
+            dimension: MappingProxyType(
+                classification_coverage(
+                    getattr(exposures, dimension), getattr(policy, dimension) if policy else None
+                )
+            )
+            for dimension in ("sector", "region", "theme_split")
+        }
+    )
     checks: dict[str, Any] = {}
     if policy is not None:
         candidates = {
             "single_position": concentration.top_1,
             "top_3": concentration.top_3,
             "top_5": concentration.top_5,
-            "sector": max(exposures.sector.values(), default=Decimal("0")),
-            "region": max(exposures.region.values(), default=Decimal("0")),
-            "theme_split": max(exposures.theme_split.values(), default=Decimal("0")),
         }
         for name, measured in candidates.items():
             threshold = getattr(policy, name)
@@ -1069,6 +1061,18 @@ def analyze_risk(
                 checks[name] = MappingProxyType(
                     {"measured": measured, "threshold": threshold, "breached": measured > threshold}
                 )
+    for dimension, evidence in classification.items():
+        if evidence["threshold"] is not None:
+            checks[dimension] = MappingProxyType(
+                {
+                    "measured": evidence["lower_bound"],
+                    "threshold": evidence["threshold"],
+                    "breached": None
+                    if evidence["status"] == "UNKNOWN"
+                    else evidence["status"] == "BREACHED",
+                    "status": evidence["status"],
+                }
+            )
     frozen_checks = MappingProxyType(dict(sorted(checks.items())))
     pnl_evidence_status = (
         "UNAVAILABLE"
@@ -1087,6 +1091,7 @@ def analyze_risk(
         frozen_checks,
         high_correlation,
         pnl_evidence_status,
+        classification,
     )
     notes = tuple(
         dict.fromkeys(
@@ -1095,6 +1100,11 @@ def analyze_risk(
                 *(f"missing field: {field}" for field in snapshot.data_quality.missing_fields),
                 *snapshot.data_quality.source_errors,
                 *correlation.notes,
+                *(
+                    f"{dimension} classification unknown weight: {evidence['unknown_weight']}; constraint status: {evidence['status']}."
+                    for dimension, evidence in classification.items()
+                    if evidence["unknown_weight"] > 0
+                ),
                 *(f"BUDGET_LIMIT: {reason}" for reason in budget_reasons),
                 *(
                     ("P&L evidence is incomplete; PNL_CONCENTRATION was not emitted.",)
@@ -1110,7 +1120,7 @@ def analyze_risk(
     ):
         quality_status = "PARTIAL"
     return RiskReport(
-        "1.0",
+        "1.1",
         snapshot.as_of,
         snapshot.snapshot_id,
         MappingProxyType(
@@ -1143,4 +1153,5 @@ def analyze_risk(
         findings,
         "CONFIGURED" if policy is not None else "NOT_CONFIGURED",
         frozen_checks,
+        classification,
     )

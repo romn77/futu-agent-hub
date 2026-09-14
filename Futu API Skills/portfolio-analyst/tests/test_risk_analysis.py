@@ -186,7 +186,9 @@ def test_risk_metrics_keep_theme_overlap_and_additive_views_separate():
     assert report.concentration.top_3 == Decimal("0.9")
     assert report.concentration.top_5 == Decimal("0.9")
     assert report.concentration.hhi == Decimal("0.29")
-    assert report.concentration.effective_positions == Decimal("1") / Decimal("0.29")
+    assert abs(
+        report.concentration.effective_positions - Decimal("0.81") / Decimal("0.29")
+    ) < Decimal("1e-26")
     assert report.exposures.sector == {"HEALTH": Decimal("0.2"), "TECH": Decimal("0.7")}
     assert report.exposures.theme_full == {
         "AI": Decimal("0.7"),

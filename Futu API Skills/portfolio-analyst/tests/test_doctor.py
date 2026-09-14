@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from portfolio_analyst import doctor, opend_probe_worker, settings
 from portfolio_analyst.doctor import probe_environment, run_doctor
 from portfolio_analyst.skill_trust import audited_files
@@ -83,7 +85,7 @@ def test_worker_rejects_unrelated_tcp_listener_when_handshake_fails():
     assert "handshake failed" in detail
 
 
-def test_environment_probe_bounds_sdk_import_and_handshake_together():
+def test_environment_probe_bounds_import_and_skips_handshake_after_timeout():
     def hanging_worker(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(cmd=["worker-importing-sdk"], timeout=2)
 
@@ -105,12 +107,24 @@ def test_environment_probe_parses_independent_sdk_and_opend_results():
     def completed(args, **kwargs):
         observed["args"] = args
         observed.update(kwargs)
-        output = f"SDK log\n{json.dumps(expected)}\n"
+        if args[3] == "--sdk-package":
+            payload = {
+                "sdk_package": {"installed": True, "version": "10.5.1", "status": "installed"}
+            }
+        else:
+            payload = expected
+        output = f"SDK log\n{json.dumps(payload)}\n"
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
     result = probe_environment("127.0.0.1", 11111, runner=completed)
 
-    assert result == expected
+    assert result["opend"] == expected["opend"]
+    assert result["sdk"] == {
+        **expected["sdk"],
+        "installed": True,
+        "package_status": "installed",
+        "package_version": "10.5.1",
+    }
     assert observed["args"][0] == sys.executable
     assert observed["args"][1] == "-s"
     assert observed["args"][2] == str(doctor.OPEND_PROBE_WORKER)
@@ -279,3 +293,315 @@ def test_cli_doctor_json_supports_no_save(monkeypatch, tmp_path, capsys):
     assert exit_code == 1
     assert payload == expected
     assert not (data_home / "doctor.json").exists()
+
+
+def _completed_stage(args, payload):
+    return subprocess.CompletedProcess(
+        args=args, returncode=0, stdout=f"SDK log\n{json.dumps(payload)}\n", stderr=""
+    )
+
+
+def _installed_package():
+    return {"installed": True, "version": "10.10.7008", "status": "installed"}
+
+
+def _imported_sdk():
+    return {
+        "available": True,
+        "imported": True,
+        "quote_api_available": True,
+        "version": "10.10.7008",
+        "status": "ready",
+        "detail": "futu SDK imported and required quote APIs are present",
+    }
+
+
+def test_handshake_timeout_preserves_installed_and_imported_sdk():
+    calls = []
+
+    def staged_worker(args, **kwargs):
+        calls.append((args, kwargs))
+        stage = args[3]
+        if stage == "--sdk-package":
+            return _completed_stage(args, {"sdk_package": _installed_package()})
+        if stage == "--sdk-import":
+            return _completed_stage(args, {"sdk": _imported_sdk()})
+        progress = {
+            "opend": {
+                "available": False,
+                "reachable": True,
+                "status": "handshake_pending",
+                "detail": "TCP connected",
+            }
+        }
+        raise subprocess.TimeoutExpired(
+            args, kwargs["timeout"], output=json.dumps(progress).encode()
+        )
+
+    result = probe_environment("127.0.0.1", 11111, runner=staged_worker, timeout=0.25)
+
+    assert result["sdk"]["available"] is True
+    assert result["sdk"]["installed"] is True
+    assert result["sdk"]["imported"] is True
+    assert result["sdk"]["quote_api_available"] is True
+    assert result["sdk"]["version"] == "10.10.7008"
+    assert result["opend"]["available"] is False
+    assert result["opend"]["reachable"] is True
+    assert result["opend"]["status"] == "handshake_timeout"
+    assert len(calls) == 3
+    assert all(kwargs["timeout"] == 0.25 for _, kwargs in calls)
+
+
+def test_import_timeout_preserves_package_version_and_skips_opend():
+    calls = []
+
+    def staged_worker(args, **kwargs):
+        calls.append(args[3])
+        if args[3] == "--sdk-package":
+            return _completed_stage(args, {"sdk_package": _installed_package()})
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    result = probe_environment("127.0.0.1", 11111, runner=staged_worker)
+
+    assert result["sdk"]["installed"] is True
+    assert result["sdk"]["version"] == "10.10.7008"
+    assert result["sdk"]["imported"] is None
+    assert result["sdk"]["status"] == "timeout"
+    assert result["opend"]["status"] == "not_attempted"
+    assert calls == ["--sdk-package", "--sdk-import"]
+
+
+def test_package_metadata_does_not_import_sdk(monkeypatch, capsys):
+    def unexpected_import(_name):
+        raise AssertionError("metadata probe imported the SDK")
+
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", unexpected_import)
+    monkeypatch.setattr(opend_probe_worker, "version", lambda _name: "10.10.7008")
+
+    assert opend_probe_worker.main(["--sdk-package"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["sdk_package"] == _installed_package()
+
+
+def test_worker_distinguishes_missing_sdk_from_missing_dependency(monkeypatch):
+    def absent_sdk(_name):
+        raise ModuleNotFoundError("No module named futu", name="futu")
+
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", absent_sdk)
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
+    assert result["sdk"]["status"] == "missing_sdk"
+    assert result["sdk"]["imported"] is False
+
+    def absent_dependency(_name):
+        raise ModuleNotFoundError("No module named pandas", name="pandas")
+
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", absent_dependency)
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
+    assert result["sdk"]["status"] == "missing_dependency"
+
+
+def test_worker_preserves_installed_version_when_sdk_log_write_is_denied(monkeypatch):
+    def denied_import(_name):
+        raise PermissionError(13, "denied", "/private/account/futu/logs")
+
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", denied_import)
+    monkeypatch.setattr(opend_probe_worker, "version", lambda _name: "10.10.7008")
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
+
+    assert result["sdk"]["available"] is False
+    assert result["sdk"]["installed"] is True
+    assert result["sdk"]["version"] == "10.10.7008"
+    assert result["sdk"]["status"] == "permission_denied"
+    assert "log" in result["sdk"]["detail"]
+    assert "/private/account" not in json.dumps(result)
+    assert result["opend"]["status"] == "not_attempted"
+
+
+def test_worker_reports_import_success_when_quote_api_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        opend_probe_worker.importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(__version__="test-version"),
+    )
+
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
+
+    assert result["sdk"]["available"] is False
+    assert result["sdk"]["imported"] is True
+    assert result["sdk"]["quote_api_available"] is False
+    assert result["sdk"]["status"] == "missing_quote_api"
+    assert result["sdk"]["version"] == "test-version"
+
+
+def test_import_stage_does_not_contact_opend(monkeypatch, capsys):
+    class QuoteContextBase:
+        def get_global_state(self):
+            raise AssertionError("import stage queried OpenD")
+
+        def close(self):
+            raise AssertionError("import stage created a quote context")
+
+    class QuoteContext(QuoteContextBase):
+        def __init__(self, **_kwargs):
+            raise AssertionError("import stage contacted OpenD")
+
+    sdk = SimpleNamespace(__version__="10.10.7008", OpenQuoteContext=QuoteContext, RET_OK=0)
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", lambda _name: sdk)
+
+    assert opend_probe_worker.main(["--sdk-import"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["sdk"]["available"] is True
+    assert result["sdk"]["imported"] is True
+
+
+def test_connection_refusal_does_not_start_quote_handshake(monkeypatch, capsys):
+    def refused(*_args, **_kwargs):
+        raise ConnectionRefusedError("private endpoint refused")
+
+    def unexpected_import(_name):
+        raise AssertionError("refused endpoint should not import the SDK again")
+
+    monkeypatch.setattr(socket, "create_connection", refused)
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", unexpected_import)
+
+    assert opend_probe_worker.main(["--opend", "127.0.0.1", "11111"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["opend"]["available"] is False
+    assert result["opend"]["reachable"] is False
+    assert result["opend"]["status"] == "connection_refused"
+    assert "private endpoint" not in json.dumps(result)
+
+
+def test_tcp_success_is_reported_before_quote_handshake(monkeypatch, capsys):
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class QuoteContext:
+        def __init__(self, **_kwargs):
+            progress = json.loads(capsys.readouterr().out.splitlines()[-1])
+            assert progress["opend"]["reachable"] is True
+            assert progress["opend"]["available"] is False
+            assert progress["opend"]["status"] == "handshake_pending"
+
+        def get_global_state(self):
+            return 0, {"private": "not copied into diagnostics"}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: Connection())
+    sdk = SimpleNamespace(OpenQuoteContext=QuoteContext, RET_OK=0)
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", lambda _name: sdk)
+
+    assert opend_probe_worker.main(["--opend", "127.0.0.1", "11111"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["opend"]["available"] is True
+    assert result["opend"]["reachable"] is True
+    assert result["opend"]["status"] == "ready"
+    assert "private" not in json.dumps(result)
+
+
+def test_doctor_identifies_actual_interpreter(tmp_path):
+    skill = _trusted_skill(tmp_path / "futuapi")
+    environment = {"sdk": _imported_sdk(), "opend": {"available": False, "detail": "offline"}}
+
+    result = run_doctor(skill_dir=skill, environment_probe=lambda *_args: environment)
+
+    assert result["runtime"]["executable"] == sys.executable
+    assert result["runtime"]["python_version"] == ".".join(map(str, sys.version_info[:3]))
+    assert result["runtime"]["prefix"] == sys.prefix
+
+
+def test_malformed_package_result_does_not_hide_successful_sdk_import():
+    def staged_worker(args, **_kwargs):
+        if args[3] == "--sdk-package":
+            return _completed_stage(
+                args, {"sdk_package": {"version": "bogus", "status": "installed"}}
+            )
+        if args[3] == "--sdk-import":
+            return _completed_stage(args, {"sdk": _imported_sdk()})
+        return _completed_stage(
+            args,
+            {"opend": {"available": False, "reachable": False, "status": "connection_refused"}},
+        )
+
+    result = probe_environment("127.0.0.1", 11111, runner=staged_worker)
+
+    assert result["sdk"]["available"] is True
+    assert result["sdk"]["installed"] is None
+    assert result["sdk"]["package_status"] == "invalid_response"
+    assert result["sdk"]["version"] == "10.10.7008"
+    assert result["opend"]["status"] == "connection_refused"
+
+
+@pytest.mark.parametrize("method", ["get_global_state", "close"])
+@pytest.mark.parametrize("invalid_api", ["missing", "noncallable"])
+def test_incompatible_quote_context_preserves_import_and_skips_opend(
+    monkeypatch, method, invalid_api
+):
+    instantiated = []
+
+    def record_construction(self, **_kwargs):
+        instantiated.append(True)
+
+    attributes = {
+        "__init__": record_construction,
+        "get_global_state": lambda self: (0, {}),
+        "close": lambda self: None,
+    }
+    if invalid_api == "missing":
+        del attributes[method]
+    else:
+        attributes[method] = None
+    context_class = type("IncompatibleQuoteContext", (), attributes)
+    sdk = SimpleNamespace(OpenQuoteContext=context_class, RET_OK=0)
+    monkeypatch.setattr(opend_probe_worker.importlib, "import_module", lambda _name: sdk)
+
+    result = opend_probe_worker.collect_environment("127.0.0.1", 11111)
+
+    assert result["sdk"]["imported"] is True
+    assert result["sdk"]["quote_api_available"] is False
+    assert result["sdk"]["available"] is False
+    assert result["sdk"]["status"] == "missing_quote_api"
+    assert result["opend"]["status"] == "not_attempted"
+    assert not instantiated
+
+
+@pytest.mark.parametrize("progress_status", ["sdk_import_pending", "handshake_pending", "ready"])
+def test_failed_opend_worker_preserves_reachability_without_claiming_success(progress_status):
+    def staged_worker(args, **_kwargs):
+        if args[3] == "--sdk-package":
+            return _completed_stage(args, {"sdk_package": _installed_package()})
+        if args[3] == "--sdk-import":
+            return _completed_stage(args, {"sdk": _imported_sdk()})
+        progress = {
+            "opend": {
+                "available": progress_status == "ready",
+                "reachable": True,
+                "status": progress_status,
+                "detail": "TCP connection succeeded",
+            }
+        }
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout=f"SDK log\n{json.dumps(progress)}\nworker exited\n",
+            stderr="private worker exception details",
+        )
+
+    result = probe_environment("127.0.0.1", 11111, runner=staged_worker)
+
+    assert result["sdk"] == {
+        **_imported_sdk(),
+        "installed": True,
+        "package_status": "installed",
+        "package_version": "10.10.7008",
+    }
+    assert result["opend"]["reachable"] is True
+    assert result["opend"]["available"] is False
+    assert result["opend"]["status"] == "worker_failed"
+    assert "private worker exception" not in json.dumps(result)

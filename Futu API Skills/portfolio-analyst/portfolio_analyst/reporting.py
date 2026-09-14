@@ -130,8 +130,11 @@ class PortfolioReport:
                 f"- Top 1: {data['concentration']['top_1']}",
                 f"- Top 3: {data['concentration']['top_3']}",
                 f"- Top 5: {data['concentration']['top_5']}",
-                f"- HHI: {data['concentration']['hhi']}",
-                f"- Effective positions: {data['concentration']['effective_positions']}",
+                f"- HHI (NAV weights): {data['concentration']['hhi']}",
+                f"- Holdings HHI: {data['concentration'].get('holdings_hhi', 'N/A (legacy report)')}",
+                f"- Effective positions ({'holdings weights' if data['schema_version'] == '1.1' else 'legacy NAV inverse-HHI'}): {data['concentration']['effective_positions']}",
+                "- Classification coverage and constraints: "
+                + md(json.dumps(data.get("classification_coverage", {}), sort_keys=True)),
                 "- Sector: "
                 + ", ".join(
                     f"{md(label)}: {weight}"
@@ -348,7 +351,7 @@ def build_portfolio_report(
         economic_positions, key=lambda position: (-abs(position.weight), position.identity)
     )
     payload = {
-        "schema_version": "1.0",
+        "schema_version": risk.schema_version,
         "portfolio_report_id": "",
         "as_of": snapshot.as_of,
         "source_snapshot_id": snapshot.snapshot_id,
@@ -390,5 +393,7 @@ def build_portfolio_report(
         "data_gaps": risk.data_quality_notes,
         "risk_report": risk.to_dict(),
     }
+    if risk.schema_version == "1.1":
+        payload["classification_coverage"] = risk.classification_coverage
     payload["portfolio_report_id"] = portfolio_report_identity(payload)
     return PortfolioReport(payload)

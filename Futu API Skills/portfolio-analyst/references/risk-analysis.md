@@ -17,7 +17,12 @@ ID timestamp at whole-second precision but reject a mismatch crossing a second b
 ## Metrics and bases
 
 Concentration uses nonnegative position weights divided by NAV; cash is excluded. Top 1, Top 3,
-and Top 5 are descending sums. HHI is `sum(weight ** 2)`, and effective positions is `1 / HHI`.
+and Top 5 are descending sums. Risk/portfolio report 1.1 retains NAV HHI as
+`sum(weight ** 2)`. Holdings-only HHI is `NAV_HHI / sum(weight) ** 2`, and effective positions
+is `sum(weight) ** 2 / NAV_HHI`. These two relative-holdings metrics exclude cash; an empty
+holdings population yields null. NAV, cash and individual/Top-N NAV weights are unchanged.
+Legacy report 1.0 retains its original `1 / NAV_HHI` effective-position definition and is labeled
+as legacy when rendered. New report versions cannot be downgraded by stripping fields.
 Before these metrics, holdings from different accounts are grouped by normalized
 `MARKET.SYMBOL`. The report, correlation matrix, clusters, and affected-position lists use that
 market-qualified identity. A bare ticker in two markets remains two economic positions. Duplicate
@@ -128,13 +133,25 @@ There are no personal-investment defaults. Optional thresholds come only from
 Values are Decimal NAV fractions in `(0, 1]`. The report says `NOT_CONFIGURED` when the file is
 absent and reports evidence without threshold-based claims. When configured, every check serializes
 the measured value, threshold, and breach boolean. Policy never checks the overlap-full theme view.
+Version 1.1 exposes `classification_coverage` independently for sector, region and theme_split:
+known/unknown NAV weights, largest-known lower bound, lower-plus-unknown upper bound, optional
+threshold, and status. UNKNOWN remains visible in exposure tables but is never a real sector,
+region or theme concentration candidate. Lower > threshold confirms BREACHED; upper <= threshold
+confirms WITHIN_LIMIT; an intervening threshold is UNKNOWN; an absent threshold is NOT_CONFIGURED.
+Configured classification checks retain measured=lower, threshold and status; breached is null
+for UNKNOWN, true for BREACHED, false for WITHIN_LIMIT. Never interpret null as a passed check.
+All-unknown classifications generate explicit UNRATED classification gaps with no simulation
+suggestion. A known category with unknown constraint status remains UNRATED. Complete known
+breaches remain HIGH even if other classification data is missing.
 Without a policy, every finding and overall risk are `UNRATED`; evidence is not silently converted
 to LOW/MEDIUM advice. Policy-backed findings are rated strictly from serialized thresholds and
 breach booleans, then sorted by severity, review priority, stable type, and identity.
 Position, sector, region, theme, P&L, role, and correlation candidates are generated independently
 before this single Top-3 sort; configuring a role cannot suppress a correlation or theme candidate.
-Every nonempty portfolio generates a region candidate: it is `UNRATED` without a region policy and
-`LOW`/`HIGH` from a configured non-breach/breach, with the evidence flag matching that provenance.
+Every nonempty portfolio generates a known-region candidate or an explicit region-classification
+gap. Known-region candidates are UNRATED without policy or when constraint status is UNKNOWN;
+WITHIN_LIMIT/BREACHED support LOW/HIGH. The evidence flag means a threshold was configured,
+not that missing classification is resolved.
 Runtime semantic validation rejects a breached policy candidate omitted in favor of a lower-ranked
 finding. When more than three breached dimensions exist, the same deterministic rank selects the
 three highest-priority candidates while every breach remains explicit in `policy_checks`.

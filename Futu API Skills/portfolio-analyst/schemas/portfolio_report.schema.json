@@ -2,31 +2,216 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://portfolio-analyst.local/schemas/portfolio_report.schema.json",
   "type": "object",
-  "maxProperties": 22,
+  "maxProperties": 23,
   "additionalProperties": false,
-  "required": ["schema_version", "portfolio_report_id", "as_of", "source_snapshot_id", "base_currency", "coverage", "data_quality_status", "data_quality_notes", "overall_risk", "policy_status", "policy_checks", "summary", "largest_risks", "concentration", "exposures", "correlation", "lifecycle", "performance", "options", "hypothetical_simulation_candidates", "data_gaps", "risk_report"],
+  "required": [
+    "schema_version",
+    "portfolio_report_id",
+    "as_of",
+    "source_snapshot_id",
+    "base_currency",
+    "coverage",
+    "data_quality_status",
+    "data_quality_notes",
+    "overall_risk",
+    "policy_status",
+    "policy_checks",
+    "summary",
+    "largest_risks",
+    "concentration",
+    "exposures",
+    "correlation",
+    "lifecycle",
+    "performance",
+    "options",
+    "hypothetical_simulation_candidates",
+    "data_gaps",
+    "risk_report"
+  ],
   "properties": {
-    "schema_version": {"const": "1.0"},
-    "portfolio_report_id": {"type": "string", "maxLength": 23, "pattern": "^pr-[0-9a-f]{20}$"},
-    "as_of": {"type": "string", "maxLength": 64, "format": "date-time"},
-    "source_snapshot_id": {"type": "string", "maxLength": 80, "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"},
-    "base_currency": {"type": "string", "maxLength": 3, "pattern": "^[A-Z]{3}$"},
-    "coverage": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/coverage"},
-    "data_quality_status": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/qualityStatus"},
-    "data_quality_notes": {"type": "array", "maxItems": 40000, "items": {"type": "string", "minLength": 1, "maxLength": 65536}},
-    "overall_risk": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/severity"},
-    "policy_status": {"enum": ["NOT_CONFIGURED", "CONFIGURED"]},
-    "policy_checks": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/policyChecks"},
-    "summary": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/summary"},
-    "largest_risks": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/finding"}},
-    "concentration": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration"},
-    "exposures": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/exposures"},
-    "correlation": {"$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/correlation"},
-    "lifecycle": {"oneOf": [{"type": "object", "maxProperties": 1, "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "UNAVAILABLE_UNTIL_PHASE_4"}}}, {"$ref": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json"}]},
-    "performance": {"type": "object", "maxProperties": 1, "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "NOT_INCLUDED_USE_PERFORMANCE_COMMAND"}}},
-    "options": {"$ref": "https://portfolio-analyst.local/schemas/option_risk.schema.json"},
-    "hypothetical_simulation_candidates": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 4096, "pattern": "^Hypothetical only:", "minLength": 20}},
-    "data_gaps": {"type": "array", "maxItems": 40000, "items": {"type": "string", "minLength": 1, "maxLength": 65536}},
-    "risk_report": {"$ref": "https://portfolio-analyst.local/schemas/risk_report.schema.json"}
-  }
+    "schema_version": {
+      "enum": [
+        "1.0",
+        "1.1"
+      ]
+    },
+    "portfolio_report_id": {
+      "type": "string",
+      "maxLength": 23,
+      "pattern": "^pr-[0-9a-f]{20}$"
+    },
+    "as_of": {
+      "type": "string",
+      "maxLength": 64,
+      "format": "date-time"
+    },
+    "source_snapshot_id": {
+      "type": "string",
+      "maxLength": 80,
+      "pattern": "^ps-[0-9]{8}T[0-9]{6}Z-(real|simulate)-[a-z]{3}-[0-9a-f]{16}$"
+    },
+    "base_currency": {
+      "type": "string",
+      "maxLength": 3,
+      "pattern": "^[A-Z]{3}$"
+    },
+    "coverage": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/coverage"
+    },
+    "data_quality_status": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/qualityStatus"
+    },
+    "data_quality_notes": {
+      "type": "array",
+      "maxItems": 40000,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      }
+    },
+    "overall_risk": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/severity"
+    },
+    "policy_status": {
+      "enum": [
+        "NOT_CONFIGURED",
+        "CONFIGURED"
+      ]
+    },
+    "policy_checks": {},
+    "summary": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/summary"
+    },
+    "largest_risks": {},
+    "concentration": {},
+    "exposures": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/exposures"
+    },
+    "correlation": {
+      "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/correlation"
+    },
+    "lifecycle": {
+      "oneOf": [
+        {
+          "type": "object",
+          "maxProperties": 1,
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "UNAVAILABLE_UNTIL_PHASE_4"
+            }
+          }
+        },
+        {
+          "$ref": "https://portfolio-analyst.local/schemas/position_lifecycle.schema.json"
+        }
+      ]
+    },
+    "performance": {
+      "type": "object",
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "const": "NOT_INCLUDED_USE_PERFORMANCE_COMMAND"
+        }
+      }
+    },
+    "options": {
+      "$ref": "https://portfolio-analyst.local/schemas/option_risk.schema.json"
+    },
+    "hypothetical_simulation_candidates": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "maxLength": 4096,
+        "pattern": "^Hypothetical only:",
+        "minLength": 20
+      }
+    },
+    "data_gaps": {
+      "type": "array",
+      "maxItems": 40000,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      }
+    },
+    "risk_report": {
+      "$ref": "https://portfolio-analyst.local/schemas/risk_report.schema.json"
+    },
+    "classification_coverage": {}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "concentration": {
+            "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration"
+          },
+          "policy_checks": {
+            "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/policyChecks"
+          },
+          "largest_risks": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/finding"
+            }
+          },
+          "classification_coverage": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "concentration": {
+            "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/concentration11"
+          },
+          "policy_checks": {
+            "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/policyChecks11"
+          },
+          "largest_risks": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/finding11"
+            }
+          },
+          "classification_coverage": {
+            "$ref": "https://portfolio-analyst.local/schemas/report_defs.schema.json#/$defs/classificationCoverage"
+          }
+        },
+        "required": [
+          "classification_coverage"
+        ]
+      }
+    }
+  ]
 }

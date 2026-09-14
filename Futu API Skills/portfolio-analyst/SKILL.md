@@ -3,7 +3,7 @@ name: portfolio-analyst
 description: Review and diagnose the user's current USD US-stock account holdings from one fresh read-only Futu snapshot, with complete holdings coverage and selective evidence-backed research.
 allowed-tools: Bash Read WebSearch WebFetch web.run web_search
 metadata:
-  version: 0.7.0
+  version: 0.7.1
 ---
 
 # Portfolio Analyst
