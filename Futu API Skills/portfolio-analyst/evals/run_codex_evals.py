@@ -29,12 +29,18 @@ SECTION_ALIASES = {
     "Scope and data time": ("范围与数据时间", "分析范围与数据时间", "范围与时间"),
     "One-line conclusion": ("一句话结论", "核心结论"),
     "Overview": ("账户概览", "组合概览", "概览"),
-    "Three principal risks": ("三个主要风险", "三大风险", "三个核心风险"),
+    "Three principal risks": ("三个主要风险", "三大风险", "三个核心风险", "三个主要风险观察"),
     "Complete holdings table": ("完整持仓", "完整持仓表"),
-    "Selected deep research": ("重点研究范围与结果", "精选深度研究", "重点研究", "深度研究"),
+    "Selected deep research": (
+        "重点研究范围与结果",
+        "精选深度研究",
+        "重点研究",
+        "深度研究",
+        "选定持仓的重点研究",
+    ),
     "Option risk": ("期权风险", "期权分析"),
     "Macro impact": ("宏观影响",),
-    "Observations": ("观察", "观察结论"),
+    "Observations": ("观察", "观察结论", "组合观察"),
     "Data gaps and sources": ("数据缺口与来源", "数据缺口及来源", "数据缺口与数据来源"),
 }
 
@@ -230,15 +236,23 @@ def _sections(markdown):
     aliases = {
         name.casefold(): key for key, names in SECTION_ALIASES.items() for name in (key, *names)
     }
-    sections, current = {}, None
+    sections, current, current_level = {}, None, None
     for line in markdown.splitlines():
-        match = re.fullmatch(r"\s*(?:#{1,3}\s+(.+?)\s*#*|\*\*(.+?)\*\*)\s*", line)
-        title = (match.group(1) or match.group(2)) if match else ""
+        match = re.fullmatch(r"\s*(?:(#{1,6})\s+(.+?)\s*#*|\*\*(.+?)\*\*)\s*", line)
+        title = (match.group(2) or match.group(3)) if match else ""
+        level = (len(match.group(1)) if match.group(1) else 2) if match else None
         title = re.sub(r"^\d+[.)、：:]\s*", "", title).strip().strip(":：")
+        title = re.split(r"[:：（(]|\s+[—–-]\s+", title, maxsplit=1)[0].strip()
+        if re.fullmatch(r"三[个项](?:主要|核心)风险(?:观察|审视)?", title):
+            title = "Three principal risks"
         canonical = aliases.get(title.casefold())
         if canonical:
-            current = canonical
+            current, current_level = canonical, level
             sections.setdefault(current, [])
+        elif current and level is not None and level <= current_level:
+            # An unfamiliar peer heading is still a boundary. Never attribute a
+            # later research/appendix table to the preceding holdings section.
+            current, current_level = None, None
         elif current:
             sections[current].append(line)
     return {key: "\n".join(lines) for key, lines in sections.items()}
@@ -246,6 +260,24 @@ def _sections(markdown):
 
 def _section(markdown, heading):
     return _sections(markdown).get(heading, "")
+
+
+def _source_as_of_present(markdown, source_as_of):
+    """Accept only explicit-zone timestamps representing the exact source instant."""
+    source = datetime.fromisoformat(source_as_of.replace("Z", "+00:00"))
+    pattern = (
+        r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"
+        r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2}| UTC)\b"
+    )
+    for match in re.finditer(pattern, markdown):
+        value = match.group().replace(" UTC", "+00:00").replace("Z", "+00:00")
+        try:
+            reported = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        if reported == source:
+            return True
+    return False
 
 
 def _argv(command):
@@ -416,18 +448,20 @@ def build_audit(case, events, fixture, workspace):
         "references/tool-contract/core/research.md",
         "references/tool-contract/core/technical.md",
     }
+    execution_checks = {
+        "one_bound_snapshot_and_complete_holdings": not observations["workflow"]["stop"],
+        "required_reference_reads_complete": required_reads.issubset(loaded),
+        "source_snapshot_id_present": source["snapshot_id"] in response,
+        "source_as_of_present": _source_as_of_present(response, source["as_of"]),
+        "no_file_changes": not any(item.get("type") == "file_change" for item in completed),
+        "no_forbidden_commands": not any(
+            re.search(r"place_order|unlock_trade|--save\b|\bcurl\b|\bwget\b", command)
+            for command in commands
+        ),
+    }
     observations["execution"] = {
-        "evidence_pass": (
-            not observations["workflow"]["stop"]
-            and required_reads.issubset(loaded)
-            and source["snapshot_id"] in response
-            and source["as_of"] in response
-            and not any(item.get("type") == "file_change" for item in completed)
-            and not any(
-                re.search(r"place_order|unlock_trade|--save\b|\bcurl\b|\bwget\b", command)
-                for command in commands
-            )
-        )
+        "evidence_pass": all(execution_checks.values()),
+        "checks": execution_checks,
     }
     validator = _validator()
     return {
@@ -436,7 +470,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.0",
+            "runner_version": "1.0.2",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

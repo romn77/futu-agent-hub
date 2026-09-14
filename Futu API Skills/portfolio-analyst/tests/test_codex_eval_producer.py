@@ -125,7 +125,7 @@ def test_existing_output_directory_is_never_overwritten(tmp_path):
 
 
 @pytest.mark.parametrize("duplicate_holding", [False, True])
-@pytest.mark.parametrize("localized", [False, True])
+@pytest.mark.parametrize("localized", [False, True, "natural"])
 def test_complete_host_trace_is_required_in_addition_to_markdown_assertions(
     tmp_path, duplicate_holding, localized
 ):
@@ -166,6 +166,11 @@ def test_complete_host_trace_is_required_in_addition_to_markdown_assertions(
                 response = response.replace(
                     "## " + heading + "\n", "**" + producer.SECTION_ALIASES[heading][0] + "**\n"
                 )
+        if localized == "natural":
+            response = response.replace("**三个主要风险**", "**三个主要风险观察**")
+            response = response.replace("**重点研究范围与结果**", "**选定持仓的重点研究**")
+            response = response.replace("**观察**", "**组合观察**")
+            response = response.replace(fixture["snapshot"]["as_of"], "2026-09-02 14:00 UTC")
         events = []
         for index, path in enumerate(
             [workspace / "SKILL.md", *(workspace / "references").rglob("*.md")]
@@ -271,3 +276,82 @@ def test_chinese_option_status_and_gaps_are_independently_observed(tmp_path):
     options = audit["trace"]["observations"]["options"]
     assert options["reported_tool_status"] == "COMPLETE"
     assert options["capability_gaps"] == ["multiplier", "underlying", "moneyness"]
+
+
+@pytest.mark.parametrize(
+    "title,canonical",
+    [
+        ("三个主要风险观察", "Three principal risks"),
+        ("选定持仓的重点研究", "Selected deep research"),
+        ("组合观察", "Observations"),
+    ],
+)
+def test_equivalent_chinese_report_headings_have_the_same_section(title, canonical):
+    producer = _producer()
+    assert producer._section(f"**{title}**\n独立观察", canonical) == "独立观察"
+
+
+@pytest.mark.parametrize("heading", ["## 未识别的新章节", "**未识别的新章节**"])
+def test_unknown_peer_heading_ends_the_holdings_table_scope(heading):
+    producer = _producer()
+    text = (
+        "## Complete holdings table\n| US.AAPL | 5% | fixture |\n\n"
+        + heading
+        + "\n| US.MSFT | research | fixture |"
+    )
+    section = producer._section(text, "Complete holdings table")
+    assert "US.AAPL" in section
+    assert "US.MSFT" not in section
+
+
+def test_research_subheadings_remain_inside_research_section():
+    producer = _producer()
+    text = "## Selected deep research\n### US.AAPL\nUnavailable\n### US.MSFT\nUnavailable\n## Appendix\nUS.NOTHELD"
+    section = producer._section(text, "Selected deep research")
+    assert "### US.AAPL" in section and "### US.MSFT" in section
+    assert "NOTHELD" not in section
+
+
+@pytest.mark.parametrize(
+    "reported,expected",
+    [
+        ("2026-09-02T14:00:00Z", True),
+        ("2026-09-02 14:00 UTC", True),
+        ("2026-09-02 22:00:00+08:00", True),
+        ("2026-09-02 14:00:00+08:00", False),
+        ("2026-09-02 14:01 UTC", False),
+        ("2026-09-02 14:00", False),
+        ("2026-09-02 14:00:01 UTC", False),
+        ("2026-09-02", False),
+    ],
+)
+def test_snapshot_time_requires_the_same_explicit_timezone_instant(reported, expected):
+    producer = _producer()
+    assert producer._source_as_of_present(reported, "2026-09-02T14:00:00Z") is expected
+
+
+def test_snapshot_time_does_not_discard_nonzero_source_precision():
+    producer = _producer()
+    assert not producer._source_as_of_present("2026-09-02 14:00 UTC", "2026-09-02T14:00:00.100000Z")
+
+
+@pytest.mark.parametrize(
+    "title,canonical",
+    [
+        ("三项主要风险审视", "Three principal risks"),
+        ("三项核心风险观察", "Three principal risks"),
+        ("重点研究：八个入选持仓", "Selected deep research"),
+        ("Selected deep research: eight selected holdings", "Selected deep research"),
+        ("观察（证据不足）", "Observations"),
+    ],
+)
+def test_section_titles_allow_bounded_descriptive_suffixes(title, canonical):
+    producer = _producer()
+    assert producer._section(f"**{title}**\nactual evidence", canonical) == "actual evidence"
+
+
+@pytest.mark.parametrize(
+    "title", ["不是重点研究：其他内容", "三项主要风险之外的附录", "Selected deep researching"]
+)
+def test_section_normalization_does_not_guess_unrelated_titles(title):
+    assert _producer()._sections(f"**{title}**\nNot a required section") == {}

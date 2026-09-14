@@ -99,11 +99,11 @@ snapshot counts only after the actual fixture helper command returns the exact f
 Reference loads require the full source text in a successful command's observed output. Holdings
 are counted from symbol cells in the holdings table; selected research names from level-three
 subheadings or research-table symbol cells; omission disclosure from the gaps section. English and
-Chinese heading aliases are recognized as Markdown headings or standalone bold titles. Simulation results must pass semantic and
+Chinese heading aliases are recognized as Markdown headings or standalone bold titles. Unknown peer or higher-level headings terminate the preceding section; research/appendix tables never count as holdings merely because a heading was unrecognized. Simulation results must pass semantic and
 snapshot-binding validation. These conservative parsers may reject alternate layouts: inspect the
 retained trace/report, do not manufacture missing observations or edit evidence into a PASS.
 The execution gate also requires full default-reference reads, a single bound helper receipt,
-the source ID/time in the response, and complete unique holdings coverage. Duplicate rows cannot
+the source ID/time in the response, and complete unique holdings coverage. Time matching requires the exact snapshot instant in an explicit-zone ISO timestamp or an equivalent `YYYY-MM-DD HH:MM[:SS] UTC` representation; dates alone, absent zones and lost nonzero precision do not match. Execution gates are serialized individually under `execution.checks`. Duplicate rows cannot
 substitute for missing holdings. Changed fixture files or reported file-change events fail the run.
 
 `ASSERTIONS_PASSED` concerns only this synthetic routing/report boundary. Human review is still
@@ -157,3 +157,11 @@ Output is one JSON result labeled `validator_scope: EXTERNAL_AUDIT_ENVELOPE_ONLY
 `audit_validation_succeeded`, per-case assertion evidence, and satisfied/unsatisfied summary counts.
 It also states that the validator itself did not execute the Skill. Audit case IDs must be unique and
 match `evals.json`; `--require-all` additionally rejects missing cases.
+
+## Producer 1.0.2 parsing corrections
+
+Version 1.0.2 separates unknown peer sections, supports additional semantically equivalent Chinese
+section titles (including bounded colon/parenthetical descriptions), and compares explicit-zone timestamps by exact instant. These changes address
+observed false negatives without weakening snapshot receipts, reference-read evidence, unique
+holdings coverage, mutation rejection, or assertion requirements. Original execution artifacts
+remain immutable; a new run uses a new directory. Never rewrite an earlier failed audit into a PASS.
