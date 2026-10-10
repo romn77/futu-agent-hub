@@ -1,7 +1,9 @@
 # Comprehensive current-holdings workflow
 
 This is the default orchestration for a new comprehensive analysis. Its unit of evidence is one
-fresh portfolio snapshot, not a mixture of saved history and live reads.
+fresh portfolio snapshot, not a mixture of saved history and live reads. Reuse fully loaded current
+instructions rather than rereading them for proof of use; partial or truncated content may be read
+only to obtain the missing relevant portion.
 
 ## 1. Confirm scope without needless questions
 
@@ -34,6 +36,11 @@ replacing `ACCOUNT_ID` with the chosen private ID. Repeat `--acc-id` only when t
 aggregation. The helper forwards the selection to its single snapshot acquisition; it does not
 create a saved account preference. An unspecified account remains valid only with one candidate.
 
+Invoke the one-shot helper once for this comprehensive report. Plan adequate initial stdout capture
+and retain its returned result in host session memory for later extraction and formatting. Never
+rerun it to redisplay, filter, or inspect that result: another invocation acquires another snapshot.
+If the original output cannot be retained or recovered within the host session, disclose the
+limitation instead of acquiring a second snapshot. This adds no account file or default persistence.
 Capture its stdout as internal evidence for report composition; never paste the raw JSON into chat or
 send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`,
 `technical`, and `options` only when an option position is present. Technical runs after risk with
@@ -94,19 +101,48 @@ technical/option calculations; missing cash or required price prevents rebalance
 
 ## 4. Select and gather deep evidence
 
-Apply the deterministic selection in `research-policy.md`, capped at eight. Gather company,
-valuation, news/event, industry/macro sensitivity, and technical evidence only for those names.
+Apply the deterministic selection and budget in `research-policy.md`, normally capped at eight.
+For each selected name follow this sequence:
+
+1. Determine the research question and relevant period from portfolio evidence and user intent.
+2. Choose one main method from the host-provided skill catalog or a user-specified location. Honor
+   specified sources and exclusions; distinguish duplicate names by source/package and actual
+   path/resource. Do not scan user directories, marketplaces, or every candidate.
+3. Reuse already-injected or already-loaded instructions; read only missing relevant content.
+   Actually apply the chosen method's applicable steps; mentioning its name is not method use.
+4. Before each query, identify the concrete unanswered metric and period. Skip the request when an
+   existing qualified same-basis result answers it; do not loop through all exposed dataset kinds
+   merely because they are available. For remaining gaps, prefer applicable authorized Futu public
+   steps; another existing authorized source may fill a concrete gap. A method-only skill can
+   analyze existing evidence without new data requests.
+5. Check actual outputs, periods, units, freshness, missingness, source restrictions, and any
+   calculation against the evidence/research policies. Correct ordinary parameter/date/format
+   errors and make bounded retries within budget; stop a genuinely denied permission path.
+6. Synthesize question, evidence, interpretation, portfolio impact, and counterevidence/gaps into
+   the same report. Public quotes never rewrite the account snapshot.
+
+Use existing tools and instructions on this host, not a new scheduler, provider registry, unified
+research API, or research CLI. Account reads remain on the bundled audited path; public research
+does not expand its command manifest or helper cleanup scope. Missing additional skills does not
+stop original analysis or itself imply an evidence gap. Missing page-reading access does not disable
+other authorized SDK/MCP public data steps; limit only conclusions requiring unread source text.
 Research failure for one name does not erase its baseline holding row.
 
 ## 5. Add conditional layers
 
-Use the helper's `options` result only when option positions exist. Load recommendation/simulation,
-trades, performance, lifecycle, candidates, pending orders, or persistence only upon their explicit
-triggers in `intent-routing.md`.
+Use the helper's `options` result only when option positions exist. Load recommendation policy for
+explicitly requested advice, without demanding numerical targets
+unless a requested simulation requires them. Load simulation only with sufficient targets and
+required account fields. Trades, performance, lifecycle, candidates, pending orders, or persistence
+remain subject to their explicit triggers in `intent-routing.md`.
 
 ## 6. Compose
 
 Return the output-contract sections as Markdown in chat. Cite all account facts with the same
-`snapshot_id` and `as_of`; cite changing external facts with traceable links and timestamps. Show
+`snapshot_id` and `as_of`. Apply the proportionate evidence policy to external facts: identify
+actual sources and applicable dates/periods, link supporting disclosures where available, and use
+actual tool-result interface/object/period/field traceability for API numbers without data pages.
+Share query times across a batch; add timestamps/timezones for time-sensitive conclusions. Missing
+noncritical metadata does not invalidate otherwise adequate evidence. Show
 local gaps next to impacted conclusions and summarize them in the final gaps section. Before a
 successful envelope returns, the helper has completed guarded cleanup under the threat model above.

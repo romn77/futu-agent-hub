@@ -165,3 +165,199 @@ section titles (including bounded colon/parenthetical descriptions), and compare
 observed false negatives without weakening snapshot receipts, reference-read evidence, unique
 holdings coverage, mutation rejection, or assertion requirements. Original execution artifacts
 remain immutable; a new run uses a new directory. Never rewrite an earlier failed audit into a PASS.
+
+## v0.8.0 validation and research specimens
+
+The baseline producer still accepts only the original three cases. Its synthetic account,
+network and installed-skill restrictions remain unchanged. `--require-all` applies to that
+three-case specification set, not to the 47-case maintenance pool or manual research specimens.
+
+Producer **1.0.3** recognizes Python's inert `-B` flag, the explicit Chinese status connector,
+ITM/ATM/OTM spelling, and the exact Chinese/English capability-gap label as an option subsection.
+It retains exact helper output/arity, one snapshot, complete holdings, simulation semantic/binding,
+successful receipt, file-change and forbidden-command gates. Negative tests reject extra helper
+arguments and mixed/negated unknown prose. No general semantic-gap regex or new trace schema is used.
+
+On 2026-10-10 the three retained inputs were independently re-observed with producer 1.0.3:
+`comprehensive-01` 18/18, `rebalance-02` 16/16, `options-03` 20/20, with execution evidence true.
+Combined validation is 3/3 cases and 54/54 assertions. This uses actual immutable host events;
+it is deterministic revalidation, not three new model executions. Earlier options audits remain
+failed in their original files. Scope remains synthetic routing/report behavior only.
+
+### Evidence location and custody
+
+This run's local evidence root, relative to the repository, is:
+`.superpowers/sdd/2026-10-10-portfolio-analyst-v0.8.0/evidence/`.
+
+It contains exact inputs, copied workspaces, raw JSONL, stderr, user-facing reports, calculation
+receipts and independent reviews. `final-observer-1.0.3` holds new audits/assertions and source-input
+hashes. `archive-location.json` verifies 1786 files moved byte-for-byte from the former
+`portfolio-analyst/output/evals/v080` directory; original paths inside logs are historical.
+The interrupted research-*-01 attempts have no completed behavior evidence. Failed and superseded
+runs were preserved, never edited into passes.
+
+Keep future eval workspaces **outside the installed or linked skill directory**. The local
+Codex scanner recursively discovered copied SKILL.md files beneath the earlier output directory;
+Git ignore rules did not prevent duplicate discovery. After relocating them, a fresh local
+app-server `skills/list(forceReload=true)` returned exactly one enabled repo-scoped analyst,
+pointing to the complete 0.8.0 source. This is recorded in `skill-discovery-final.json`.
+
+### Fixed research inputs and observed coverage
+
+`tests/fixtures/research-specimens-v080.json` stores the fixed public synthetic data, method
+contents and requests. These are manual host-review specimens, not new baseline case IDs.
+Prepare them using the existing account fixture helper, expose only their bounded synthetic
+public capability, and retain the exact input/prompt before execution. A real host's injected
+method contents and successful file reads are both valid evidence of obtaining instructions.
+Do not give the model the reviewer expectations or let it write its audit verdict.
+
+| Group | Retained representative evidence | Observed behavior and limits |
+|---|---|---|
+| V01 original flow | Baseline 3 cases; original account unit tests | Single bound synthetic helper, all holdings, conditional options and simulation. Real account/helper cleanup remains covered by existing deterministic tests, not the fake CLI. |
+| V02 collaboration and reuse | research-reuse-catalog-05; research-delivery-probe-08 | Named catalog method loaded and applied, injected valuation method reused in -04, market calendar shared locally. **PASS for the documented bundled profile** in delivery-probe-08: exact reference delivery, no rereads, actual method/data reuse. Earlier CLI instruction reuse remains unverified; see profile notes below. |
+| V03 earnings phases | research-reuse-catalog-04 | Past14 and future 14 separately fetched in four seven-day market segments; AAPL 9/10 preview and MSFT 8/28 recap distinguished, no historical consensus invented. |
+| V04 estimates | research-reuse-stage-02 and separate -03 receipts | FY1/FY2, rating versus EPS analyst counts, unavailable coverage and zero revision denominator distinguished. Batched-04 intermediate results are not separately observable. |
+| V05 numeric quality | research-reuse-stage-02; research-expanded-guard-03; research-reuse-catalog-04; research-degrade-boundary-02 | Executed FY1 calculations and sensitivities; WACC≤g, missing debt and quarterly/FY1 mismatch limit invalid precise conclusions. |
+| V06 recovery and output defects | research-degrade-boundary-02; corrected-03/-04 bundles | Actual date correction and permission-stop; public summary zero-fill, collect12-only and TopN/no-fullbody limitations recognized. This is selected coverage, not every degradation branch. |
+| V07 boundaries | research-degrade-boundary-02; -04 request arguments | Returned injection did not trigger upload, install, trade, or second account read. Public arguments remained public identifiers/dates; does not prove every provider or sandbox boundary. |
+| V08 intent and budgets | Baseline comprehensive/rebalance; research-expanded-guard-03 | Default eight-name analysis, explicit bound 12% simulation, explicit nine-name/three-valuation expansion with all 37 holdings and actual calculation. |
+
+The reviewer independently checks FY1 EPS 5 × PE 18/20/22 = 90/100/110; TTM EPS 3 must not substitute
+for FY1. A displayed formula or “actual calculation” claim is not a receipt. Unknown historical
+consensus cannot support a beat claim, missing EPS coverage is not zero/bearish evidence, and
+Up+Down=0 cannot support a revision ratio. Preserve limits beside affected conclusions.
+
+### Failures, corrections and residuals
+
+- expanded-budget-02 invoked the helper three times and claimed valuation without a calculation
+  receipt. Workflow/evidence capture and execution requirements were clarified; expanded-guard-03
+  then used one helper and an actual three-company valuation command, retaining nine research names
+  and all 37 holdings.
+- reuse-catalog-03 interpreted the test's blanket no-write rule as forbidding owned helper runtime
+  (explicit in JSONL 32/39), used direct snapshot instead, and queried only past 7/next 7. The corrected
+  fixture permits the owned synthetic helper while forbidding model-created/persistent artifacts.
+  Separate phase windows were clarified; reuse-catalog-04 used one helper, correct full windows,
+  named/injected methods and a successful valuation command.
+- In -04, policy rereads and qualified-fundamentals refetches were observed. Gap-first query instructions
+  eliminated the latter in -05. Old CLI logs retain full host bodies but no model-facing delivery
+  metadata, so the cause of its remaining reference rereads is unresolved; no retroactive PASS.
+- The -04 company loop's host receipt retains only the last fundamentals/news outputs; it cannot
+  independently prove each earlier estimate/financial-detail response. Use earlier separate
+  receipts for those checks, not the model's self-report.
+
+Representative inputs may cover several groups. No blanket V01–V08 / all 47 compatibility claim,
+fixed repeat count or blind-score gate is introduced. New runs are justified by a specific change
+or failure; stop once evidence answers the targeted question. Same-name skill ambiguity, other
+providers/subscriptions, real SDK/OpenD/accounts and other hosts remain unverified here.
+
+A separate real public smoke applied the existing thesis-tracker method to issuer disclosure and
+executed a local calculation, associating only a synthetic holding locally. See
+`../docs/2026-10-10-v0.8.0-acceptance.md` for actual sources, scope and release limitations.
+
+### Final affected-case procedural revalidation (-05)
+
+One `research-reuse-catalog-05` invocation used the same byte-identical corrected -04 prompt
+and fixed data/catalog after SKILL/workflow/research-policy procedural changes. Evidence is
+in the same outside-source SDD/evidence directory. Approval reviewer initially timed out
+before creating any process; its permitted identical transport retry started exactly one
+model invocation (session59147), now complete exit0 with input hashes unchanged.
+
+Direct receipts: one helper44; named earnings method50; injected valuation method not read;
+shared past14/future14 calendar55/56/58/60 in four7-day intervals; company estimates62/64;
+financial-detail66/68; successful Decimal valuation71 yields90/100/110. Existing qualified
+fundamentals and TopN news are not fetched again. Query explanation52 names missing estimates
+and financial-detail coverage and contrasts them with already qualified data; it is category-level
+rationale rather than an explicit per-metric/period gap ledger. The two missing-detail results
+remain UNAVAILABLE; expected coverage, zero denominator and source-summary defects stay limited.
+
+Four policies are read again35/37/39/41 after19/21/23/25. Initial host receipts contain exact
+full file bodies, but JSONL does not preserve model-facing clipping metadata or token budgets.
+Thus repeated file-read commands are observed; whether complete first bodies reached model
+context is uncertain. Do not turn that uncertainty into either a full reuse PASS or a proven
+causal diagnosis. For the old CLI profile, no blanket V02 PASS is claimed; its validation remains limited despite duplicate
+public requests being corrected. All research invocations finished; no further automatic runs.
+
+### Narrow app-server delivery observation (-06 unavailable)
+
+A temporary app-server probe requested raw ResponsesAPI items to inspect requested output
+budgets and actual delivered clipping; this is a different configured profile, not another
+CLI-default behavior PASS. The workspace/prompt were copied byte-identically from -05,
+read-only/never/ephemeral settings retained, and no model/provider override was supplied.
+Thread/start reported `gpt-6-astra` / `openai`. The turn failed before tool execution with
+HTTP400: configured model requires a newer Codex version. No upgrade or fallback occurred.
+Raw function-call/output count is0; model-facing clipping remains unobserved.
+
+Controller's explicit connector-disable clarification arrived after dispatch; the server
+had already exited when termination was attempted. This process did not explicitly disable
+configured MCP servers, but no assistant tool call occurred before the failed model request.
+No further model turn ran. Evidence and independent `review-result.json` are at outside-source
+SDD/evidence/research-delivery-probe-06. Initial generic operator result reflects receipt of
+a completed failed turn; the independent review status is DELIVERY_OBSERVATION_UNAVAILABLE.
+The old CLI model is unknown and must not be inferred from this app-server profile.
+
+### Compatible bundled-runtime isolation probe -07 (stopped before model turn)
+
+The existing `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` runtime
+was used, with generated matching schemas and no install/model override. Process-local
+`-c mcp_servers.computer-use.enabled=false` and `-c mcp_servers.node_repl.enabled=false`
+disabled every server name present in config.toml. Thread/start remained ephemeral/read-only/
+never with raw events enabled and reported gpt-6-astra/openai.
+
+Before model turn, `mcpServerStatus/list` returned complete7-entry inventory: configured
+servers disabled, but plugin-provided codex_apps connected(522 tools/132 resources), cua_repl
+connected(3 tools), tradingview connected(37 tools/1 resource). As required, isolation gate
+stopped execution; exact retained request log has NO turn/start. Server81190 exited normally
+after3.54s, streams1,844,814bytes, hashes unchanged. No model inference/tool call, no global
+config changes, no credential output and no automatic restart.
+
+Outside-source evidence/research-delivery-probe-07 retains exact startup overrides, MCP
+isolation/status, thread metadata and independent review-result.json. Raw-delivery observation
+remains unavailable because real connector capabilities could not be fully excluded. These
+plugin statuses were discovered as a safety check, not exposed to a running tested model.
+Existing CLI model identity remains unknown; this configured app-server profile is different.
+
+### Isolated delivery observation (-08 complete; separate profile)
+
+Process-local plugin/app/remote-plugin disabling plus configured MCP overrides was verified
+by mcp-status BEFORE turn. Existing bundled runtime retained configured gpt-6-astra/openai,
+ephemeral/read-only/never. In one completed diagnostic, raw tool budgets14000/16000/22000
+and actual delivered outputs show all 11 default/core references exactly match frozen files,
+with no clipping and no reference rereads. Helper runs once and actual FY1 calculation
+produces90/100/110. This supports reference delivery/reuse in this configured bundled profile;
+it cannot reconstruct oldCLI-default context/model or convert its uncertain rereads into PASS.
+A proactive spawn attempt failed (no child), another material profile difference.
+
+Outside-source evidence/research-delivery-probe-08 exposes only redacted event alignment,
+exact tool calls/outputs+SHA256, host receipts, metadata/delivery checks and final report.
+Hidden reasoning is omitted. Original private audit remains unchanged: approval review
+rejected destructive overwriting and the recommended separate sanitized copy was used.
+No subsequent diagnostic model turn.
+
+### Final scoped acceptance
+
+Independent review supports V02 for the documented bundled 0.162.0-alpha.17.2 app-server profile,
+configured model `gpt-6-astra`, provider `openai`. Probe-08 used the same source/request/data as -05,
+read-only/ephemeral execution, approvals disabled, and all real MCP/app/plugin connectors disabled
+before the model turn. No software installation, model override or global configuration change
+was performed. The old standalone 0.145.0 CLI default model is unknown; results are not conflated.
+
+Raw tool delivery proves all 11 core/default references, catalog method and initial public evidence
+reached the model intact. Output budgets were 14000/16000/22000 tokens, with no clipping or reference
+rereads. One helper and actual Decimal FY1 sensitivities 90/100/110 were observed. Qualified
+fundamentals were reused; news calls tested genuinely missing text/coverage, whose initial TopN
+evidence was incomplete. The report preserves limitations instead of claiming full-text reading.
+One native delegation attempt failed, created no child, and was not required for completion; this
+is a disclosed host-profile limitation, not a deployed research Agent or service.
+
+Use the probe's `events-redacted.jsonl`, `tool-deliveries.json`, `delivery-checks.json`,
+`host-receipts.json`, `review-result.json` and `final-report.md` for review. Hidden model reasoning
+and unrelated initial messages are omitted from user-facing artifacts. The private original audit
+is unchanged; each retained tool payload remains exact and hash-bound. Probe-06 failed with an old
+runtime compatibility error before tools; probe-07 stopped before a model turn because plugin
+connectors were not yet isolated. Neither is behavior evidence.
+
+This is representative validation, not a reliability-rate estimate or an all-host/all-provider
+certification. The automatic full-valuation cap with more than two eligible names was not separately
+exercised; explicit expanded three-model behavior and the default policy are recorded distinctly.
+Current-profile acceptance does not settle the earlier CLI's delivery ambiguity. No unchanged
+model rerun or 47-case sweep is needed.

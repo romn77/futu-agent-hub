@@ -26,9 +26,11 @@ fundamentals, valuation, thesis, redundancy, cycle, macro sensitivity, and techn
 
 ## Three principal risks
 
-Select exactly three principal portfolio risks from supported evidence. Describe the measured value,
-affected holdings, why it matters to this portfolio, and any local data limitation. Risk selection
-must not cause any holding to disappear from the baseline table.
+Fill exactly three evidence/gap slots in the Three principal risks section. Use supported principal
+risks where available: describe measured values, affected holdings, portfolio meaning, and limitations.
+If a risk cannot be confirmed or a dimension cannot be assessed, use an explicit gap or lack of
+confirmable risk for that slot; never fabricate risks to reach three. Risk selection must not cause
+any holding to disappear from the baseline table.
 
 ## Transparent fallback thresholds
 
@@ -50,4 +52,7 @@ inverse evidence and must not be described as the same risk as positive co-movem
 Keep macro concise and portfolio-specific: Fed/rates/liquidity, S&P 500/Nasdaq trend and risk
 appetite, and relevant sector cycles. Discuss USD or oil only where a held position has a concrete
 exposure. Explain transmission to the actual holdings; do not write a standalone macro essay or
-offer broad market predictions.
+offer broad market predictions. Aggregate shared demand and industry/macro drivers across held
+names, explaining overlapping exposures. Same-direction bullish views are not diversification,
+and qualitative common drivers are not measured correlations. Public research prices remain
+separate, timestamped context and never revise snapshot NAV, weights, quantities, or costs.

@@ -9,7 +9,7 @@ JSON or claim that a report/snapshot was saved. Keep the overview compact and th
 2. **One-line conclusion** — the most decision-relevant portfolio-level finding and its limitation.
 3. **Overview** — NAV, cash/cash weight, filled holding count, concentration, current costs, market
    values, unrealized P&L and contribution where supported.
-4. **Three principal risks** — exactly three evidence items, each tied to affected positions and
+4. **Three principal risks** — exactly three evidence/gap slots, each tied to affected positions and
    evidence. Where a dimension cannot be assessed, explicitly show its data gap or lack of a
    confirmable risk; never invent a concentration conclusion to fill three slots.
 5. **Complete holdings table** — every nonzero current filled holding.
@@ -21,6 +21,36 @@ JSON or claim that a report/snapshot was saved. Keep the overview compact and th
 9. **Observations** — evidence-backed portfolio implications; recommendations only under the
    conditional recommendation policy.
 10. **Data gaps and sources** — local degradations, omitted deep-research names, and source links.
+
+Use these stable heading choices in the report's language, preserving the order above:
+
+| English | Chinese |
+|---|---|
+| Scope and data time | 范围与数据时间 |
+| One-line conclusion | 一句话结论 |
+| Overview | 组合概览 |
+| Three principal risks | 三个主要风险 |
+| Complete holdings table | 完整持仓表 |
+| Selected deep research | 重点研究 |
+| Option risk | 期权风险 |
+| Macro impact | 宏观影响 |
+| Observations | 观察 |
+| Data gaps and sources | 数据缺口与来源 |
+
+Within Selected deep research, organize each name as **Question — Evidence — Interpretation —
+Portfolio impact — Counterevidence/gaps** (or **问题 — 证据 — 解释 — 组合影响 — 反证/缺口**).
+State why it was selected and the thesis baseline's source. If no reliable historical rationale is
+available, label it “Current research hypothesis” / “本次研究假设”; never infer the original purchase
+reason or read lifecycle automatically. Ordinary deep research examines 2–3 relevant pillars and
+at least one material counterexample that could weaken the conclusion; explicitly say when
+counterevidence was not obtained.
+
+Synthesize shared demand, industry/macro variables, and overlapping exposures across names locally.
+Several bullish theses do not prove diversification; qualitative common drivers are not computed
+correlation coefficients. Keep research quotes separately timestamped from snapshot table facts.
+Return one portfolio report, not parallel standalone skill reports. Upstream target prices, long
+reports, Excel outputs, or save instructions do not enlarge the deliverable. Explicit advice loads
+recommendation policy; quantitative simulation requires sufficient goals and account fields.
 
 ## Baseline holding table
 

@@ -14,8 +14,10 @@
       "expected_behavior": [
         "Acquire one fresh REAL/USD snapshot and bind the whole report to its snapshot_id/as_of.",
         "List all 37 holdings and keep cash at portfolio level.",
-        "Deep-research no more than eight names and disclose eligible omissions.",
-        "Return Markdown in chat without option, recommendation, simulation, or persistence workflows."
+        "Deep-research no more than eight names by default and disclose eligible omissions; keep full holding coverage.",
+        "When no additional research skill is available, continue the original analysis without installing or treating skill absence itself as missing evidence.",
+        "Use at most two automatically selected full valuation models by default, and do not invent unavailable research facts.",
+        "Return one Markdown portfolio report in chat without option, recommendation, simulation, or persistence workflows."
       ],
       "assertions": [
         {"type": "contains", "target": "trace.observations.report.sections", "value": "Scope and data time"},
