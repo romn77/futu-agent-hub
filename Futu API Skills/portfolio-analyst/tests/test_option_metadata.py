@@ -175,8 +175,22 @@ class _Completed:
         self.returncode = returncode
 
 
-def test_parent_uses_isolated_python_canonical_input_and_controlled_environment():
+def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(monkeypatch):
     observed = {}
+    safe = {"HOME": "/safe/home", "USERPROFILE": "C:/safe/home", "SYSTEMROOT": "C:/Windows"}
+    forbidden = (
+        "FUTU_TRADE_PWD",
+        "FUTU_LOGIN_PWD",
+        "FUTU_ACC_ID",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    )
+    for key, value in safe.items():
+        monkeypatch.setenv(key, value)
+    for key in forbidden:
+        monkeypatch.setenv(key, "must-not-inherit")
 
     def runner(command, **kwargs):
         observed["command"] = command
@@ -207,7 +221,10 @@ def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(
     assert observed["input"] == (
         b'{"host":"10.0.0.8","identities":["US.AAPL260116C00150000"],"port":22222}'
     )
-    assert set(observed["env"]) == {"PATH", "PYTHONIOENCODING", "PYTHONNOUSERSITE"}
+    assert safe.items() <= observed["env"].items()
+    assert not set(forbidden) & observed["env"].keys()
+    assert observed["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert observed["env"]["PYTHONNOUSERSITE"] == "1"
     assert payload["data"][0]["lot_size"] == 100
 
 
