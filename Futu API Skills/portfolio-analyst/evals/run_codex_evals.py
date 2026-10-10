@@ -249,6 +249,12 @@ def _sections(markdown):
         if canonical:
             current, current_level = canonical, level
             sections.setdefault(current, [])
+        elif current == "Option risk" and title.casefold() in {
+            "分析能力缺口",
+            "analysis capability gaps",
+        }:
+            # The canonical gap label is part of the option report, not a peer appendix.
+            sections[current].append(line)
         elif current and level is not None and level <= current_level:
             # An unfamiliar peer heading is still a boundary. Never attribute a
             # later research/appendix table to the preceding holdings section.
@@ -328,6 +334,11 @@ def build_audit(case, events, fixture, workspace):
                 loaded.add(name)
         if len(args) < 2 or Path(args[0]).name not in {"python", "python3"}:
             continue
+        # -B only disables bytecode writes; it does not change the invoked script.
+        if args[1] == "-B":
+            args = [args[0], *args[2:]]
+        if len(args) < 2:
+            continue
         try:
             body = json.loads(output)
         except ValueError:
@@ -387,7 +398,7 @@ def build_audit(case, events, fixture, workspace):
     option_text = _section(response, "Option risk")
     option_report = fixture["options"]
     reported_status = re.search(
-        r"(?:tool status|工具状态|工具输出状态)[\s*`：:]+(COMPLETE|PARTIAL|UNAVAILABLE)\b",
+        r"(?:tool status|工具状态|工具输出状态)(?:为)?[\s*`：:]+(COMPLETE|PARTIAL|UNAVAILABLE)\b",
         option_text,
         re.I,
     )
@@ -406,7 +417,7 @@ def build_audit(case, events, fixture, workspace):
                 for field, pattern in (
                     ("multiplier", r"multiplier|合约乘数"),
                     ("underlying", r"underlying|标的"),
-                    ("moneyness", r"moneyness|ITM/OTM|价内|价外"),
+                    ("moneyness", r"moneyness|ITM/(?:ATM/)?OTM|价内|价外"),
                 )
                 if re.search(pattern, option_text, re.I)
             ],
@@ -470,7 +481,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.2",
+            "runner_version": "1.0.3",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

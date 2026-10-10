@@ -355,3 +355,151 @@ def test_section_titles_allow_bounded_descriptive_suffixes(title, canonical):
 )
 def test_section_normalization_does_not_guess_unrelated_titles(title):
     assert _producer()._sections(f"**{title}**\nNot a required section") == {}
+
+
+def test_python_no_bytecode_flag_preserves_bound_tool_receipts(tmp_path):
+    producer = _producer()
+    case = producer.load_cases()["explicit-rebalance-request"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    simulated = subprocess.run(
+        [
+            "python",
+            "scripts/portfolio.py",
+            "simulate",
+            "--snapshot",
+            ".fixture/snapshot.json",
+            "--request",
+            ".fixture/request.json",
+            "--json",
+            "--no-save",
+        ],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    events = []
+    for command, output in [
+        ("/bin/zsh -lc 'python -B scripts/current_analysis.py'", json.dumps(fixture)),
+        (
+            "python -B scripts/portfolio.py simulate --snapshot .fixture/snapshot.json --request .fixture/request.json --json --no-save",
+            simulated,
+        ),
+    ]:
+        events.append(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": command,
+                    "aggregated_output": output,
+                    "status": "completed",
+                    "exit_code": 0,
+                },
+            }
+        )
+    response = "## Complete holdings table\n" + "\n".join(
+        f"| US.{row['symbol']} | holding |" for row in fixture["snapshot"]["positions"]
+    )
+    events.append({"type": "item.completed", "item": {"type": "agent_message", "text": response}})
+    audit = producer.build_audit(case, events, fixture, workspace)
+    assert audit["trace"]["snapshot"]["snapshot_id"] == fixture["snapshot"]["snapshot_id"]
+    assert audit["trace"]["observations"]["simulation"]["target_weight"] == "0.12"
+
+
+def test_option_status_verb_and_explicit_unavailable_moneyness(tmp_path):
+    producer = _producer()
+    case = producer.load_cases()["conditional-options-degradation"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    response = "**期权风险**\n工具状态为 `COMPLETE`。所有腿的合约乘数、标的、ITM/ATM/OTM 均未知。"
+    audit = producer.build_audit(
+        case,
+        [{"type": "item.completed", "item": {"type": "agent_message", "text": response}}],
+        fixture,
+        workspace,
+    )
+    observed = audit["trace"]["observations"]["options"]
+    assert observed["reported_tool_status"] == "COMPLETE"
+    assert observed["capability_gaps"] == ["multiplier", "underlying", "moneyness"]
+    assert observed["analysis_gaps_disclosed"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python -c scripts/current_analysis.py", "python -B scripts/current_analysis.py --extra"],
+)
+def test_non_helper_python_invocations_cannot_supply_snapshot_receipts(tmp_path, command):
+    producer = _producer()
+    case = producer.load_cases()["explicit-rebalance-request"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": json.dumps(fixture),
+                "status": "completed",
+                "exit_code": 0,
+            },
+        },
+        {"type": "item.completed", "item": {"type": "agent_message", "text": "analysis"}},
+    ]
+    assert producer.build_audit(case, events, fixture, workspace)["trace"]["snapshot"] == {}
+
+
+def test_available_option_fields_are_not_gap_disclosure(tmp_path):
+    producer = _producer()
+    case = producer.load_cases()["conditional-options-degradation"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "**期权风险**\n工具状态为 COMPLETE。合约乘数、标的、ITM/ATM/OTM 均已知。",
+            },
+        }
+    ]
+    assert not producer.build_audit(case, events, fixture, workspace)["trace"]["observations"][
+        "options"
+    ]["analysis_gaps_disclosed"]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        "合约乘数已知，标的已知；ITM/ATM/OTM 均未知。",
+        "合约乘数、标的、ITM/ATM/OTM 并非均未知。",
+    ],
+)
+def test_mixed_or_negated_unknown_fields_do_not_manufacture_all_gap_disclosure(tmp_path, fields):
+    producer = _producer()
+    case = producer.load_cases()["conditional-options-degradation"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "**期权风险**\n工具状态为 COMPLETE。" + fields,
+            },
+        }
+    ]
+    assert not producer.build_audit(case, events, fixture, workspace)["trace"]["observations"][
+        "options"
+    ]["analysis_gaps_disclosed"]
+
+
+@pytest.mark.parametrize("label", ["分析能力缺口", "Analysis capability gaps"])
+def test_option_capability_gap_label_remains_inside_option_section(label):
+    producer = _producer()
+    markdown = f"## Option risk\nOption tool status: COMPLETE\n**{label}:**\nITM/ATM/OTM UNKNOWN\n## Appendix\nUnrelated"
+    section = producer._section(markdown, "Option risk")
+    assert label in section and "ITM/ATM/OTM UNKNOWN" in section
+    assert "Unrelated" not in section
