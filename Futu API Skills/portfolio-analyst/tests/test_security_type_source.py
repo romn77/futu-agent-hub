@@ -153,7 +153,7 @@ def test_metadata_worker_preserves_sdk_runtime_and_json_output(
         "    US = 'US'\n"
         "    HK = 'HK'\n"
         "class SecurityType:\n"
-        "    OPTION = 'OPTION'\n"
+        "    DRVT = 'DRVT'\n"
         "class Table:\n"
         "    def to_dict(self, orient):\n"
         "        return [{'code': 'US.AAPL', 'stock_type': 'STOCK', 'lot_size': 100,\n"
@@ -161,7 +161,9 @@ def test_metadata_worker_preserves_sdk_runtime_and_json_output(
         "                 'strike_time': '2026-01-16', 'strike_price': 150}]\n"
         "class OpenQuoteContext:\n"
         "    def __init__(self, **kwargs): pass\n"
-        "    def get_stock_basicinfo(self, *args, **kwargs): return 0, Table()\n"
+        "    def get_stock_basicinfo(self, *args, **kwargs):\n"
+        "        if len(args) == 3: assert args[1] == 'DRVT'\n"
+        "        return 0, Table()\n"
         "    def close(self): pass\n"
     )
     completed = []

@@ -24,6 +24,7 @@ from .option_quote import (
     OptionQuoteError,
     OptionQuoteProviderError,
     parse_option_quote_response,
+    option_quote_binding_identity,
 )
 from .option_metadata import (
     METADATA_TIMEOUT_SECONDS,
@@ -108,12 +109,19 @@ def _bounded_response_bytes(value: object) -> bytes:
 
 
 def _normalized_source_response(value: object) -> object:
-    if not isinstance(value, dict) or set(value) != {"data"}:
+    if not isinstance(value, dict) or set(value) not in ({"data"}, {"data", "request_binding"}):
         return {"contract_invalid": True}
+    binding = None
+    if "request_binding" in value:
+        try:
+            option_quote_binding_identity(value["request_binding"])
+        except OptionQuoteError:
+            return {"contract_invalid": True}
+        binding = dict(value["request_binding"])
     rows = value["data"]
     if not isinstance(rows, list):
         return {"data": None}
-    return {
+    result = {
         "data": [
             {key: item[key] for key in sorted(item) if key in _QUOTE_EVIDENCE_FIELDS}
             if isinstance(item, dict)
@@ -121,6 +129,9 @@ def _normalized_source_response(value: object) -> object:
             for item in rows
         ]
     }
+    if binding is not None:
+        result["request_binding"] = binding
+    return result
 
 
 def _bounded_provider_call(

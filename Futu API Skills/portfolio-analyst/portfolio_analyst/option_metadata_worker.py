@@ -92,9 +92,9 @@ def collect_option_metadata(
             return OpenQuoteContext(host=host, port=port)
 
         market_values = {"US": Market.US, "HK": Market.HK}
-        option_security_type = SecurityType.OPTION
+        option_security_type = SecurityType.DRVT
     if option_security_type is None:
-        option_security_type = "OPTION"
+        option_security_type = "DRVT"
     context = context_factory(host=host, port=port)
     result_rows: list[dict[str, object]] = []
     try:

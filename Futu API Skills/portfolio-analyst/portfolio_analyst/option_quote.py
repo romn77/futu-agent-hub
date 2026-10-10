@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Mapping
+import re
 import subprocess
 
 from .futu_adapter import FutuReadError, UnsafeFutuCommand
@@ -46,7 +47,7 @@ class FutuOptionQuoteProvider:
             separators=(",", ":"),
         )
         try:
-            return self.adapter.read_private_json(  # type: ignore[attr-defined]
+            payload = self.adapter.read_private_json(  # type: ignore[attr-defined]
                 "get_option_quote", (legs, "--json"), timeout=timeout
             )
         except subprocess.TimeoutExpired:
@@ -60,6 +61,41 @@ class FutuOptionQuoteProvider:
             raise OptionQuoteProviderError(reason) from None
         except (UnsafeFutuCommand, ValueError):
             raise OptionQuoteProviderError("QUOTE_CAPABILITY_UNAVAILABLE") from None
+
+        # SDK 10.10 returns a strategy quote without a code column. Our audited
+        # adapter permits exactly one BUY leg of quantity 1.0, so retain that
+        # request binding separately; never invent a vendor-echoed row.code.
+        if not isinstance(payload, dict) or set(payload) != {"data"}:
+            raise OptionQuoteError("unexpected option quote source envelope")
+        rows = payload["data"]
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+            raise OptionQuoteError("option quote source must contain one object")
+        if "code" not in rows[0]:
+            return {"data": rows, "request_binding": _single_contract_binding(identity)}
+        return payload
+
+
+def _single_contract_binding(identity: str) -> dict[str, str]:
+    return {
+        "command": "get_option_quote",
+        "code": identity,
+        "action": "BUY",
+        "quantity": "1.0",
+    }
+
+
+def option_quote_binding_identity(value: object) -> str:
+    """Validate explicit request evidence; it is not a vendor identity echo."""
+    if not isinstance(value, dict):
+        raise OptionQuoteError("option quote request binding must be an object")
+    identity = value.get("code")
+    if (
+        not isinstance(identity, str)
+        or re.fullmatch(r"(?:US|HK)\.[A-Z0-9][A-Z0-9.-]{0,63}", identity) is None
+        or value != _single_contract_binding(identity)
+    ):
+        raise OptionQuoteError("option quote request binding is not canonical")
+    return identity
 
 
 def _finite_decimal(value: object) -> Decimal | None:
@@ -112,13 +148,20 @@ class OptionQuote:
 
 
 def parse_option_quote_response(identity: str, payload: object) -> OptionQuote:
-    if not isinstance(payload, dict) or set(payload) != {"data"}:
-        raise OptionQuoteError("option quote response must contain only data")
+    if not isinstance(payload, dict) or set(payload) not in ({"data"}, {"data", "request_binding"}):
+        raise OptionQuoteError("option quote response envelope is invalid")
+    bound_identity = None
+    if "request_binding" in payload:
+        bound_identity = option_quote_binding_identity(payload["request_binding"])
+        if bound_identity != identity:
+            raise OptionQuoteError("option quote request binding identity does not match")
     rows = payload["data"]
     if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
         raise OptionQuoteError("option quote response must contain one object")
     row: dict[str, Any] = rows[0]
-    if row.get("code") != identity:
+    if ("code" in row and row["code"] != identity) or (
+        "code" not in row and bound_identity != identity
+    ):
         raise OptionQuoteError("option quote response identity does not match the request")
 
     option_type = row.get("option_type")
