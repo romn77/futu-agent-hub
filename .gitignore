@@ -46,6 +46,10 @@ Thumbs.db
 *.log
 logs/
 
+# Local agent task tracking and implementation plans
+/tasks/
+/docs/superpowers/plans/
+
 # Portfolio analyst private/local state (never commit real account data)
 Futu API Skills/portfolio-analyst/.env*
 Futu API Skills/portfolio-analyst/accounts/
