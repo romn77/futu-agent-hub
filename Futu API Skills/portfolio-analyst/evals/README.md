@@ -165,3 +165,111 @@ section titles (including bounded colon/parenthetical descriptions), and compare
 observed false negatives without weakening snapshot receipts, reference-read evidence, unique
 holdings coverage, mutation rejection, or assertion requirements. Original execution artifacts
 remain immutable; a new run uses a new directory. Never rewrite an earlier failed audit into a PASS.
+
+## v0.8.0 research collaboration acceptance
+
+The product now routes financials, estimate revisions, thesis, earnings preview/recap and valuation
+through suitable available skills in the same host. Qualified evidence is reused; Futu public data
+is preferred for remaining matching-basis gaps. Default coverage is eight deep-research names and
+two automatically selected full valuations, with explicit user scope expansion. The existing
+account, risk, technical and option authority remains separate from public research.
+
+The three `evals.json` cases remain the executable **offline account/report baseline**. They cannot
+prove public SDK access or optional research methods. Their network and installed-skill isolation
+is unchanged. [Research cases](research-cases.md) specify separate controlled host-log scenarios;
+do not add them to `evals.json` unless the producer actually implements their fixture contract.
+An unsupported case must fail instead of silently using another case. Research inputs, observed
+requests/results/calculations and final reports are required; a checklist or model claim is not a
+successful run. `--require-all` covers all cases in the selected specification, not arbitrary files.
+
+Producer 1.0.3 addresses an observed mismatch between permitted peer comparisons and the old
+candidate counter. Only an exact level-four `Peer comparisons` / `同行比较` block under a
+level-three held-symbol heading is excluded from selected-name/candidate observations, until the
+next heading of level four or higher. Unheld research headings and all Observations remain counted
+conservatively, including a peer subsequently proposed there. A declared comparison label is not
+semantic proof: independently inspect that it contains comparison evidence rather than advice.
+The output contract now requires a first `Symbol` column for research tables and supplies fixed
+Chinese/English section titles, rather than continuously expanding fuzzy aliases.
+
+### Account invariant regression map
+
+| Invariant | Existing verification |
+|---|---|
+| INV-01 account selection/scope | `test_account_scope_and_missing_values.py`, `test_snapshot_service_cli.py` |
+| INV-02 one bound snapshot | `test_current_analysis_helper.py`, `test_helper_output_authority.py`, `test_codex_eval_producer.py` |
+| INV-03 OpenD NAV | `test_opend_nav.py`, `test_nav_basis_compatibility.py` |
+| INV-04 full holdings | snapshot and producer tests, `comprehensive-many-holdings` |
+| INV-05 unknown source facts | `test_source_field_fidelity.py`, account-scope tests |
+| INV-06 fatal/degradation/cleanup | helper/output-authority tests, `test_safety.py` |
+| INV-07 explicit optional workflows | prompt architecture and CLI mutation-gate tests |
+| INV-08 read-only account boundary | `test_adapter.py`, `test_skill_trust.py`, `test_manifest_integrity.py` |
+| INV-09 no default persistence | current helper, safety and CLI mutation-gate tests |
+| INV-10 no automatic trade action | prompt tests and `explicit-rebalance-request`; semantic report review |
+
+### Execution record, 2026-10-14
+
+Development branch `codex/portfolio-v080-research`, base `a50e3e1`. This record distinguishes
+implementation, local tests and actual external execution; product version 0.8.0 is not a claim
+that every source or host has been certified.
+
+- Same-session pre-change baseline: 1227 tests passed in the filesystem sandbox; the one
+  loopback-listener test passed separately with socket permission. Existing cached Ruff 0.15.12
+  checked and formatted the component successfully without installing anything.
+- Shared-workspace integration initially returned 70 failures / 1160 passes while another
+  concurrent change modified the audited `futuapi/scripts/common.py` and account code. Preserve
+  those changes; this run is not attributed to research collaboration. Verify this change against
+  its fixed audited base in `/private/tmp/portfolio-v080-validation-01` and record that scope.
+- New collaboration and stable-heading tests were observed failing before their corresponding
+  changes. The peer-scope regression cases likewise failed before the parser correction.
+- Automatic approval initially rejected sending analyst code and synthetic inputs to Codex. The
+  user then explicitly approved that destination/payload and necessary failure-fix reruns; the
+  actual evaluations below were run after approval, without bypassing the initial rejection.
+- Public Futu smoke: `get_financials_statements.py US.AAPL --statement-type 1 --financial-type 9
+  --num 4 --json` returned `Network interruption.` on the initial attempt and one spaced retry.
+  Receipts remain in `/private/tmp/portfolio-v080-public-smoke-01` and `-02`. Doctor connectivity
+  does not imply successful Futu financials access.
+- Follow-up read-only diagnosis found matching SDK/OpenD 10.10.7008 and a successful local
+  handshake, but `qot_logined=false` / `trd_logined=false`; ordinary public quotes also returned
+  Network interruption. Upstream login/connectivity remains unresolved and is separate from the
+  code acceptance. The user chose to handle it later and authorized local commits.
+- The existing authorized web path read an Apple issuer release and its SEC exhibit, applied the
+  suitable futuapi earnings-review method, executed growth/margin calculations, and associated
+  findings locally with a synthetic 40% AAPL holding. Inputs, calculations and a focused note are
+  in `/private/tmp/portfolio-v080-public-smoke-web-01`. This is a developer-operated public-chain
+  smoke check, not proof of autonomous model behavior or a complete real-account report.
+
+Final shared-workspace regression: **1286 passed in 17.13s** (Python 3.12.4, pytest 9.1.1,
+jsonschema 4.26.0). The earlier fixed-base full regression was **1268 passed in 17.27s**; later
+observer regression additions are included in the final shared result. All owned Python changes
+pass Ruff 0.15.12 check/format; local skill links and version/schema declaration tests pass.
+
+Producer **1.0.5** additionally recognizes an exact safe Python `-B` script invocation, rejects
+shell chaining/substitution in account/simulation receipts, preserves bold paragraph labels ending
+in a colon within their report section, and recognizes ASCII/fullwidth slashes in ITM/ATM/OTM.
+Each change had a failing regression from observed output. Unknown real headings retain section
+boundaries and all original source/body/identity checks remain. Declared peer scopes still require
+semantic review. No failed artifact was reclassified in place.
+
+| Actual baseline execution | Final status | Assertions |
+|---|---|---|
+| `/private/tmp/portfolio-v080-comprehensive-03` | ASSERTIONS_PASSED; execution evidence passed | 18/18 |
+| `/private/tmp/portfolio-v080-options-03` | ASSERTIONS_PASSED; execution evidence passed | 20/20 |
+| `/private/tmp/portfolio-v080-rebalance-02` | ASSERTIONS_PASSED; execution evidence passed | 16/16 |
+
+The three actual model runs also passed independent report review in
+`/private/tmp/portfolio-v080-baseline-final-review.md`. The aggregate validator result is retained
+at `/private/tmp/portfolio-v080-final-audit.json` (54/54); its scope remains envelope validation,
+not a replacement for those real executions.
+
+Five separate research runs are independently reviewed using their actual receipts, arithmetic,
+reports and unchanged manifests. Detailed verdicts and retained failure attempts are recorded in
+[the implementation/acceptance record](../docs/2026-10-14-v0.8.0-implementation.md). Research sample
+reviews are not passed off as automatic `evals.json` assertions. Large-portfolio sample failures
+led to an explicit single-helper rule and read-only inspection of the retained same-invocation
+account result; hidden public backing-data access remains prohibited. Capability-level permission
+denial now explicitly stops further symbols on that denied capability for the run.
+
+Fresh isolated Codex sessions loaded the complete 0.8.0 entry and required references. No global
+skill installation was changed. Optional wheel building was unavailable because setuptools is
+absent from the existing interpreters; no dependency was installed. Missing optional providers
+require no installation, and live accounts and untested source/host combinations remain unverified.
