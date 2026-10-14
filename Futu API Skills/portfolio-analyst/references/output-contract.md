@@ -1,114 +1,83 @@
 # Markdown chat output contract
 
-The default deliverable is readable Markdown in chat with no default persistence. Do not attach raw
-JSON or claim that a report/snapshot was saved. Keep the overview compact and the holdings complete.
+Return one readable Markdown report in chat, without default saved artifacts or raw JSON.
+Keep the complete holdings table and stable sections; substantive views belong within them.
 
 ## Required section order
 
-1. **Scope and data time** — REAL/USD scope, `snapshot_id`, `as_of`, research query time.
-2. **One-line conclusion** — the most decision-relevant portfolio-level finding and its limitation.
-3. **Overview** — NAV, cash/cash weight, filled holding count, concentration, current costs, market
-   values, unrealized P&L and contribution where supported.
-4. **Three principal risks** — exactly three evidence items, each tied to affected positions and
-   evidence. Where a dimension cannot be assessed, explicitly show its data gap or lack of a
-   confirmable risk; never invent a concentration conclusion to fill three slots.
-5. **Complete holdings table** — every nonzero current filled holding.
-6. **Selected deep research** — why each name was selected, evidence, thesis/invalidation,
-   redundancy, cycle/macro sensitivity, and technical context. Use the bound `technical` report's
-   observed regions; do not restate them as targets or predictions.
-7. **Option risk** — only if applicable; otherwise omit the section.
-8. **Macro impact** — concise and connected to the current portfolio.
-9. **Observations** — evidence-backed portfolio implications; recommendations only under the
-   conditional recommendation policy.
-10. **Data gaps and sources** — local degradations, omitted deep-research names/reasons, and sources.
+Use level-two headings with these exact English or Chinese titles, in order; omit Option risk only
+when inapplicable. Body language is natural; do not rename or combine required sections.
 
-Use level-two Markdown headings with exactly one of the following titles in the report language.
-Keep this order; the body may use natural language. Do not rename or combine sections. Put each
-selected name in a level-three heading using its snapshot symbol (for example `### US.AAPL`), or
-in a research table's first column named `Symbol`. When research is unavailable, retain each selected
-name with its limitation. List names omitted by the research budget and the reason in Data gaps
-and sources.
+| Canonical section | Chinese heading | Content |
+|---|---|---|
+| Scope and data time | 范围与数据时间 | REAL/USD, bound snapshot_id/as_of including timezone and precision, separate research time. |
+| One-line conclusion | 一句话结论 | Most consequential supported portfolio view and material qualification. In active advice, state the preferred opportunity/choice. |
+| Overview | 组合概览 | NAV, cash/weight, reserve context, count, concentration, costs/values, unrealized P&L/contribution where supported. |
+| Three principal risks | 三个主要风险 | Three supported risks or explicit gaps, ordered by materiality with affected holdings, mechanism and priority reason. |
+| Complete holdings table | 完整持仓表 | Every nonzero filled holding, exactly once. |
+| Selected deep research | 重点研究 | Selection reason, decisive question/evidence, thesis/counterevidence, valuation, shared drivers and actual technical coverage. |
+| Option risk | 期权风险 | Conditional: preserve tool status and distinguish economic-risk gaps. |
+| Macro impact | 宏观影响 | Short transmission to current exposures. |
+| Observations | 观察 | Portfolio implications and concrete review triggers; conditional advice/candidates/strategies as requested. |
+| Data gaps and sources | 数据缺口与来源 | Local gaps, omitted research names/reasons, actual coverage and source notes. |
 
-Within a required section, use level-three/four subheadings, ordinary bullets or bold paragraph
-labels ending with a colon (for example `**Data gaps:**` or `**分析能力缺口：**`). A standalone
-bold title without a trailing colon is a section heading, not an internal paragraph label.
-Keep omitted names and their budget reason inside Data gaps and sources, including when that
-section also contains evidence/source notes.
+Within sections use level-three/four subheadings, bullets, or bold paragraph labels with a trailing
+colon, such as `**Data gaps:**`. Standalone bold titles without a colon count as section headings.
+Keep omissions and their budget reasons inside Data gaps and sources, not an unrecognized appendix.
 
-In the conditional Option risk section, explicitly distinguish `Tool status: <status>`
-(`工具状态：<状态>`) for the authoritative options result from `Analysis capability gaps:`
-(`分析能力缺口：`) for unavailable economic-risk fields. List actual gaps such as contract
-multiplier, underlying and moneyness (ITM/ATM/OTM); a COMPLETE raw-Greek result does not fill them.
-These labels preserve the scope of completeness; never change a source status to match prose.
-
-For unheld peer comparisons, use a level-four `#### Peer comparisons` or `#### 同行比较` heading
-under the relevant selected holding's level-three snapshot-symbol heading. This comparison scope
-ends at the next level-four or higher heading. Keep peer prose and tables within that scope;
-comparison names are not selected holdings or candidate recommendations. Do not place advice to add
-an unheld name in that scope. A separate unheld research heading or a later proposal in Observations
-remains an unheld-candidate mention. The declared label does not prove that the prose is only a
-comparison: validation still requires semantic review of the content.
-
-| Canonical section | Chinese heading |
-|---|---|
-| Scope and data time | 范围与数据时间 |
-| One-line conclusion | 一句话结论 |
-| Overview | 组合概览 |
-| Three principal risks | 三个主要风险 |
-| Complete holdings table | 完整持仓表 |
-| Selected deep research | 重点研究 |
-| Option risk | 期权风险 |
-| Macro impact | 宏观影响 |
-| Observations | 观察 |
-| Data gaps and sources | 数据缺口与来源 |
-
-## Research synthesis
-
-For each selected holding organize the substance as question, evidence, explanation, portfolio
-implication, and contrary evidence/gaps. Cover the relevant financial, expectations, earnings and
-valuation routes at the agreed depth. Distinguish valuation context from an actually executed full
-model; a provider target price is neither a self-built valuation nor an automatic action.
-
-State the thesis baseline's source. With no user-provided or explicitly authorized historical
-reason, label it a "current research hypothesis" (本次研究假设), not the user's original rationale.
-Normally inspect two or three relevant pillars and at least one substantive potential disconfirming
-fact. If none was obtained, say so rather than inventing a balanced-looking counterargument.
-
-Explain shared demand, industry cycles, macro drivers and overlapping exposures across holdings.
-Several positive company views do not establish diversification; qualitative overlap is not a
-computed correlation coefficient. Associate public evidence with the bound portfolio locally.
-Preserve technical observed regions, authoritative risk/option status and classification gaps.
-Return one portfolio report, without standalone upstream research reports, workbooks or thesis logs.
-
-## Baseline holding table
-
-Use these conceptual columns, preserving explicit currency/unknown states:
+## Holdings and research presentation
 
 | Symbol | Current weight | Market value | Unrealized P&L | Sector/theme | Short comment |
 |---|---:|---:|---:|---|---|
 
-The Short comment is 1–3 sentences grounded in portfolio context and available evidence. Do not add
-Role, Inferred role, Score, Ranking, or categorical Attention status. Do not force
-`ADD/HOLD/TRIM/EXIT`.
-Sort deterministically by current weight descending, then symbol; identify shorts without treating a
-negative quantity as a complete short-risk assessment.
+Preserve currency and Unknown/Unavailable states. Sort by snapshot weight descending, then symbol.
+Short comment: 1–3 evidence-based sentences. No Role, Inferred role, Score, Ranking, Attention status
+or forced `ADD/HOLD/TRIM/EXIT` columns. Identify shorts without implying complete short-risk analysis.
+Cash remains in Overview; researched candidates never enter this table.
 
-## Source presentation
+For each selected held name use a level-three snapshot symbol heading (e.g. `### US.AAPL`) or a
+research table's first column named `Symbol`. Retain selected names even when evidence is unavailable.
+Explain 1–2 decisive questions through evidence, interpretation, portfolio implication and contrary
+facts/gaps. State thesis baseline source; absent historical rationale, write “current research
+hypothesis” / “本次研究假设”. Do not invent purchase motives or balanced-looking objections.
 
-Account facts cite the same snapshot ID/as-of near the table or overview. Apply evidence-policy.md
-to key external facts: necessary source, period and units, direct links to read news/announcements,
-or actual tool-result locators when no data page exists. Shared provenance can be stated once.
-Show a separate timestamp for a research quote; it never changes account weights or selection.
-Put a material limitation beside the affected claim and group repeated gaps in Data gaps and sources.
-Missing is “Unknown/Unavailable,” never 0. Briefly distinguish method source from numerical source;
-do not expose account IDs, private paths, raw JSON, full logs or per-step status bookkeeping.
+Distinguish valuation background from executed models, and attributed provider targets from own
+calculations. Separate technical nonselection, selected-but-missing fields and whole-tool failure.
+Use observed regions with timeframe/as-of, never convert them into targets. Summarize affected
+identities in gaps without reacquiring prices. Report company-research coverage separately from
+total coverage including reserve assets.
 
-## Classification uncertainty and metric basis
+For unheld peers use `#### Peer comparisons` or `#### 同行比较` inside the relevant held symbol's
+section. Its scope ends at the next level-four or higher heading. Keep comparison prose/tables
+there; it is not a candidate recommendation. Advice outside that scope remains a candidate mention;
+labels alone never establish that the content is merely a comparison.
 
-Show known/unknown classification coverage beside any sector, region or split-theme constraint.
-Keep BREACHED, WITHIN_LIMIT, UNKNOWN and NOT_CONFIGURED distinct. UNKNOWN is a missing-evidence
-bucket, never an actual industry or a confirmed limit breach. Do not treat a null breach boolean
-as false. Use the authoritative structured risk status in the final Markdown.
+## Advisor conclusions
 
-Label NAV HHI separately from holdings-only HHI/effective positions. Cash affects invested capital,
-not the relative diversification metric; legacy inverse NAV-HHI reports require a legacy label.
+With actionable intent or an established advisor preference, apply recommendation policy inside
+Observations. State prioritized opportunity/adjustment, comparator, rationale, catalyst/period,
+trade-off and invalidation. Use compact prose or a useful comparison table, not mandatory scoring.
+Sufficient evidence must produce a view; generic “continue observing” is not enough. Distinguish
+directional advice, conditional allocation assumptions and a separately requested simulation.
+
+Authorized new candidates and strategies belong in an explicit subsection here, separate from
+held research. Show incremental value versus an existing holding/cash and strategy evidence limits;
+do not imply those objects are held or validated by the held-options/technical tools. No standalone
+upstream research report, workbook or saved thesis is part of the default deliverable.
+
+## Sources, statuses and limitations
+
+Account facts cite the same snapshot ID/as-of near the overview/table. External key facts follow
+[evidence policy](evidence-policy.md): necessary period/units, direct supporting links or actual
+tool-result locators, with shared provenance once. Do not expose account IDs, private paths, full
+logs or per-step bookkeeping. State material gaps beside the claim and group repeated gaps at end.
+
+In Option risk use separate explicit labels `Option tool status` / `期权工具状态` and
+`Analysis capability gaps` / `分析能力缺口`. Copy authoritative options status with raw-Greek units,
+coverage and freshness. Name actual missing multiplier, underlying mapping, moneyness (ITM/ATM/OTM)
+or other fields; do not invent missing fields or downgrade COMPLETE solely for broader gaps.
+
+Show classification known/unknown coverage alongside exposure claims. Preserve BREACHED,
+WITHIN_LIMIT, UNKNOWN and NOT_CONFIGURED; UNKNOWN is neither an industry nor a pass/breach, and
+null breach is not false. Label NAV HHI separately from holdings-only HHI/effective positions;
+cash does not change relative holdings diversification. Mark legacy inverse NAV-HHI as legacy.

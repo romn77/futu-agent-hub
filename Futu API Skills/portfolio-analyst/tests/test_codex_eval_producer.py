@@ -437,8 +437,8 @@ def test_output_contract_headings_are_observable_in_both_languages():
     pairs = []
     for line in contract.splitlines():
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) == 2 and cells[0] in producer.SECTION_ALIASES:
-            pairs.append(cells)
+        if len(cells) >= 2 and cells[0] in producer.SECTION_ALIASES:
+            pairs.append(cells[:2])
     assert len(pairs) == len(producer.SECTION_ALIASES)
     for column in (0, 1):
         report = "\n\n".join(f"## {pair[column]}\nEvidence" for pair in pairs)

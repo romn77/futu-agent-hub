@@ -1,7 +1,8 @@
 # Optional rebalance simulation
 
-Load only when the user explicitly requests an actionable change and supplies a quantifiable target
-weight, amount, or shares. Read [the existing detailed contract](../rebalance-simulation.md),
+Load only when the user explicitly requests a quantitative simulation and supplies or confirms a
+target weight, amount, or shares. Advice or an advisor-proposed range alone does not trigger it.
+Read [the existing detailed contract](../rebalance-simulation.md),
 [recommendation policy](../recommendation-policy.md), and the simulate tool contract.
 
 Use the same bound snapshot where the simulation belongs to the current report. Normally run one

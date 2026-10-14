@@ -42,3 +42,8 @@ The command never fetches a separate underlying price. Missing, cross-account, o
 underlying rows keep money Delta and moneyness unknown. It excludes max profit/loss, breakeven,
 probability, margin, scenario P&L, beta adjustment, cash-secured puts, spreads, collars, and strategy
 inference. Never infer fields from the contract label or code.
+
+Account market value and raw quote/Greek units are separate evidence. Validate a suspicious
+quantity × price × multiplier relationship against the source field definition before interpreting
+it; never assume a second multiplier is needed. Report unresolved economic-unit ambiguity without
+rewriting the authoritative result/status. This inventory contract cannot validate an unheld strategy.

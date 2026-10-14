@@ -1,30 +1,32 @@
 # Intent routing
 
-Route by requested outcome. Explicit user intent overrides defaults but never the read-only boundary.
+Route by requested outcome and preferences actually available in session context. Reuse established
+preferences without repeated confirmation; later narrower requests win. Do not invent preferences
+for a fresh session or save new configuration. All routes retain the account read-only boundary.
 
-| Intent | Route | Default? |
-|---|---|---|
-| Analyze, review, or diagnose current holdings | Fresh REAL/USD comprehensive workflow | Yes |
-| Investigate financials, estimate revisions, thesis, earnings, or valuation | Relevant question route in [research policy](research-policy.md), within the requested scope | Conditional on the question |
-| Explain option exposure already held | Comprehensive workflow plus options policy | Conditional on held options |
-| Recommend an actionable change | Recommendation policy; simulate only when parameters are sufficient | Explicit only |
-| Test a target weight/amount/share plan | One non-executable rebalance simulation | Explicit only |
-| Review pending/open orders or historical activity | Trade-review workflow | Explicit only |
-| Attribute historical performance | Performance-attribution workflow | Explicit only |
-| Create/inspect/validate lifecycle facts | Position-lifecycle workflow | Explicit only |
-| Save snapshot/report/history or journal | Relevant persistence command | Explicit only |
-| Find or compare unheld candidates | Research only user-named names or requested candidates | Explicit only |
-| Compare multiple scenarios | Run only the scenarios the user asks for | Explicit only |
+| Intent | Route |
+|---|---|
+| Review/diagnose current holdings, no wider preference | Fresh REAL/USD comprehensive workflow |
+| Financials, expectations, thesis, earnings or valuation question | Relevant research-policy question route within scope |
+| Explain held options | Conditional options policy and contract |
+| "What should I do?", more decisive/active advice, allocation changes | Recommendation policy: views, priorities, trade-offs and conditional proposals |
+| New names, replacements, event ideas or offensive strategies | Requested advisor extras under research/recommendation policies; prior explicit preference is reusable |
+| Test a quantitative allocation | One non-executable simulation with supplied/confirmed target |
+| Pending orders, historical orders/fills | Explicit trade-review workflow |
+| Historical returns/attribution | Explicit performance workflow |
+| Create/inspect thesis or lifecycle records | Explicit lifecycle workflow |
+| Save outputs, snapshots or journal | Explicit persistence command |
+| Multiple rebalance scenarios | Only the requested scenarios |
 
-"What should I do?" is actionable intent and loads recommendation policy. Give evidence-backed
-advice when the available facts support it; a missing numerical target does not block qualitative
-advice. Do not invent a target or simulate from a generic advice request. Ask for a missing target
-weight, amount, or shares only when a requested simulation actually requires it.
+Advice need not wait for a numerical target or complete risk questionnaire. Missing context may
+limit individualized sizing, not every supported view. Ask only for information needed by the
+requested calculation. Proposed allocations do not trigger simulation; actual trades remain outside
+this skill. Valuation sensitivities are distinct from rebalance scenarios.
 
-The six research routes select methods, not new account workflows. Thesis research does not by
-itself authorize saved lifecycle/history reads. A valuation request does not authorize a trade or
-simulation. Broader research requires an explicit wider request; a general comprehensive review
-keeps the default eight deep-research names and two automatic full valuations.
+Research methods do not authorize new account workflows: a thesis question does not load saved
+lifecycle/history, and valuation does not authorize trading. A comprehensive review alone does not
+expand the research policy's budgets or add candidates, open orders, history or persistence.
 
-Do not interpret a general portfolio review as permission to include open orders, history,
-performance, lifecycle records, new-stock ideas, persistent artifacts, or multiple simulations.
+An active-advisor preference can cover decisive opinions, allocation proposals and new opportunities
+together if the user requested all three; do not require the user to repeat that scope every report.
+Present opportunities within available evidence and budgets, never infer unlimited risk appetite.

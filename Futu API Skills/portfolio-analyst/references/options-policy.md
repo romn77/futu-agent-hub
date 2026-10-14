@@ -45,7 +45,17 @@ source errors or stale authority still prevent complete aggregate claims. Missin
 continues to degrade notional Delta/moneyness locally; raw Greeks do not imply those are available.
 
 Never parse a contract code or label to manufacture a field. Do not infer cash-secured puts, spreads,
-collars, margin, payoff, probability, or advice. Missing evidence is **unavailable/degraded**.
+collars, margin, payoff, probability, or advice from this inventory tool. Missing evidence is **unavailable/degraded**.
+
+Cross-check suspicious quantity/quote-unit/multiplier/value/Delta relationships using the
+[evidence policy](evidence-policy.md). COMPLETE raw Greeks do not establish correct economic units.
+Check whether a source field already includes the multiplier; never blindly multiply by 100 or
+overwrite account market value/NAV. Unresolved ambiguity limits the affected claim; confirmed
+unreliable account authority follows the fatal rule. Do not reacquire the account to test a guess.
+
+A small short-dated position is not automatically a principal portfolio risk or a mistaken holding:
+consider evidenced exposure, purpose and management needs. In requested advisor scope, apply the
+recommendation policy separately; this held-options result does not validate any proposed new strategy.
 
 Option failure is local: keep the complete stock/ETF holdings table and other supported portfolio
 analysis, while placing the limitation beside the option conclusion and in data gaps.
