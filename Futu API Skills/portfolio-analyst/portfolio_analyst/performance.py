@@ -1101,7 +1101,9 @@ def _price_evidence(
                     else "no rows in requested interval before the completed market close cutoff",
                 )
             )
-            consecutive_failures = 0 if bounded else consecutive_failures + 1
+            # None marks unavailable identity evidence, not a failed source request.
+            if rows is not None:
+                consecutive_failures = 0 if bounded else consecutive_failures + 1
         except Exception:
             output.append(
                 PriceEvidence(

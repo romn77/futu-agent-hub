@@ -112,6 +112,7 @@
       "properties": {
         "account_ref": {"type": "string", "maxLength": 128}, "symbol": {"type": "string", "maxLength": 256}, "name": {"type": "string", "maxLength": 1024},
         "market": {"type": "string", "maxLength": 8}, "security_type": {"type": "string", "maxLength": 32}, "currency": {"type": "string", "maxLength": 3}, "currency_provenance": {"enum": ["AUDITED_SOURCE", "USER_CONFIG"]},
+        "source_code": {"type": "string", "maxLength": 96, "pattern": "^(SH|SZ)\\.[A-Z0-9][A-Z0-9.-]*$"},
         "quantity": {"$ref": "#/$defs/decimal"}, "can_sell_quantity": {"$ref": "#/$defs/nullableDecimal"},
         "average_cost_local": {"$ref": "#/$defs/nullableDecimal"}, "last_price_local": {"$ref": "#/$defs/nullableDecimal"},
         "market_value_local": {"$ref": "#/$defs/decimal"}, "unrealized_pl_local": {"$ref": "#/$defs/nullableDecimal"},

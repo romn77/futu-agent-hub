@@ -273,3 +273,18 @@ Fresh isolated Codex sessions loaded the complete 0.8.0 entry and required refer
 skill installation was changed. Optional wheel building was unavailable because setuptools is
 absent from the existing interpreters; no dependency was installed. Missing optional providers
 require no installation, and live accounts and untested source/host combinations remain unverified.
+
+## Reviewed branch integration follow-up
+
+The subsequent maintenance merge incorporates `4fa748f` and `65f6927` while retaining main's
+newer research and evaluator checks. Producer 1.0.6 accepts the older regression's explicit
+Chinese `工具状态为 COMPLETE` label; strict command parsing, paragraph/section boundaries and peer
+scopes remain. The restored older tests passed alongside the current suite.
+
+The complete integration passed 1348 tests and 91 subtests, including offline trading-boundary
+tests. A new real read-only helper run also verified successful option quote/metadata acquisition,
+COMPLETE option status, exact component binding and cleanup. This supersedes the earlier statement
+that real account integration had not been attempted, but does not claim complete classification,
+OTC data coverage or compatibility with untested accounts and providers. See the
+[pending-fixes review](../docs/2026-10-14-pending-fixes-review.md) for the precise scope; no real
+account payload was added to fixtures, repository artifacts or extra model evaluations.

@@ -200,6 +200,15 @@ def validate_snapshot_semantics(snapshot: PortfolioSnapshot) -> None:
             "duplicate account and canonical identity economic position leg"
         )
     for position in snapshot.positions:
+        if position.source_code is not None:
+            from .snapshot import normalize_security
+
+            try:
+                normalized_source = normalize_security(position.source_code)
+            except ValueError as exc:
+                raise SnapshotSemanticError("position source code is invalid") from exc
+            if normalized_source != (position.symbol, position.market):
+                raise SnapshotSemanticError("position source code does not match its identity")
         for field in ("can_sell_quantity", "average_cost_local", "last_price_local"):
             value = getattr(position, field)
             if value is None:

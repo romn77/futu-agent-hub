@@ -250,6 +250,7 @@ class PortfolioBuilder:
         unknown_security_types = False
         for item in staged:
             position = item.source
+            source_code = position.code.strip().upper()
             classification = item.classification
             value = item.market_value_base
             weight = value / nav
@@ -281,6 +282,8 @@ class PortfolioBuilder:
                     asset_class=classification.asset_class,
                     position_role=position.position_role,
                     data_quality_notes=position.data_quality_notes,
+                    # CN is a reporting market, not a routable Futu quote exchange.
+                    source_code=source_code if source_code.startswith(("SH.", "SZ.")) else None,
                 )
             )
             unknown_classifications |= any(

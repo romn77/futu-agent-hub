@@ -1,5 +1,11 @@
 # Risk analysis contract
 
+A-share positions retain their original `SH.` / `SZ.` identity in the optional snapshot
+`source_code` field while keeping `CN` as the reporting market. Risk and performance commands
+use that source identity for Futu history requests. Legacy snapshots remain readable with their
+original content hashes; missing or conflicting exchange evidence makes only that identity's
+history unavailable, without guessing an exchange or opening the source failure circuit.
+
 Phase 2 answers one question: what does one immutable portfolio snapshot say about current
 structure and its largest review risks? It does not produce independent buy/sell conclusions or
 orders. Every JSON and Markdown report repeats the snapshot's `snapshot_id`, `as_of`, coverage,

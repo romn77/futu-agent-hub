@@ -171,7 +171,9 @@ def test_analyze_starts_independent_option_acquisition_after_prior_phase_delay(
     monkeypatch.setattr(cli, "FutuOptionMetadataProvider", metadata_provider)
     from portfolio_analyst import price_history
 
-    monkeypatch.setattr(price_history, "FutuAdjustedPriceProvider", lambda _adapter: None)
+    monkeypatch.setattr(
+        price_history, "FutuAdjustedPriceProvider", lambda _adapter, *, snapshots: None
+    )
     frozen_now = datetime.now(timezone.utc) - timedelta(seconds=31)
 
     assert (

@@ -176,6 +176,7 @@ class NormalizedPosition:
     asset_class: str
     position_role: str | None = None
     data_quality_notes: tuple[str, ...] = ()
+    source_code: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -251,6 +252,10 @@ class PortfolioSnapshot:
 
     def to_dict(self) -> dict[str, Any]:
         payload = _json_value(self)
+        # Legacy snapshots did not retain the SH/SZ exchange. Do not change their hashes.
+        for position in payload["positions"]:
+            if position["source_code"] is None:
+                position.pop("source_code")
         # Preserve the exact content identity of existing 1.0 history documents.
         if self.schema_version == "1.0" and not self.account_navs and self.nav_source is None:
             payload.pop("account_navs")

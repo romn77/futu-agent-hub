@@ -611,7 +611,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                 from .price_history import FutuAdjustedPriceProvider
 
                 adapter = FutuAdapter(skill_dir)
-                price_provider = FutuAdjustedPriceProvider(adapter)
+                price_provider = FutuAdjustedPriceProvider(adapter, snapshots=snapshots)
                 try:
                     aliaser = AccountAliasStore(settings.data_home).load()
                     trade_history = FutuTradeHistoryService(adapter, aliaser=aliaser).review(
@@ -808,7 +808,7 @@ def main(argv: Sequence[str] | None = None, *, trusted_now: datetime | None = No
                 from .price_history import FutuAdjustedPriceProvider
 
                 adapter = FutuAdapter(skill_dir)
-                history_provider = FutuAdjustedPriceProvider(adapter)
+                history_provider = FutuAdjustedPriceProvider(adapter, snapshots=(source_snapshot,))
                 metadata_provider = FutuOptionMetadataProvider(
                     host=settings.opend_host, port=settings.opend_port
                 )

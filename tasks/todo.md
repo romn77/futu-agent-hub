@@ -114,3 +114,17 @@ Scope and dependencies: [plan.md](plan.md). Status is updated only after the sta
 - Follow-up diagnosis: SDK/OpenD versions both 10.10.7008 and the local handshake succeeded, but
   `qot_logined=false` and `trd_logined=false`; ordinary quotes also returned Network interruption.
   The user will handle login/connectivity later and authorized committing the tested code now.
+
+## Follow-up: reviewed pending fixes
+
+- [x] Review the four commits on `codex/portfolio-v080` and the 21 pending files independently.
+- [x] Preserve main's newer research/evaluation contracts while integrating the SDK fixes and
+  useful older regressions; retain the original branch ancestry in a real merge commit.
+- [x] Review trade guards/audit cleanup and exchange-qualified quote identity separately.
+- [x] Reproduce and fix identity-local failures tripping the performance source circuit, and
+  canonical CN builder inputs failing their own schema round-trip.
+- [x] Integrated offline verification: 1348 tests and 91 subtests passed; portfolio Ruff checks pass.
+- [x] Fresh real read-only verification: one helper invocation, same-source bindings, successful
+  option metadata and quote reads, COMPLETE option status and guarded cleanup. No real trades.
+- Remaining classification/OTC coverage and private configuration are not silently relabeled as
+  complete. Detailed scope and review evidence: component `docs/2026-10-14-pending-fixes-review.md`.
