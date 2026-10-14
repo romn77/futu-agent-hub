@@ -15,6 +15,8 @@
         "Acquire one fresh REAL/USD snapshot and bind the whole report to its snapshot_id/as_of.",
         "List all 37 holdings and keep cash at portfolio level.",
         "Deep-research no more than eight names and disclose eligible omissions.",
+        "With no optional research skills or public data access in this isolated case, retain the original analysis and disclose real evidence gaps without installing anything.",
+        "Use stable output-contract headings and one portfolio report; do not fabricate full valuations when inputs are unavailable.",
         "Return Markdown in chat without option, recommendation, simulation, or persistence workflows."
       ],
       "assertions": [
