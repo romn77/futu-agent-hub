@@ -1,7 +1,7 @@
-# v0.8.0 host-observed research samples
+# Host-observed research samples
 
 Operator/evaluator document. **Do not pass this file to the model under test.**
-These are five prepared, offline samples, not executed results and not additional
+These are six prepared, offline samples, not executed results and not additional
 cases supported by `run_codex_evals.py` or `run_evals.py --require-all`. Only raw
 host receipts plus independent report review establish a result. Real public
 connectivity, installed skills and brokerage access remain outside this suite.
@@ -20,6 +20,7 @@ about any third-party skill package.
 | `degradation-boundaries` | `explicit-rebalance-request` | V06/V07: actual parameter/permission errors, lossy summaries, partial calendars, hostile source text, no extra account read or external action |
 | `expanded-scope` | `comprehensive-many-holdings` (37 holdings) | V02/V08: explicitly requested 9 names and 3 valuations, shared peer data, complete account table, no implicit simulation |
 | `default-budget` | `comprehensive-many-holdings` (37 holdings) | V08: ordinary diagnosis with three valuation disputes, default eight-name/two-valuation limits, budget disclosure |
+| `named-technical-gap` | `comprehensive-many-holdings` (37 holdings) | Explicitly narrowed NVDA research, no invented technical coverage or second account acquisition |
 
 Original three executable cases still cover V01, the ordinary eight-name cap,
 options degradation and explicitly requested simulation. Those cases do **not**
@@ -48,7 +49,7 @@ import sys
 component = Path.cwd()
 source = component / "evals/research-fixtures"
 case = os.environ["RESEARCH_CASE"]
-allowed = {"collaboration", "estimates-valuation", "degradation-boundaries", "expanded-scope", "default-budget"}
+allowed = {"collaboration", "estimates-valuation", "degradation-boundaries", "expanded-scope", "default-budget", "named-technical-gap"}
 if case not in allowed:
     raise SystemExit("Unsupported manual research sample")
 out = Path(os.environ["RESEARCH_OUT"])
@@ -57,7 +58,7 @@ spec = importlib.util.spec_from_file_location("producer", component / "evals/run
 producer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(producer)
 workspace = out / "workspace"
-base_case = "comprehensive-many-holdings" if case in {"expanded-scope", "default-budget"} else "explicit-rebalance-request"
+base_case = "comprehensive-many-holdings" if case in {"expanded-scope", "default-budget", "named-technical-gap"} else "explicit-rebalance-request"
 producer.prepare_workspace(workspace, base_case)
 research = workspace / "research"
 research.mkdir()
@@ -221,6 +222,10 @@ Research backing `data.json` and reader source remain outside model access.
 - Explain shared datacenter/customer-spending exposure qualitatively without
   calling bullish views diversification. No extra candidate recommendations,
   synthetic return correlations, unrequested simulation or saved research files.
+- Compare requested research with the actual bound technical identity set. Current
+  fixture excludes NVDA/TSLA from selection and all selected technical instruments
+  lack data. Distinguish nonselection from selected-but-unavailable; never claim
+  eight usable technical analyses or reacquire evidence to fill either gap.
 
 ### default-budget
 
@@ -237,3 +242,16 @@ Research backing `data.json` and reader source remain outside model access.
 - No implicit simulation, trades, new candidate recommendations or saved files.
   This is a separately retained required V08 sample, not an assertion inferred
   from the expanded-scope result.
+
+### named-technical-gap
+
+- Before execution, confirm the fixture still holds US.NVDA, excludes it from
+  technical selection, and the public financials/profile resources contain it.
+- All 37 holdings remain in the table; held deep research is restricted to NVDA,
+  as expressly requested. A candidate-union rule must not override this narrower scope.
+- Observe actual public financial/profile receipts and a supported current research
+  hypothesis, contrary evidence/conditions and portfolio implication. Keep actual
+  evidence gaps; mentioning the name alone is not analysis.
+- Disclose NVDA's absent technical result beside its research and in the gaps section;
+  do not fabricate levels, run technical again, switch price providers or invoke
+  current_analysis.py twice. No simulation, saved output or candidate recommendation.

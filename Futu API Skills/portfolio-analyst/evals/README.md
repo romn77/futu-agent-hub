@@ -1,5 +1,13 @@
 # Portfolio Analyst external audit-envelope validator
 
+The advisor-quality/refactoring work adds a separate [paired quality protocol](research-quality.md)
+and a sixth [manual research sample](research-cases.md), `named-technical-gap`. These do not change
+the three core case IDs or weaken their gates. Quality inputs are synthetic; the operator rubric,
+registry, version mapping and expected results are never supplied to the model under test.
+Current implementation, local test results and actual model-execution status are recorded in
+[the implementation record](../docs/2026-10-14-prompt-simplification.md). A prepared payload or a
+passing loading/budget test is not a behavior PASS or proof of improved research quality.
+
 `evals.json` defines behavior specifications. `run_evals.py` validates assertions against an
 audit-envelope sidecar supplied by an external harness; it does not execute the Skill, a model, or
 any portfolio command. Its success means only that a structurally valid external envelope satisfies

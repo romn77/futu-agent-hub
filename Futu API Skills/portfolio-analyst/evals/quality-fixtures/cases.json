@@ -1,0 +1,4899 @@
+{
+  "schema_version": "1.0",
+  "synthetic": true,
+  "research_date": "2026-10-14",
+  "method_files": {
+    "strategy.md": "---\nname: event-strategy\npackage: fixture-methods@1\n---\n\nMatch the event date and stage to issuer evidence. Distinguish an information difference from an event merely being scheduled. Compare the candidate with the relevant existing alternative using matching periods, prices, assumptions and material counterevidence. For a call debit spread, identify same underlying and expiry, ordered strikes, the net debit, contract multiplier, executable bid/ask and liquidity before computing a specific payoff. At expiry, per-contract maximum payoff before premium is strike width times multiplier; maximum loss is net debit times multiplier plus costs, assuming the spread remains intact and its exercise/assignment obligations are managed. Before expiry prices also depend on volatility and time. American short options can be assigned early, creating temporary stock, funding and management requirements. Missing verified contracts, quotes, expiry or broker rules limits concrete sizing and implementation, not a supported explanation of the mechanism. Never infer new-strategy validation from the held-options account tool. Scenario outputs are conditional, not success probabilities or authorization to trade.\n"
+  },
+  "cases": [
+    {
+      "id": "Q01",
+      "account_fixture": "conditional-options-degradation",
+      "user_prompt": "请检查这份合成持仓的主要风险，按对整个账户的影响解释优先级。我注意到 AAPL 的公共价格最近大跌，也担心期权到期。我的报告复核周期是六个月；这次是诊断，不要给买卖建议。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 60,
+            "bid": 59.95,
+            "ask": 60.05,
+            "average_daily_volume_shares_20d": 1000000,
+            "comparison": {
+              "date": "2026-09-02T14:00:00Z",
+              "price": 100,
+              "source": "SYNTHETIC historical public quote",
+              "note": "A public price comparison, not a refreshed account P/L."
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          },
+          "US.AAPL270115C00100000": {
+            "source": "SYNTHETIC listed instrument description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "listed option",
+            "expiry": "2027-01-15",
+            "style": "American",
+            "multiplier": null,
+            "quote_unit": null,
+            "risk_note": "Expiry and time decay require monitoring; no contract-level monetary exposure is established by this description."
+          },
+          "US.MSFT270115P00100000": {
+            "source": "SYNTHETIC listed instrument description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "listed option",
+            "expiry": "2027-01-15",
+            "style": "American",
+            "multiplier": null,
+            "quote_unit": null,
+            "risk_note": "Expiry and time decay require monitoring; no contract-level monetary exposure is established by this description."
+          },
+          "US.SPY270115C00100000": {
+            "source": "SYNTHETIC listed instrument description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "listed option",
+            "expiry": "2027-01-15",
+            "style": "American",
+            "multiplier": null,
+            "quote_unit": null,
+            "risk_note": "Expiry and time decay require monitoring; no contract-level monetary exposure is established by this description."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "A joint public customer survey covering 70% of the synthetic datacenter equipment market lowered next-12-month capex plans from +20% to +5% on 2026-10-12. AAPL equipment orders can move within a quarter; MSFT subscription renewals respond over 6-12 months. Existing contracts remain in force. No annual EPS reduction or share-price probability has been quantified.",
+            "survey_sample": "12 datacenter operators; intentions, not booked revenue"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "A joint public customer survey covering 70% of the synthetic datacenter equipment market lowered next-12-month capex plans from +20% to +5% on 2026-10-12. AAPL equipment orders can move within a quarter; MSFT subscription renewals respond over 6-12 months. Existing contracts remain in force. No annual EPS reduction or share-price probability has been quantified.",
+            "survey_sample": "12 datacenter operators; intentions, not booked revenue"
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q02",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请评价现在持有 AAPL 和 MSFT 的投资理由，尤其解释经营改善与当前价格是否匹配，给出对组合的判断。这次是持仓诊断，不要求买卖建议。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.9,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 140,
+            "bid": 139.95,
+            "ask": 140.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "Operating margins improved; FY2027 price/earnings relative to comparable profitable equipment companies is disputed."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "The FY2026 Q2 margin improvement came from higher utilization and product mix, not a one-off gain. The new product already reached commercial shipments. The issuer repeated rather than increased its FY2026 Q3 revenue and EPS guidance. A customer can qualify a second supplier in FY2027, but no lost order has been reported."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q03",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请复核 AAPL 的盈利增长质量，并联系 MSFT 和整个持仓解释最值得关注的问题及判断条件。这次只作诊断，不给买卖指令。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 18,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 110,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 120,
+                "operating_income": 26.25,
+                "net_income": 21,
+                "operating_cash_flow": 19,
+                "capex_cash_outflow": 6,
+                "receivables": 35,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.84
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 130,
+                "operating_income": 30.0,
+                "net_income": 24,
+                "operating_cash_flow": 12,
+                "capex_cash_outflow": 7,
+                "receivables": 48,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.96
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance.",
+            "working_capital_note": {
+              "period_end": "2026-06-30",
+              "basis": "US GAAP; same revenue recognition and consolidation across four quarters",
+              "receivables_prior_quarter_million": 35,
+              "receivables_current_million": 48,
+              "customer_acceptance_milestones_million": 11,
+              "management_explanation": "Late-quarter billings on accepted deliveries; management expects collection during FY2026 Q3.",
+              "independent_collection_confirmation": null,
+              "other_working_capital": "Inventory cash use 3 million, payables release 1 million, other CFO movements net +5 million; all are Q2 cash-flow bridge components."
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "The October 12 demand update left the July operating guidance unchanged. It did not update collections of the June receivable balance. The forecast relies on customer acceptance; no claim about the quality of those receivables is made in this update."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q04",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请复核 AAPL 的盈利增长质量，并联系 MSFT 和整个持仓解释最值得关注的问题及判断条件。这次只作诊断，不给买卖指令。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 18,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 110,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 120,
+                "operating_income": 26.25,
+                "net_income": 21,
+                "operating_cash_flow": 19,
+                "capex_cash_outflow": 6,
+                "receivables": 35,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.84
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 130,
+                "operating_income": 30.0,
+                "net_income": 24,
+                "operating_cash_flow": 12,
+                "capex_cash_outflow": 7,
+                "receivables": 48,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.96
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance.",
+            "working_capital_note": {
+              "period_end": "2026-06-30",
+              "basis": "US GAAP; same revenue recognition and consolidation across four quarters",
+              "receivables_prior_quarter_million": 35,
+              "receivables_current_million": 48,
+              "customer_acceptance_milestones_million": 11,
+              "management_explanation": "Late-quarter billings on accepted deliveries; management expects collection during FY2026 Q3.",
+              "independent_collection_confirmation": null,
+              "other_working_capital": "Inventory cash use 3 million, payables release 1 million, other CFO movements net +5 million; all are Q2 cash-flow bridge components."
+            },
+            "counterevidence": {
+              "source": "SYNTHETIC issuer supplemental receivables note, accompanied by independent auditor agreed-upon-procedures report",
+              "published_at": "2026-10-12",
+              "period_end": "2026-06-30",
+              "currency": "USD",
+              "unit": "million",
+              "scope": "June 30 receivable aging and acceptance conditions, same receivable population as the Q2 statements; not a new quarter or consolidated financial audit opinion",
+              "receivables_more_than_90_days_past_due": 15,
+              "prior_quarter_same_aging_bucket": 3,
+              "customer_disputed_billings_included_in_aged_balance": 12,
+              "accepted_delivery_documents_missing_for_disputed_billings": true,
+              "management_response": "Management still expects payment but cannot give a collection date; it is reviewing acceptance documentation. No restatement or quantified loss allowance revision has been announced.",
+              "note": "The 12 million disputed amount is contained within the 15 million aged balance; do not add them."
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "The October 12 demand update left the July operating guidance unchanged. It did not update collections of the June receivable balance. The forecast relies on customer acceptance; no claim about the quality of those receivables is made in this update."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q05",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请分析现有持仓，并核查 AAPL、MSFT 的估值争议；能可靠支持的结论请明确说，资料不足的部分保留界限。本次不要求买卖方案。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY2 = FY2028",
+                "period_end": "2028-12-31",
+                "eps_now": 7,
+                "eps_30d_ago": null,
+                "eps_analysts": null,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC estimates service",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted EPS",
+            "periods": [],
+            "coverage_note": "No verified annual EPS consensus for MSFT; this is absence of data, not zero EPS."
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY2 = FY2028 ended 2028-12-31",
+            "fy1_eps": null,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution.",
+            "fy2_eps": 7,
+            "source_note": "FY2027 consensus is not available in this fixture. Vendor summary mislabeled FY2028 EPS as next year; this receipt preserves the explicit fiscal end date."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC incomplete FCFF worksheet",
+            "currency": "USD",
+            "unit": "million except rates and shares",
+            "as_of": "2026-10-14T12:00:00Z",
+            "model": "single-stage FCFF perpetuity",
+            "fcff_next_year": 100,
+            "wacc": 0.04,
+            "terminal_growth": 0.04,
+            "cash": 50,
+            "debt": null,
+            "diluted_shares_million": 25,
+            "fcff_definition": "after reinvestment, before debt service",
+            "source_note": "No verified debt bridge or alternative discount-rate input is supplied."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q06",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "基于现有持仓和这次证据，我应如何调整？请给出明确的取舍、优先顺序和条件。我暂时没有目标仓位数字，这次只讨论现有持仓。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 6,
+                "eps_30d_ago": 5.5,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.3,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 140,
+            "bid": 139.95,
+            "ask": 140.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 6,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "On October 12 the company reported that 80% of contracts due for renewal in Q3 had renewed at 115% net revenue retention, versus the July plan of 110%. The remaining 20% contains two large customers. The report is unaudited operating data; it does not constitute reported Q3 earnings."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q07",
+      "account_fixture": "conditional-options-degradation",
+      "user_prompt": "请做一次顾问式持仓复核。我打算每六个月复核一次，但何时要用这笔钱还没确定。也请核查 AAPL270115C00100000 的公开研究组件报价与金额含义，给我目前有依据的判断；暂不指定新的资金分配目标。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.AAPL270115C00100000": {
+            "source": "SYNTHETIC external option research component receipt",
+            "as_of": "2026-10-14T12:00:00Z",
+            "status": "COMPLETE",
+            "symbol": "US.AAPL270115C00100000",
+            "currency": "USD",
+            "reported_quote": 0.02,
+            "quote_unit": null,
+            "contract_multiplier": 100,
+            "illustrative_lot_contracts": 3,
+            "reported_illustrative_lot_value": 0.06,
+            "reported_value_unit": "USD, component label only",
+            "scope": "Public demonstration lot independent of the account. This receipt does not update account quantity, price, market value, or NAV.",
+            "field_definition_document": "filing segments for the same symbol"
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          },
+          "US.AAPL270115C00100000": {
+            "source": "SYNTHETIC exchange instrument note",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "listed option",
+            "expiry": "2027-01-15",
+            "style": "American",
+            "contract_multiplier": 100,
+            "source_note": "This metadata confirms contract size but not the third-party display quote basis."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          },
+          "US.AAPL270115C00100000": {
+            "source": "SYNTHETIC external component data dictionary v2",
+            "published_at": "2026-10-10",
+            "symbol": "US.AAPL270115C00100000",
+            "contract_multiplier": 100,
+            "reported_quote_definition": "display premium; vendor omitted whether per underlying share or per contract",
+            "reported_illustrative_lot_value_definition": "legacy quantity times display premium; monetary interpretation requires the omitted quote basis",
+            "resolution_status": "Vendor clarification unavailable in this fixture; no authoritative replacement account valuation supplied."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q08",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请对现有持仓给更主动、鲜明的调整建议，比较 AAPL 与 MSFT 的机会和下行，说明新增资金应优先放在哪里、从哪里来。合成约束：未来 12 个月无需从本账户提款；保留至少 10% NAV 现金；调整后单一股票目标不超过 35%；不用融资、不卖空；每月复核；可以承受明显波动，但没有给定最大回撤预算。请按这些约束提出条件仓位方案，不要模拟。\n\n本次最多重点研究 8 个已持有标的，全报告最多做 2 个完整估值；不扩大到未持有标的或特殊策略。不模拟、不下单、不保存。",
+      "optional_method_paths": [],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 18,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 110,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 120,
+                "operating_income": 26.25,
+                "net_income": 21,
+                "operating_cash_flow": 19,
+                "capex_cash_outflow": 6,
+                "receivables": 35,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.84
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 130,
+                "operating_income": 30.0,
+                "net_income": 24,
+                "operating_cash_flow": 12,
+                "capex_cash_outflow": 7,
+                "receivables": 48,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.96
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 6,
+                "eps_30d_ago": 5.5,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.3,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "base scenario 24x; above the matched hardware peer median 22x, conditional on deployment execution",
+            "sensitivity_multiples": [
+              20,
+              24,
+              28
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution.",
+            "scenarios": [
+              {
+                "name": "downside",
+                "fy2027_eps": 4,
+                "pe": 18,
+                "probability": null
+              },
+              {
+                "name": "base",
+                "fy2027_eps": 5,
+                "pe": 24,
+                "probability": null
+              },
+              {
+                "name": "upside",
+                "fy2027_eps": 6,
+                "pe": 28,
+                "probability": null
+              }
+            ],
+            "scenario_horizon": "12 months, comparing FY2027 diluted EPS under stated operating assumptions; multiples are analyst scenarios rather than consensus",
+            "scenario_drivers": {
+              "downside": "Customer acceptance delays persist, CFO conversion fails to recover; EPS 4 and 18x rerating.",
+              "base": "Two announced product deployments accepted in Q4; collection improves; EPS 5 at 24x premium for growth.",
+              "upside": "Both deployments expand and customers accelerate capacity; EPS 6 at 28x.",
+              "multiple_context": "24x base exceeds 22x equipment peer median; sustaining the premium requires execution."
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 6,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution.",
+            "scenarios": [
+              {
+                "name": "downside",
+                "fy2027_eps": 5,
+                "pe": 16,
+                "probability": null
+              },
+              {
+                "name": "base",
+                "fy2027_eps": 6,
+                "pe": 20,
+                "probability": null
+              },
+              {
+                "name": "upside",
+                "fy2027_eps": 6.5,
+                "pe": 24,
+                "probability": null
+              }
+            ],
+            "scenario_horizon": "12 months, comparing FY2027 diluted EPS under stated operating assumptions; multiples are analyst scenarios rather than consensus",
+            "scenario_drivers": {
+              "downside": "Large customers shrink renewal seats; retention falls to 100%, EPS 5 at 16x.",
+              "base": "Remaining renewals reach 115% retention; EPS 6 at peer median 20x.",
+              "upside": "New pricing survives renewal with 120% retention; EPS 6.5 at 24x premium."
+            }
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed",
+            "other_confirmed_events": [
+              {
+                "date": "2026-11-20",
+                "event": "deployment acceptance milestone; customer acceptance still conditional"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed",
+            "other_confirmed_events": [
+              {
+                "date": "2026-11-05",
+                "event": "issuer renewal completion update"
+              }
+            ]
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "On October 12 the issuer confirmed two Q4 equipment deployments with a November 20 acceptance milestone. Revenue is contingent on acceptance. A top customer has deferred a different pilot. June receivables remain above March and no final Q3 cash report is available."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "On October 12 the issuer reported 80% of Q3 renewals completed at 115% net revenue retention versus the July plan of 110%. The remaining 20% includes two large customers. A November 5 operating update will disclose completion; competitors have offered a 10% discount on competing renewals. No customer churn from that offer has yet been confirmed."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "Q09",
+      "account_fixture": "explicit-rebalance-request",
+      "user_prompt": "请做主动顾问分析：在现有持仓之外，只比较最多 2 个未持有候选 US.AMZN、US.GOOGL，并研究最多 1 种围绕 AMZN 10 月 27 日事件的看涨期权价差策略。解释候选相对继续持有或加仓 AAPL、MSFT 的增量价值，给出有依据的优先级、价格条件与主要反证。资金可投资至少 12 个月；事件策略是独立的短期尝试，未指定可承受亏损金额。已持有深研最多 8 个，全报告完整估值最多 2 个，候选与策略合计不再引入其他标的。不模拟、不下单、不保存。\n\n另有可用方法：event-strategy，fixture-methods@1，research/skills/strategy.md。",
+      "optional_method_paths": [
+        "research/skills/strategy.md"
+      ],
+      "public_data": {
+        "futu/financials": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC US.AMZN quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC US.GOOGL quarterly issuer statements via Futu fixture",
+            "published_at": "2026-07-22",
+            "retrieved_at": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "financial_unit": "million",
+            "accounting_basis": "US GAAP",
+            "eps_unit": "USD per diluted ordinary share",
+            "fiscal_year_end": "12-31",
+            "quarters": [
+              {
+                "period_end": "2025-09-30",
+                "duration": "single quarter",
+                "revenue": 100,
+                "operating_income": 18.75,
+                "net_income": 15,
+                "operating_cash_flow": 17,
+                "capex_cash_outflow": 4,
+                "receivables": 25,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.6
+              },
+              {
+                "period_end": "2025-12-31",
+                "duration": "single quarter",
+                "revenue": 112,
+                "operating_income": 22.5,
+                "net_income": 18,
+                "operating_cash_flow": 22,
+                "capex_cash_outflow": 5,
+                "receivables": 27,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.72
+              },
+              {
+                "period_end": "2026-03-31",
+                "duration": "single quarter",
+                "revenue": 125,
+                "operating_income": 28.75,
+                "net_income": 23,
+                "operating_cash_flow": 29,
+                "capex_cash_outflow": 6,
+                "receivables": 30,
+                "diluted_shares_million": 25,
+                "diluted_eps": 0.92
+              },
+              {
+                "period_end": "2026-06-30",
+                "duration": "single quarter",
+                "revenue": 145,
+                "operating_income": 36.25,
+                "net_income": 29,
+                "operating_cash_flow": 35,
+                "capex_cash_outflow": 7,
+                "receivables": 34,
+                "diluted_shares_million": 25,
+                "diluted_eps": 1.16
+              }
+            ],
+            "cash_flow_note": "CFO includes working-capital changes and is a single-quarter amount. Capex is a positive cash outflow. No cash-flow-to-EPS conversion supplied."
+          }
+        },
+        "futu/estimates": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 5,
+                "eps_30d_ago": 4.8,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.2,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 6,
+                "eps_30d_ago": 5.5,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                }
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1.3,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC US.AMZN consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 4,
+                "eps_30d_ago": 4,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                },
+                "rollout_assumption_pct": 50,
+                "estimate_observed_at": "2026-10-13T12:00:00Z"
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC US.GOOGL consensus panel",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "recommendation_analysts": 24,
+            "periods": [
+              {
+                "period": "FY1 = FY2027",
+                "period_end": "2027-12-31",
+                "eps_now": 4.5,
+                "eps_30d_ago": 4.5,
+                "eps_analysts": 8,
+                "revisions_30d": {
+                  "up": 3,
+                  "down": 1
+                },
+                "contributors_including_rollout": 7
+              }
+            ],
+            "quarterly_consensus": {
+              "period_end": "2026-09-30",
+              "eps": 1,
+              "revenue_million": 150,
+              "eps_analysts": 7,
+              "observed_at": "2026-10-14T12:00:00Z"
+            }
+          }
+        },
+        "futu/quote": {
+          "US.AAPL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 130,
+            "bid": 129.95,
+            "ask": 130.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 80,
+            "bid": 79.95,
+            "ask": 80.05,
+            "average_daily_volume_shares_20d": 1000000
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC public quote",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "security": "ordinary share; one quoted unit is one share",
+            "last_price": 90,
+            "bid": 89.95,
+            "ask": 90.05,
+            "average_daily_volume_shares_20d": 1000000
+          }
+        },
+        "futu/valuation-inputs": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AAPL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.MSFT ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 6,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC US.AMZN disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.AMZN ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 4,
+            "peer_dataset_key": "software-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              18,
+              20,
+              22
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution.",
+            "scenarios": [
+              {
+                "name": "downside",
+                "fy2027_eps": 3.5,
+                "pe": 16,
+                "probability": null
+              },
+              {
+                "name": "base",
+                "fy2027_eps": 4,
+                "pe": 20,
+                "probability": null
+              },
+              {
+                "name": "upside",
+                "fy2027_eps": 4.8,
+                "pe": 22,
+                "probability": null
+              }
+            ],
+            "scenario_horizon": "12 months; downside regulatory delay, base 50% rollout, upside full rollout; analyst assumptions, not probabilities"
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC US.GOOGL disclosed inputs; multiples are scenario assumptions, not targets",
+            "as_of": "2026-10-14T12:00:00Z",
+            "security": "US.GOOGL ordinary share; one share per quote unit",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "forecast_period": "FY1 = FY2027 ended 2027-12-31",
+            "fy1_eps": 4.5,
+            "peer_dataset_key": "hardware-FY2027-GAAP",
+            "selected_multiple": "median",
+            "sensitivity_multiples": [
+              20,
+              22,
+              24
+            ],
+            "scenario_note": "A sensitivity at constant consensus EPS is not a probability distribution."
+          }
+        },
+        "futu/company-profile": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter equipment and industrial services",
+            "drivers": [
+              "datacenter customer capital spending",
+              "customer acceptance timing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "enterprise subscription infrastructure",
+            "drivers": [
+              "enterprise renewals",
+              "subscription pricing"
+            ],
+            "valuation_context": "FY2027 matching consensus and comparison multiples available"
+          },
+          "US.SPY": {
+            "source": "SYNTHETIC fund factsheet",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "ETF",
+            "structure": "unlevered diversified US equity index fund",
+            "liquidity": "daily exchange trading",
+            "cash_equivalent": false,
+            "lookthrough_holdings": null,
+            "risk_note": "Equity drawdown and overlap with large US companies; no constituent weights or return series supplied."
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "regulated utility metering and service subscriptions",
+            "drivers": [
+              "regulated meter replacement schedules",
+              "recurring maintenance contracts"
+            ],
+            "valuation_context": "20x FY2027 EPS; comparable cash-generative subscription services trade at 18-22x, with materially different regulatory risks."
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC issuer business description",
+            "as_of": "2026-10-14T12:00:00Z",
+            "business_type": "operating company",
+            "instrument_type": "ordinary share",
+            "business": "datacenter optical equipment",
+            "drivers": [
+              "same datacenter capex customers as AAPL",
+              "design-win acceptance"
+            ],
+            "valuation_context": "20x FY2027 EPS; new product already included in most analyst models."
+          }
+        },
+        "futu/headlines": {
+          "US.AAPL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.AAPL customer demand update",
+                "article_id": "US.AAPL-demand-oct"
+              }
+            ]
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-12",
+                "title": "US.MSFT customer demand update",
+                "article_id": "US.MSFT-demand-oct"
+              }
+            ]
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-14",
+                "title": "US.AMZN customer demand update",
+                "article_id": "US.AMZN-demand-oct"
+              }
+            ]
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC 30-day headline archive",
+            "coverage": "2026-09-15 through 2026-10-14 inclusive",
+            "complete_for_fixture": true,
+            "items": [
+              {
+                "published_at": "2026-10-14",
+                "title": "US.GOOGL customer demand update",
+                "article_id": "US.GOOGL-demand-oct"
+              }
+            ]
+          }
+        },
+        "filing/segments": {
+          "US.AAPL": {
+            "source": "SYNTHETIC US.AAPL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 55,
+            "top_two_customer_revenue_share_pct": 42,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": 1.12,
+              "net_revenue_retention_pct": null
+            },
+            "counterpoint": "Backlog is cancellable until acceptance."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC US.MSFT FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 45,
+            "top_two_customer_revenue_share_pct": 22,
+            "exposure_note": "Some datacenter operator customers are shared between synthetic AAPL and MSFT; no return correlation or pure-factor sensitivity is supplied.",
+            "operating_evidence": {
+              "book_to_bill": null,
+              "net_revenue_retention_pct": 115
+            },
+            "counterpoint": "Renewals can lag reductions in customer budgets."
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC US.AMZN FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 0,
+            "top_two_customer_revenue_share_pct": 12,
+            "exposure_note": "No datacenter demand driver is disclosed; utility procurement and rate approval are separate fundamental drivers. No quantitative correlation supplied.",
+            "operating_evidence": {
+              "maintenance_recurring_revenue_share_pct": 60,
+              "net_revenue_retention_pct": 108
+            },
+            "counterpoint": "One regulator can delay utility cost recovery; approvals are not guaranteed.",
+            "regulated_utility_customer_revenue_share_pct": 75
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC US.GOOGL FY2026 Q2 segment note",
+            "published_at": "2026-07-22",
+            "period_end": "2026-06-30",
+            "currency": "USD",
+            "unit": "million",
+            "datacenter_customer_revenue_share_pct": 80,
+            "top_two_customer_revenue_share_pct": 55,
+            "exposure_note": "The top two customers also buy synthetic AAPL equipment; product differences do not remove the common customer-capex driver.",
+            "operating_evidence": {
+              "book_to_bill": 1.15
+            },
+            "counterpoint": "A new optical launch can cannibalize the previous generation before margins recover."
+          }
+        },
+        "filing/earnings-release": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-21",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-10-23",
+            "last_guidance": {
+              "published_at": "2026-07-22",
+              "period_end": "2026-09-30",
+              "revenue_million": [
+                145,
+                155
+              ],
+              "diluted_eps": [
+                1.1,
+                1.3
+              ]
+            }
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-11-04"
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC issuer IR notice",
+            "published_at": "2026-10-09",
+            "fiscal_period": "FY2026 Q3 ended 2026-09-30",
+            "status": "not released as of research date",
+            "confirmed_release_date": "2026-11-04"
+          }
+        },
+        "filing/company-calendar": {
+          "US.AAPL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AAPL-FY2026Q3",
+            "earnings_date": "2026-10-21",
+            "status": "company_confirmed"
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.MSFT-FY2026Q3",
+            "earnings_date": "2026-10-23",
+            "status": "company_confirmed"
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.AMZN-FY2026Q3",
+            "earnings_date": "2026-11-04",
+            "status": "company_confirmed",
+            "other_confirmed_events": [
+              {
+                "date": "2026-10-27",
+                "event": "customer acceptance/results operating update"
+              }
+            ]
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC issuer IR calendar",
+            "published_at": "2026-10-09",
+            "event_id": "US.GOOGL-FY2026Q3",
+            "earnings_date": "2026-11-04",
+            "status": "company_confirmed",
+            "other_confirmed_events": [
+              {
+                "date": "2026-10-27",
+                "event": "customer acceptance/results operating update"
+              }
+            ]
+          }
+        },
+        "filing/article": {
+          "US.AAPL": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.AAPL-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          },
+          "US.MSFT": {
+            "source": "SYNTHETIC full issuer demand update",
+            "published_at": "2026-10-12",
+            "article_id": "US.MSFT-demand-oct",
+            "body": "Orders remain within the July guidance range; management has not raised guidance. Customers can defer acceptance. This update contains no quantified annual earnings change."
+          },
+          "US.AMZN": {
+            "source": "SYNTHETIC dated research digest of issuer release and consensus survey",
+            "published_at": "2026-10-14",
+            "article_id": "US.AMZN-demand-oct",
+            "body": "The issuer published independently witnessed meter qualification results on October 12: defect rate 0.4% versus the 1.0% acceptance ceiling. Two utility customers will report acceptance on October 27. This is a qualification step, not a booked order. An October 13 analyst survey of 8 EPS contributors still assumes 50% rollout for FY2027; full rollout could support EPS 4.8 in an issuer sensitivity, versus consensus EPS 4.0. The regulator has requested additional cost-recovery documentation; qualification alone cannot resolve it.",
+            "strategy_research_receipt": {
+              "source": "SYNTHETIC public listed-options research availability receipt",
+              "as_of": "2026-10-14T12:00:00Z",
+              "structure": "long call debit spread on the same underlying, same expiry, lower-strike long call and higher-strike short call",
+              "event_date": "2026-10-27",
+              "event_stage": "pre-acceptance update",
+              "contract_multiplier": 100,
+              "exercise_style": "American",
+              "available_expiries": null,
+              "verified_contract_identifiers": null,
+              "strikes": null,
+              "bid_ask": null,
+              "implied_volatility": null,
+              "open_interest": null,
+              "ex_dividend_date": null,
+              "broker_exercise_and_margin_rules": null,
+              "note": "No contract chain or executable spread quote is available. This receipt describes public research scope, not an options account analysis."
+            }
+          },
+          "US.GOOGL": {
+            "source": "SYNTHETIC dated research digest of issuer release and consensus survey",
+            "published_at": "2026-10-14",
+            "article_id": "US.GOOGL-demand-oct",
+            "body": "The issuer will publish optical-product acceptance data on October 27. Seven of eight October 13 EPS contributors already include commercial rollout in FY2027 EPS 4.5. The latest pilot met speed targets but consumed 15% more power than the launch specification; the issuer says firmware can close the gap. No customer acceptance or updated volume order is confirmed."
+          }
+        },
+        "futu/calendar": [
+          {
+            "symbol": "US.AAPL",
+            "event_id": "US.AAPL-FY2026Q3",
+            "date": "2026-10-21",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.MSFT",
+            "event_id": "US.MSFT-FY2026Q3",
+            "date": "2026-10-23",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.AMZN",
+            "event_id": "US.AMZN-operating-update",
+            "date": "2026-10-27",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          },
+          {
+            "symbol": "US.GOOGL",
+            "event_id": "US.GOOGL-operating-update",
+            "date": "2026-10-27",
+            "status": "company_confirmed",
+            "source": "SYNTHETIC issuer IR calendar"
+          }
+        ],
+        "futu/peers": {
+          "market": {
+            "source": "SYNTHETIC peer screen",
+            "as_of": "2026-10-14T12:00:00Z",
+            "currency": "USD",
+            "eps_basis": "US GAAP diluted ordinary-share EPS",
+            "period_end": "2027-12-31",
+            "groups": [
+              {
+                "dataset_key": "hardware-FY2027-GAAP",
+                "multiples": [
+                  20,
+                  22,
+                  24
+                ],
+                "business_comparability": "profitable datacenter equipment; growth and customer concentration differ"
+              },
+              {
+                "dataset_key": "software-FY2027-GAAP",
+                "multiples": [
+                  18,
+                  20,
+                  22
+                ],
+                "business_comparability": "profitable subscription infrastructure; retention and duration differ"
+              }
+            ],
+            "peer_symbols_are_not_candidates": true
+          }
+        },
+        "futu/economic-calendar": {
+          "market": {
+            "source": "SYNTHETIC event calendar",
+            "as_of": "2026-10-14T12:00:00Z",
+            "complete": true,
+            "coverage": "2026-10-15 through 2026-10-28 only",
+            "events": [
+              {
+                "date": "2026-10-16",
+                "event_id": "inflation-oct",
+                "name": "Synthetic inflation release",
+                "consensus_yoy_pct": 2.8,
+                "prior_yoy_pct": 2.9,
+                "probability": null
+              }
+            ],
+            "macro_context": {
+              "policy_rate_pct": 4.0,
+              "ten_year_yield_pct": 4.2,
+              "rate_observed_at": "2026-10-14T12:00:00Z",
+              "scenario_note": "No rate-shock probability or portfolio beta supplied."
+            }
+          }
+        }
+      }
+    }
+  ]
+}
