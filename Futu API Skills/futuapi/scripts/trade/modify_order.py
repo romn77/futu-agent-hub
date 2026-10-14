@@ -22,7 +22,9 @@ import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, order_number, emit_trade_error
 from common import (
+    check_ret,
     create_sec_or_future_trade_context,
     normalize_trade_ctx_type,
     TRADE_CTX_TYPE_CHOICES,
@@ -31,10 +33,8 @@ from common import (
     parse_security_firm,
     get_default_acc_id,
     get_default_trd_env,
-    check_ret,
     safe_close,
     safe_get,
-    safe_float,
     format_enum,
     is_empty,
     ModifyOrderOp,
@@ -57,8 +57,9 @@ def _audit_log(entry):
 def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
                  acc_id=None, market=None, trd_env=None, security_firm=None,
                  ctx_type="SEC", output_json=False):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
     trd_env = parse_trd_env(trd_env) if trd_env else get_default_trd_env()
+    require_real_account(acc_id, format_enum(trd_env), output_json=output_json)
     ctx_type = normalize_trade_ctx_type(ctx_type)
 
     if price is None and quantity is None:
@@ -70,28 +71,11 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
         sys.exit(1)
 
     if price is not None:
-        try:
-            price = float(price)
-        except (ValueError, TypeError):
-            msg = "价格必须为数字"
-            if output_json:
-                print(json.dumps({"error": msg}, ensure_ascii=False))
-            else:
-                print(f"错误: {msg}")
-            sys.exit(1)
+        price = order_number(price, "价格", output_json=output_json)
 
     if quantity is not None:
-        try:
-            quantity = int(quantity)
-            if quantity <= 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            msg = "数量必须为正整数"
-            if output_json:
-                print(json.dumps({"error": msg}, ensure_ascii=False))
-            else:
-                print(f"错误: {msg}")
-            sys.exit(1)
+        quantity = order_number(quantity, "数量", positive=True, integer=True, output_json=output_json)
+    adjust_limit = order_number(adjust_limit, "价格微调幅度", output_json=output_json)
 
     require_trading_enabled()
 
@@ -109,9 +93,9 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
             if ret_q == RET_OK and not is_empty(orders):
                 orig = orders.iloc[0]
                 if price is None:
-                    price = float(safe_float(safe_get(orig, "price", default=0)))
+                    price = safe_get(orig, "price", default=None)
                 if quantity is None:
-                    quantity = int(safe_float(safe_get(orig, "qty", default=0)))
+                    quantity = safe_get(orig, "qty", default=None)
 
         if price is None or quantity is None:
             msg = "无法从原订单获取价格或数量，请手动指定 --price 和 --quantity"
@@ -121,6 +105,11 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
                 print(f"错误: {msg}")
             sys.exit(1)
 
+        price = order_number(price, "原订单价格", output_json=output_json)
+        quantity = order_number(quantity, "原订单数量", positive=True, integer=True, output_json=output_json)
+        _audit_log({"action": "modify_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": format_enum(trd_env), "order_id": order_id,
+                    "quantity": quantity, "price": price})
         ret, data = ctx.modify_order(
             modify_order_op=ModifyOrderOp.NORMAL,
             order_id=order_id,
@@ -130,7 +119,7 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
             trd_env=trd_env,
             acc_id=acc_id,
         )
-        check_ret(ret, data, ctx, "改单")
+        check_ret(ret, data, raise_on_error=True, output_json=output_json, action="改单")
 
         if hasattr(data, "iloc"):
             row = data.iloc[0]
@@ -161,10 +150,7 @@ def modify_order(order_id, price=None, quantity=None, adjust_limit=0,
     except Exception as e:
         _audit_log({"action": "modify_order", "result": "error", "order_id": order_id,
                      "price": price, "quantity": quantity, "error": str(e)})
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
+        emit_trade_error(e, output_json=output_json)
         sys.exit(1)
     finally:
         safe_close(ctx)

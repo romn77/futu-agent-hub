@@ -31,7 +31,9 @@ import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, order_number, emit_trade_error
 from common import (
+    check_ret,
     create_trade_context,
     create_future_trade_context,
     is_event_contract_code,
@@ -41,7 +43,6 @@ from common import (
     get_default_acc_id,
     get_default_trd_env,
     infer_market_from_code,
-    check_ret,
     safe_close,
     format_enum,
     safe_get,
@@ -130,8 +131,9 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
                 confirmed=False, fill_outside_rth=False, session_str="NONE",
                 amount=None, pred_side=None, time_in_force="DAY", expire_time=None,
                 remark=""):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
     trd_env = parse_trd_env(trd_env) if trd_env else get_default_trd_env()
+    require_real_account(acc_id, format_enum(trd_env), output_json=output_json)
     trd_side = parse_trd_side(side)
     is_ec = is_event_contract_code(code)
     firm_enum = parse_security_firm(security_firm)
@@ -152,16 +154,12 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
     if amount is not None:
         if not is_ec:
             _fail("--amount 仅预测市场（EC.）可用", output_json)
+        amount = order_number(amount, "金额", positive=True, output_json=output_json)
         qty = 0
     elif quantity is None:
         _fail("必须指定 --quantity，或预测市场使用 --amount", output_json)
     else:
-        try:
-            if int(quantity) <= 0:
-                raise ValueError
-            qty = int(quantity)
-        except (ValueError, TypeError):
-            _fail("数量必须为正整数", output_json)
+        qty = order_number(quantity, "数量", positive=True, integer=True, output_json=output_json)
 
     if not is_ec:
         market = infer_market_from_code(code)
@@ -181,6 +179,7 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
         order_type_enum = OrderType.NORMAL
         if price is None:
             _fail("限价单必须指定 --price", output_json)
+        price = order_number(price, "价格", positive=True, output_json=output_json)
 
     try:
         tif_enum = _resolve_time_in_force(time_in_force)
@@ -329,8 +328,11 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
         if pred_side_enum is not None:
             order_kwargs["pred_side"] = pred_side_enum
 
+        _audit_log({"action": "place_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": format_enum(trd_env), "code": code, "side": side,
+                    "quantity": qty, "price": price, "amount": amount})
         ret, data = ctx.place_order(**order_kwargs)
-        check_ret(ret, data, ctx, "下单")
+        check_ret(ret, data, raise_on_error=True, output_json=output_json, action="下单")
 
         if hasattr(data, "iloc"):
             row = data.iloc[0]
@@ -379,10 +381,7 @@ def place_order(code, side, quantity=None, price=None, order_type="NORMAL",
         _audit_log({"action": "place_order", "result": "error", "code": code,
                      "side": side, "quantity": quantity, "amount": amount,
                      "price": price, "error": str(e)})
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
+        emit_trade_error(e, output_json=output_json)
         sys.exit(1)
     finally:
         safe_close(ctx)

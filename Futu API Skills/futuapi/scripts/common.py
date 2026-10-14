@@ -17,6 +17,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Optional
+from trade_validation import TradeAPIError, finite_number
 
 
 # ============================================================
@@ -610,17 +611,7 @@ def parse_qty(qty_str, code=None):
     """
     if qty_str is None:
         raise ValueError("数量不能为空")
-    try:
-        val = float(qty_str)
-    except (TypeError, ValueError):
-        raise ValueError(f"数量格式错误: {qty_str}")
-    if val <= 0:
-        raise ValueError("数量必须为正数")
-    if is_crypto_code(code):
-        return val
-    if float(val).is_integer():
-        return int(val)
-    raise ValueError(f"非加密货币订单数量必须为整数，收到: {qty_str}")
+    return finite_number(qty_str, "数量", positive=True, integer=not is_crypto_code(code))
 
 
 def infer_market_from_code(code):
@@ -967,7 +958,7 @@ _UNLOCK_NEEDED_HINT = (
 )
 
 
-def check_ret(ret, data, ctx=None, action="操作", output_json=None):
+def check_ret(ret, data, ctx=None, action="操作", output_json=None, *, raise_on_error=False):
     """检查 API 返回值，失败则打印错误并退出"""
     if ret != RET_OK:
         if output_json is None:
@@ -980,14 +971,17 @@ def check_ret(ret, data, ctx=None, action="操作", output_json=None):
         unlock_error = (not no_acc_error) and _is_unlock_needed_error(data)
         perm_error = (not no_acc_error) and (not unlock_error) and _is_permission_error(data)
 
+        err_obj = {"ret": ret, "action": action, "error": str(data)}
+        if no_acc_error:
+            err_obj["hint"] = _NO_ACCOUNT_HINT
+        elif unlock_error:
+            err_obj["hint"] = _UNLOCK_NEEDED_HINT
+        elif perm_error:
+            err_obj.update(_build_permission_hint_json())
+        if raise_on_error:
+            # The write entry point records the rejection and owns final cleanup.
+            raise TradeAPIError(err_obj)
         if output_json:
-            err_obj = {"ret": ret, "action": action, "error": str(data)}
-            if no_acc_error:
-                err_obj["hint"] = _NO_ACCOUNT_HINT
-            elif unlock_error:
-                err_obj["hint"] = _UNLOCK_NEEDED_HINT
-            elif perm_error:
-                err_obj.update(_build_permission_hint_json())
             print(json.dumps(err_obj, ensure_ascii=False))
         else:
             print(f"{action}失败: {data}")
@@ -1122,5 +1116,3 @@ def format_big_number(n, *, fixed: int = 2) -> str:
     if abs(v) >= 1e4:
         return f"{v / 1e4:.2f}万"
     return str(int(v)) if v == int(v) else f"{v:.{fixed}f}"
-
-

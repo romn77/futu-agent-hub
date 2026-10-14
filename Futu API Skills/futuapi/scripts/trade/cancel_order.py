@@ -20,7 +20,9 @@ import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, emit_trade_error
 from common import (
+    check_ret,
     create_sec_or_future_trade_context,
     normalize_trade_ctx_type,
     TRADE_CTX_TYPE_CHOICES,
@@ -29,7 +31,6 @@ from common import (
     parse_security_firm,
     get_default_acc_id,
     get_default_trd_env,
-    check_ret,
     safe_close,
     format_enum,
     ModifyOrderOp,
@@ -51,8 +52,9 @@ def _audit_log(entry):
 
 def cancel_order(order_id, acc_id=None, market=None, trd_env=None, security_firm=None,
                  ctx_type="SEC", output_json=False):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
     trd_env = parse_trd_env(trd_env) if trd_env else get_default_trd_env()
+    require_real_account(acc_id, format_enum(trd_env), output_json=output_json)
     ctx_type = normalize_trade_ctx_type(ctx_type)
 
     require_trading_enabled()
@@ -63,6 +65,8 @@ def cancel_order(order_id, acc_id=None, market=None, trd_env=None, security_firm
             market, security_firm=parse_security_firm(security_firm), ctx_type=ctx_type
         )
 
+        _audit_log({"action": "cancel_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": format_enum(trd_env), "order_id": order_id})
         ret, data = ctx.modify_order(
             modify_order_op=ModifyOrderOp.CANCEL,
             order_id=order_id,
@@ -71,7 +75,7 @@ def cancel_order(order_id, acc_id=None, market=None, trd_env=None, security_firm
             trd_env=trd_env,
             acc_id=acc_id,
         )
-        check_ret(ret, data, ctx, "撤单")
+        check_ret(ret, data, raise_on_error=True, output_json=output_json, action="撤单")
 
         result = {"order_id": order_id, "status": "cancelled"}
 
@@ -88,10 +92,7 @@ def cancel_order(order_id, acc_id=None, market=None, trd_env=None, security_firm
 
     except Exception as e:
         _audit_log({"action": "cancel_order", "result": "error", "order_id": order_id, "error": str(e)})
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
+        emit_trade_error(e, output_json=output_json)
         sys.exit(1)
     finally:
         safe_close(ctx)

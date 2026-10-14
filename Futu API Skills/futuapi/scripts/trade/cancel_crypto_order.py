@@ -12,20 +12,33 @@ import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, emit_trade_error
 from common import (
+    check_ret,
     create_crypto_trade_context,
     parse_security_firm,
     get_default_acc_id,
-    check_ret,
     safe_close,
     TrdEnv,
     ModifyOrderOp,
 )
 
 
+def _audit_log(entry):
+    import datetime
+    try:
+        log_path = _os.path.join(_os.path.expanduser("~"), ".futu_trade_audit.jsonl")
+        entry["timestamp"] = datetime.datetime.now().isoformat()
+        with open(log_path, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def cancel_crypto_order(order_id=None, cancel_all=False, acc_id=None,
                         security_firm=None, output_json=False, confirmed=False):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
+    require_real_account(acc_id, "REAL", output_json=output_json)
     firm_enum = parse_security_firm(security_firm)
 
     if not cancel_all and not order_id:
@@ -60,20 +73,29 @@ def cancel_crypto_order(order_id=None, cancel_all=False, acc_id=None,
     ctx = None
     try:
         ctx = create_crypto_trade_context(security_firm=firm_enum)
+        _audit_log({"action": "cancel_crypto_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": "REAL", "order_id": order_id, "cancel_all": cancel_all})
         if cancel_all:
             ret, data = ctx.cancel_all_order(trd_env=TrdEnv.REAL, acc_id=acc_id)
-            check_ret(ret, data, ctx, "加密货币全部撤单")
+            check_ret(ret, data, raise_on_error=True, output_json=output_json, action="加密货币全部撤单")
             result = {"action": "cancel_all", "status": "submitted"}
         else:
             ret, data = ctx.modify_order(ModifyOrderOp.CANCEL, order_id, 0, 0,
                                          trd_env=TrdEnv.REAL, acc_id=acc_id)
-            check_ret(ret, data, ctx, f"加密货币撤单(order_id={order_id})")
+            check_ret(ret, data, raise_on_error=True, output_json=output_json, action="加密货币撤单")
             result = {"action": "cancel", "order_id": str(order_id), "status": "submitted"}
 
+        _audit_log({"action": "cancel_crypto_order", "result": "success", "acc_id": acc_id,
+                    "order_id": order_id, "cancel_all": cancel_all})
         if output_json:
             print(json.dumps(result, ensure_ascii=False))
         else:
             print(f"撤单请求已提交: {result}")
+    except Exception as error:
+        _audit_log({"action": "cancel_crypto_order", "result": "error", "acc_id": acc_id,
+                    "order_id": order_id, "cancel_all": cancel_all, "error": str(error)})
+        emit_trade_error(error, output_json=output_json)
+        raise SystemExit(1)
     finally:
         safe_close(ctx)
 

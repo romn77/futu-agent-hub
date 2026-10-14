@@ -25,15 +25,15 @@ import sys
 import os as _os
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, order_number, emit_trade_error
 from common import (
+    check_ret,
     create_crypto_trade_context,
     parse_trd_env,
     parse_trd_side,
     parse_security_firm,
     get_default_acc_id,
     is_crypto_code,
-    parse_qty,
-    check_ret,
     safe_close,
     format_enum,
     safe_get,
@@ -61,7 +61,8 @@ def _audit_log(entry):
 def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
                        acc_id=None, security_firm=None, output_json=False,
                        confirmed=False):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
+    require_real_account(acc_id, "REAL", output_json=output_json)
     trd_side = parse_trd_side(side)
 
     if not is_crypto_code(code):
@@ -82,14 +83,7 @@ def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
             print(f"错误: {msg}")
         sys.exit(1)
 
-    try:
-        qty = parse_qty(quantity, code=code)
-    except ValueError as e:
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
-        sys.exit(1)
+    qty = order_number(quantity, "数量", positive=True, output_json=output_json)
 
     order_type_up = str(order_type).upper()
     if order_type_up == "MARKET":
@@ -101,7 +95,7 @@ def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
         if price is None:
             print("错误: 限价单必须指定 --price")
             sys.exit(1)
-        price_val = float(price)
+        price_val = order_number(price, "价格", positive=True, output_json=output_json)
         tif_enum = getattr(TimeInForce, "GTC", None) if TimeInForce else None
 
     firm_enum = parse_security_firm(security_firm)
@@ -152,8 +146,11 @@ def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
         )
         if tif_enum is not None:
             order_kwargs["time_in_force"] = tif_enum
+        _audit_log({"action": "place_crypto_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": "REAL", "code": code, "side": side,
+                    "quantity": qty, "price": price_val})
         ret, data = ctx.place_order(**order_kwargs)
-        check_ret(ret, data, ctx, "加密货币下单")
+        check_ret(ret, data, raise_on_error=True, output_json=output_json, action="加密货币下单")
 
         if hasattr(data, "iloc"):
             row = data.iloc[0]
@@ -193,10 +190,7 @@ def place_crypto_order(code, side, quantity, price=None, order_type="NORMAL",
     except Exception as e:
         _audit_log({"action": "place_crypto_order", "result": "error", "code": code,
                      "side": side, "quantity": quantity, "price": price, "error": str(e)})
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
+        emit_trade_error(e, output_json=output_json)
         sys.exit(1)
     finally:
         safe_close(ctx)

@@ -52,6 +52,16 @@ def test_changed_allowlisted_content_fails_identity_validation(tmp_path):
     assert "digest mismatch" in validation.detail
 
 
+def test_common_validation_dependency_is_copied_and_digest_checked(tmp_path):
+    candidate = _audited_copy(tmp_path)
+    helper = candidate / "scripts/trade_validation.py"
+    assert helper.is_file()
+    helper.write_text(helper.read_text() + "\n# modified dependency\n")
+    validation = skill_trust.validate_futuapi_skill(candidate)
+    assert not validation.valid
+    assert "scripts/trade_validation.py" in validation.detail
+
+
 def test_identity_is_stable_across_crlf_line_endings(tmp_path):
     candidate = _audited_copy(tmp_path)
     for record in skill_trust.audited_files():

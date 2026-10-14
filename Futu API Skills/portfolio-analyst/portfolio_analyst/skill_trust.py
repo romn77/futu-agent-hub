@@ -20,15 +20,19 @@ class AuditedCommand:
     script_path: Path
 
 
-# Audited against the repository's current official Skill. Every command imports only
-# scripts/common.py locally; all other imports are Python stdlib or the external futu SDK.
+# Audited against the repository's current official Skill. Commands import scripts/common.py and
+# its pure trade_validation.py dependency; other imports are stdlib or the external SDK.
 _AUDITED_FILES = (
     AuditedFile(
         Path("SKILL.md"), "5619a3fa58c8e36855f68b71238e39a65f140fe6822092bf5188716ad020c1cd"
     ),
     AuditedFile(
         Path("scripts/common.py"),
-        "5a8e160e09d79e98e383b17ef28479dd44ab0ee4d8ba1781febefbf09bdae6fa",
+        "256c28561c062e233a05d005bb519ef745b6f103350c6e28270f8fb550754ef4",
+    ),
+    AuditedFile(
+        Path("scripts/trade_validation.py"),
+        "73e4bcabc27481f552b3f84bb7a6eca9b50e5e83d09267943592627019a809e6",
     ),
     AuditedFile(
         Path("scripts/trade/get_accounts.py"),

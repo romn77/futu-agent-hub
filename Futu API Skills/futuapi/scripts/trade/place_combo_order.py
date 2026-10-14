@@ -29,7 +29,9 @@ import os as _os
 
 sys.path.insert(0, _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")))
 from trading_guard import TradingDisabledError, exit_trading_disabled, require_trading_enabled
+from trade_validation import require_real_account, order_number, finite_number, emit_trade_error
 from common import (
+    check_ret,
     create_trade_context,
     create_future_trade_context,
     is_event_contract_code,
@@ -38,7 +40,6 @@ from common import (
     get_default_acc_id,
     get_default_trd_env,
     infer_market_from_code,
-    check_ret,
     safe_close,
     format_enum,
     safe_get,
@@ -155,7 +156,7 @@ def _parse_combo_legs(legs_json):
         leg = ComboLeg()
         leg.code = code
         leg.trd_side = side_enum
-        leg.qty_ratio = float(qty_ratio)
+        leg.qty_ratio = finite_number(qty_ratio, "qty_ratio", positive=True)
         if "position_id" in item and item["position_id"] not in (None, ""):
             leg.position_id = int(item["position_id"])
 
@@ -229,8 +230,9 @@ def place_combo_order(legs_json, price, quantity, order_type="NORMAL",
                       acc_id=None, trd_env=None, security_firm=None, remark="",
                       time_in_force="DAY", expire_time=None, confirmed=False,
                       quote_id=None, output_json=False):
-    acc_id = acc_id or get_default_acc_id()
+    acc_id = get_default_acc_id() if acc_id is None else acc_id
     trd_env = parse_trd_env(trd_env) if trd_env else get_default_trd_env()
+    require_real_account(acc_id, format_enum(trd_env), output_json=output_json)
     firm_enum = parse_security_firm(security_firm)
 
     try:
@@ -258,11 +260,9 @@ def place_combo_order(legs_json, price, quantity, order_type="NORMAL",
     except ValueError as e:
         _fail(str(e), output_json)
 
-    try:
-        if float(quantity) <= 0:
-            raise ValueError
-    except (ValueError, TypeError):
-        _fail("quantity 必须为正数", output_json)
+    quantity = order_number(quantity, "数量", positive=True, output_json=output_json)
+    # Credit combinations can have negative prices; only require a finite value.
+    price = order_number(price, "价格", output_json=output_json)
 
     tif_name = str(time_in_force).upper()
     if tif_name == "GTD" and not expire_time:
@@ -329,8 +329,11 @@ def place_combo_order(legs_json, price, quantity, order_type="NORMAL",
         if quote_id:
             order_kwargs["quote_id"] = quote_id
 
+        _audit_log({"action": "place_combo_order", "result": "attempt", "acc_id": acc_id,
+                    "trd_env": format_enum(trd_env), "legs": json.loads(legs_json),
+                    "quantity": quantity, "price": price})
         ret, data = ctx.place_combo_order(**order_kwargs)
-        check_ret(ret, data, ctx, "组合下单")
+        check_ret(ret, data, raise_on_error=True, output_json=output_json, action="组合下单")
 
         if is_empty(data):
             result = {
@@ -387,10 +390,7 @@ def place_combo_order(legs_json, price, quantity, order_type="NORMAL",
             "quote_id": quote_id,
             "error": str(e),
         })
-        if output_json:
-            print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        else:
-            print(f"错误: {e}")
+        emit_trade_error(e, output_json=output_json)
         sys.exit(1)
     finally:
         safe_close(ctx)
