@@ -35,7 +35,12 @@ aggregation. The helper forwards the selection to its single snapshot acquisitio
 create a saved account preference. An unspecified account remains valid only with one candidate.
 
 Capture its stdout as internal evidence for report composition; never paste the raw JSON into chat or
-send it to web tools. The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`,
+send it to web tools. Invoke the helper exactly once for this analysis. If a response is long or a
+different view is needed, inspect/filter the retained result from that same invocation using the
+host's available context or read-only evidence access. Never rerun the helper to redisplay, trim,
+reformat or recheck its output; that would acquire another account snapshot. If the original result
+cannot be inspected reliably, disclose that limitation instead of silently reacquiring it.
+The helper is lifecycle-free: it runs a fresh REAL/USD `snapshot`, `risk`,
 `technical`, and `options` only when an option position is present. Technical runs after risk with
 the bound risk report when available, or from snapshot weights when risk is unavailable. It never
 calls `analyze`, lifecycle, saved history, or a persistence flag.
@@ -94,9 +99,32 @@ technical/option calculations; missing cash or required price prevents rebalance
 
 ## 4. Select and gather deep evidence
 
-Apply the deterministic selection in `research-policy.md`, capped at eight. Gather company,
-valuation, news/event, industry/macro sensitivity, and technical evidence only for those names.
-Research failure for one name does not erase its baseline holding row.
+Apply the deterministic selection and six research routes in `research-policy.md`: financials,
+estimate revisions, thesis, earnings preview, earnings recap and valuation. The default is at most
+eight names and two automatic full valuations; expand the corresponding budget only for an explicit
+wider request and disclose actual coverage. Every holding retains its baseline row.
+
+For each relevant question:
+
+1. Identify the public company/market, question, target period, depth and missing evidence.
+2. Choose one suitable main method from the host-provided skill catalog or a user-specified location.
+   Honor explicit source choices/exclusions; identify same-name skills by source/package and path.
+   Load only missing instructions/references. Already loaded methods can analyze existing evidence.
+3. Reuse qualified evidence first. For remaining gaps, use existing authorized public capabilities
+   guided by the selected skill, preferring same-basis Futu data when available. Shared public
+   calendars, peer groups and macro series are fetched once per relevant query/period, then matched
+   locally. Follow `tool-contract/core/research.md`; do not change the account adapter.
+4. Check actual results, important sources/periods/units and required calculations using
+   `evidence-policy.md`. Correct ordinary parameter/date/format errors; respect real permission
+   denials and limit retries for temporary failures. Missing optional skills do not stop the original
+   research path; a real evidence gap restricts only the affected claim.
+5. Connect supported and contrary evidence to the selected holding and shared portfolio drivers in
+   this host context. Keep public data requests free of private portfolio context. Produce no
+   independent upstream report, workbook, saved thesis, new account read or simulation by default.
+
+Gather company, valuation, news/event, industry/macro sensitivity and existing technical context at
+the selected depth. Follow Futu capability references only when using those public steps; the list
+is a navigation aid, not an interface implementation backlog or permission whitelist.
 
 ## 5. Add conditional layers
 
@@ -107,6 +135,7 @@ triggers in `intent-routing.md`.
 ## 6. Compose
 
 Return the output-contract sections as Markdown in chat. Cite all account facts with the same
-`snapshot_id` and `as_of`; cite changing external facts with traceable links and timestamps. Show
+`snapshot_id` and `as_of`; support external facts with the evidence policy's sources, periods and
+units, including direct links or actual tool-result locators. Use stable output-contract headings. Show
 local gaps next to impacted conclusions and summarize them in the final gaps section. Before a
 successful envelope returns, the helper has completed guarded cleanup under the threat model above.

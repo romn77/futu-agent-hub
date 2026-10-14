@@ -76,7 +76,7 @@ def test_skill_is_a_lean_read_only_router_with_a_minimal_default_path():
     assert "place order" in skill.lower()
     assert "For account and brokerage data access, use only" in skill
     assert "bundled `portfolio-analyst` CLI" in skill
-    assert "host's authorized read-only search/page-reading capabilities" in skill
+    assert "existing authorized public research capabilities" in skill
     assert "references/evidence-policy.md" in skill
 
     default_route = _section(skill, "Default comprehensive route")
@@ -243,6 +243,24 @@ def test_web_research_is_public_minimal_and_treats_pages_as_untrusted():
         "never upload local files",
     ):
         assert untrusted_rule in evidence
+
+
+def test_public_research_collaboration_preserves_the_account_boundary():
+    skill = _read("SKILL.md")
+    workflow = _read("references/workflow.md")
+    research = _read("references/tool-contract/core/research.md")
+
+    assert "For account and brokerage data access, use only" in skill
+    assert "scripts/current_analysis.py" in workflow
+    assert "SDK/MCP" in research
+    assert "same host" in research
+    assert "already loaded" in research
+    assert "Missing optional skills" in research
+    assert "permission denial" in research
+    assert "web access is absent" in research
+    assert "six research routes" in workflow
+    assert "research-mode" not in skill
+    assert "to bypass missing host web access" not in research
 
 
 def test_workflow_routes_to_the_owned_current_analysis_helper():

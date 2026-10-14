@@ -6,6 +6,9 @@ target weight, amount, or shares. A comprehensive review by itself is not action
 ## Advice boundary
 
 - Explain evidence and trade-offs before any proposed change.
+- A request for advice can receive a supported conclusion without a numerical target. Ask for
+  missing target parameters only when a quantifiable simulation is actually needed; do not turn
+  every advice request into an input questionnaire.
 - Do not force every holding into `ADD/HOLD/TRIM/EXIT`.
 - Gain/loss, one threshold, or technical evidence alone cannot determine a recommendation.
 - Do not proactively recommend unheld new stocks. Research replacements/candidates only when the user

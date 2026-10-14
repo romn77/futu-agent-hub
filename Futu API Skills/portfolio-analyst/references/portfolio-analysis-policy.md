@@ -26,9 +26,16 @@ fundamentals, valuation, thesis, redundancy, cycle, macro sensitivity, and techn
 
 ## Three principal risks
 
-Select exactly three principal portfolio risks from supported evidence. Describe the measured value,
-affected holdings, why it matters to this portfolio, and any local data limitation. Risk selection
-must not cause any holding to disappear from the baseline table.
+Fill three principal-risk evidence slots with supported findings, or an explicit data gap/lack of a
+confirmable risk when evidence is insufficient. Never invent a risk to fill the three slots.
+Describe the measured value, affected holdings, why it matters to this portfolio, and any local data
+limitation. Risk selection must not cause any holding to disappear from the baseline table.
+
+Combine selected research into portfolio implications: common demand drivers, industry/macro
+exposure and concentration may persist despite strong individual companies. Qualitative overlap is
+not a measured correlation. Keep facts, interpretation and scenarios distinct, and preserve the
+bound snapshot's weights rather than substituting research quotes. Explain thesis support and
+material contrary evidence without inventing historical purchase reasons.
 
 ## Transparent fallback thresholds
 
