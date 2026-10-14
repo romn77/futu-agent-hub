@@ -239,6 +239,9 @@ def _sections(markdown):
     sections, current, current_level = {}, None, None
     for line in markdown.splitlines():
         match = re.fullmatch(r"\s*(?:(#{1,6})\s+(.+?)\s*#*|\*\*(.+?)\*\*)\s*", line)
+        if match and match.group(3) and match.group(3).rstrip().endswith((":", "：")):
+            # A bold colon label introduces paragraph/list content, not a peer section.
+            match = None
         title = (match.group(2) or match.group(3)) if match else ""
         level = (len(match.group(1)) if match.group(1) else 2) if match else None
         title = re.sub(r"^\d+[.)、：:]\s*", "", title).strip().strip(":：")
@@ -260,6 +263,33 @@ def _sections(markdown):
 
 def _section(markdown, heading):
     return _sections(markdown).get(heading, "")
+
+
+def _research_without_peer_comparisons(research, held):
+    """Exclude declared comparison scopes; their prose still requires semantic review."""
+    lines, selected_holding, comparison = [], False, False
+    for line in research.splitlines():
+        heading = re.fullmatch(r"\s*(#{1,6})\s+(.+?)\s*#*\s*", line)
+        if heading:
+            level, title = len(heading.group(1)), heading.group(2).strip()
+            if level <= 4:
+                comparison = False
+            if level <= 3:
+                identities = set(SYMBOL.findall(title))
+                selected_holding = level == 3 and len(identities) == 1 and identities <= held
+            if (
+                level == 4
+                and selected_holding
+                and title.casefold()
+                in {
+                    "peer comparisons",
+                    "同行比较",
+                }
+            ):
+                comparison = True
+        if not comparison:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def _source_as_of_present(markdown, source_as_of):
@@ -289,7 +319,13 @@ def _argv(command):
             and len(values) == 3
             and values[1] in {"-c", "-lc"}
         ):
-            values = shlex.split(values[2])
+            command = values[2]
+            values = shlex.split(command)
+        # Only direct literal invocations establish a receipt, never shell composition.
+        if re.search(r"[;&|<>()`$\r\n]", command):
+            return []
+        if values and Path(values[0]).name in {"python", "python3"} and values[1:2] == ["-B"]:
+            values = values[:1] + values[2:]
         return values
     except ValueError:
         return []
@@ -360,7 +396,9 @@ def build_audit(case, events, fixture, workspace):
         identity = cell if cell in held else f"US.{cell}"
         if identity in held:
             holdings.append(identity)
-    research = _section(response, "Selected deep research")
+    research = _research_without_peer_comparisons(
+        _section(response, "Selected deep research"), held
+    )
     deep = set()
     for line in research.splitlines():
         cells = line.strip().split("|")
@@ -406,7 +444,7 @@ def build_audit(case, events, fixture, workspace):
                 for field, pattern in (
                     ("multiplier", r"multiplier|合约乘数"),
                     ("underlying", r"underlying|标的"),
-                    ("moneyness", r"moneyness|ITM/OTM|价内|价外"),
+                    ("moneyness", r"moneyness|ITM[/／](?:ATM[/／])?OTM|价内|价外"),
                 )
                 if re.search(pattern, option_text, re.I)
             ],
@@ -470,7 +508,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.2",
+            "runner_version": "1.0.5",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

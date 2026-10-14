@@ -89,6 +89,104 @@ def test_model_self_report_cannot_manufacture_tool_evidence(tmp_path):
     assert audit["trace"]["observations"]["workflow"]["stop"] is True
 
 
+@pytest.mark.parametrize(
+    "invocation,accepted",
+    [
+        ("python {args}", True),
+        ("python -B {args}", True),
+        ("python3 -B {args}", True),
+        ("/bin/zsh -lc 'python -B {args}'", True),
+        ("python -c {args}", False),
+        ("python -m {args}", False),
+        ("python -B -c {args}", False),
+        ("python -B -m {args}", False),
+        ("python -B -X utf8 {args}", False),
+        ("python -BB {args}", False),
+        ("python {args}; echo fake", False),
+        ("python {args} && true", False),
+        ("/bin/zsh -lc 'python {args}; echo fake'", False),
+        ("python {args}\necho fake", False),
+        ("python {args} $(echo surprise)", False),
+    ],
+)
+def test_python_script_receipts_accept_only_optional_b_flag(tmp_path, invocation, accepted):
+    from portfolio_analyst.rebalance import request_from_document, simulate_rebalance
+    from portfolio_analyst.snapshot_io import snapshot_from_document
+
+    producer = _producer()
+    case = producer.load_cases()["explicit-rebalance-request"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    request = json.loads((workspace / ".fixture/request.json").read_text())
+    simulation = simulate_rebalance(
+        snapshot_from_document(fixture["snapshot"]), request_from_document(request)
+    ).to_dict()
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": invocation.format(args=args),
+                "aggregated_output": json.dumps(body),
+                "status": "completed",
+                "exit_code": 0,
+            },
+        }
+        for args, body in (
+            ("scripts/current_analysis.py", fixture),
+            (
+                "scripts/portfolio.py simulate --snapshot .fixture/snapshot.json "
+                "--request .fixture/request.json --json --no-save",
+                simulation,
+            ),
+        )
+    ]
+    events.append(
+        {"type": "item.completed", "item": {"type": "agent_message", "text": "Fixture report"}}
+    )
+    trace = producer.build_audit(case, events, fixture, workspace)["trace"]
+    assert bool(trace["snapshot"]) is accepted
+    assert trace["observations"]["simulation"]["scenarios"] == ([request] if accepted else [])
+    assert trace["observations"]["simulation"]["target_weight"] == ("0.12" if accepted else None)
+    assert trace["observations"]["execution"]["evidence_pass"] is False
+
+
+@pytest.mark.parametrize(
+    "command,output_change,status,exit_code",
+    [
+        ("python -B scripts/current_analysis.py --unexpected", False, "completed", 0),
+        ("python -B scripts/other.py", False, "completed", 0),
+        ("python -B scripts/current_analysis.py", True, "completed", 0),
+        ("python -B scripts/current_analysis.py", False, "in_progress", 0),
+        ("python -B scripts/current_analysis.py", False, "completed", 1),
+    ],
+)
+def test_python_b_helper_still_requires_exact_successful_fixture_receipt(
+    tmp_path, command, output_change, status, exit_code
+):
+    producer = _producer()
+    case = producer.load_cases()["comprehensive-many-holdings"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    output = {**fixture, "degradations": ["different result"]} if output_change else fixture
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": json.dumps(output),
+                "status": status,
+                "exit_code": exit_code,
+            },
+        },
+        {"type": "item.completed", "item": {"type": "agent_message", "text": "Fixture report"}},
+    ]
+    trace = producer.build_audit(case, events, fixture, workspace)["trace"]
+    assert trace["snapshot"] == {}
+    assert trace["observations"]["workflow"]["stop"] is True
+
+
 def test_stdout_without_completed_turn_is_not_a_model_pass(tmp_path):
     producer = _producer()
     with pytest.raises(ValueError, match="MODEL_EXECUTION_INCOMPLETE"):
@@ -261,12 +359,19 @@ def test_chinese_headings_and_research_table_are_observed_without_model_self_rep
     assert observations["deep_research"]["eligible_omissions_disclosed"] is True
 
 
-def test_chinese_option_status_and_gaps_are_independently_observed(tmp_path):
+@pytest.mark.parametrize(
+    "moneyness", ["价内/价外", "ITM/OTM", "ITM/ATM/OTM", "ITM／OTM", "ITM／ATM／OTM"]
+)
+@pytest.mark.parametrize("gap_label", ["分析能力缺口：", "**分析能力缺口：**\n\n- "])
+def test_chinese_option_status_and_gaps_are_independently_observed(tmp_path, moneyness, gap_label):
     producer = _producer()
     case = producer.load_cases()["conditional-options-degradation"]
     workspace = tmp_path / "work"
     fixture = producer.prepare_workspace(workspace, case["id"])
-    response = "**期权风险**\n工具状态：COMPLETE\n分析能力缺口：缺少合约乘数、标的映射和价内/价外判定。原始单位 RAW_CONTRACT_UNITS_NO_MULTIPLIER。"
+    response = (
+        f"**期权风险**\n工具状态：COMPLETE\n{gap_label}缺少合约乘数、标的映射和"
+        f"{moneyness} 判定。原始单位 RAW_CONTRACT_UNITS_NO_MULTIPLIER。"
+    )
     audit = producer.build_audit(
         case,
         [{"type": "item.completed", "item": {"type": "agent_message", "text": response}}],
@@ -275,7 +380,27 @@ def test_chinese_option_status_and_gaps_are_independently_observed(tmp_path):
     )
     options = audit["trace"]["observations"]["options"]
     assert options["reported_tool_status"] == "COMPLETE"
+    assert options["analysis_gaps_disclosed"] is True
     assert options["capability_gaps"] == ["multiplier", "underlying", "moneyness"]
+
+
+@pytest.mark.parametrize("colon", [":", "："])
+def test_budget_omissions_after_standalone_bold_colon_label_are_observed(tmp_path, colon):
+    producer = _producer()
+    case = producer.load_cases()["comprehensive-many-holdings"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    symbols = [f"{row['market']}.{row['symbol']}" for row in fixture["snapshot"]["positions"]]
+    response = "## 重点研究\n" + "\n".join(f"### {symbol}\n数据不可用" for symbol in symbols[:8])
+    response += f"\n## 数据缺口与来源\n**预算未覆盖的重点研究名单{colon}**\n\n"
+    response += "- 因默认 8 个名字上限未入选：" + "、".join(symbols[8:12])
+    audit = producer.build_audit(
+        case,
+        [{"type": "item.completed", "item": {"type": "agent_message", "text": response}}],
+        fixture,
+        workspace,
+    )
+    assert audit["trace"]["observations"]["deep_research"]["eligible_omissions_disclosed"] is True
 
 
 @pytest.mark.parametrize(
@@ -291,7 +416,9 @@ def test_equivalent_chinese_report_headings_have_the_same_section(title, canonic
     assert producer._section(f"**{title}**\n独立观察", canonical) == "独立观察"
 
 
-@pytest.mark.parametrize("heading", ["## 未识别的新章节", "**未识别的新章节**"])
+@pytest.mark.parametrize(
+    "heading", ["## 未识别的新章节", "## 未识别的新章节：", "**未识别的新章节**"]
+)
 def test_unknown_peer_heading_ends_the_holdings_table_scope(heading):
     producer = _producer()
     text = (
@@ -302,6 +429,97 @@ def test_unknown_peer_heading_ends_the_holdings_table_scope(heading):
     section = producer._section(text, "Complete holdings table")
     assert "US.AAPL" in section
     assert "US.MSFT" not in section
+
+
+def test_output_contract_headings_are_observable_in_both_languages():
+    producer = _producer()
+    contract = (producer.ROOT / "references/output-contract.md").read_text(encoding="utf-8")
+    pairs = []
+    for line in contract.splitlines():
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 2 and cells[0] in producer.SECTION_ALIASES:
+            pairs.append(cells)
+    assert len(pairs) == len(producer.SECTION_ALIASES)
+    for column in (0, 1):
+        report = "\n\n".join(f"## {pair[column]}\nEvidence" for pair in pairs)
+        assert list(producer._sections(report)) == list(producer.SECTION_ALIASES)
+
+
+def test_output_contract_requires_first_column_for_research_symbols():
+    contract = (ROOT / "references/output-contract.md").read_text(encoding="utf-8")
+    assert "first column named `Symbol`" in contract
+
+
+@pytest.mark.parametrize("comparison_title", ["Peer comparisons", "同行比较"])
+@pytest.mark.parametrize(
+    "continuation,expected_deep,expected_candidates",
+    [
+        ("", 1, 0),
+        ("\n## Observations\nConsider US.PEER as a replacement.", 1, 1),
+        ("\n### US.PEER\nUnrequested research on another company.", 2, 1),
+        ("\n#### Research implications\nConsider US.PEER as a replacement.", 1, 1),
+        ("\n### US.MSFT\nConsider US.PEER as a replacement.", 2, 1),
+    ],
+)
+def test_declared_peer_scope_is_excluded_without_hiding_later_candidates(
+    tmp_path, comparison_title, continuation, expected_deep, expected_candidates
+):
+    producer = _producer()
+    case = producer.load_cases()["comprehensive-many-holdings"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    response = (
+        "## Selected deep research\n### US.AAPL\nSelected holding evidence.\n"
+        f"#### {comparison_title}\n"
+        "US.PEER supplies the comparison multiple.\n"
+        "##### Valuation inputs\n| Symbol | Multiple | Source |\n"
+        "| US.PEER | 20x | synthetic comparison |\n" + continuation
+    )
+    audit = producer.build_audit(
+        case,
+        [{"type": "item.completed", "item": {"type": "agent_message", "text": response}}],
+        fixture,
+        workspace,
+    )
+    observations = audit["trace"]["observations"]
+    assert observations["deep_research"]["max_names"] == expected_deep
+    assert observations["unheld_candidates"]["count"] == expected_candidates
+    # A scoped peer exception cannot manufacture the missing account/tool evidence.
+    assert observations["workflow"]["stop"] is True
+    assert audit["trace"]["snapshot"] == {}
+
+
+@pytest.mark.parametrize(
+    "research,expected_deep,expected_candidates",
+    [
+        ("### US.AAPL\nUS.PEER has a similar business.", 1, 1),
+        ("#### Peer comparisons\n| US.PEER | 20x | source |", 1, 1),
+        ("### US.UNHELD\n#### Peer comparisons\nUS.PEER is comparable.", 1, 2),
+        ("### US.AAPL\n### Peer comparisons\n| US.PEER | 20x | source |", 2, 1),
+        ("### US.AAPL\n#### Peer comparisons and advice\nUS.PEER is comparable.", 1, 1),
+    ],
+)
+def test_unheld_mentions_outside_valid_peer_scope_remain_conservative(
+    tmp_path, research, expected_deep, expected_candidates
+):
+    producer = _producer()
+    case = producer.load_cases()["comprehensive-many-holdings"]
+    workspace = tmp_path / "work"
+    fixture = producer.prepare_workspace(workspace, case["id"])
+    audit = producer.build_audit(
+        case,
+        [
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "## Selected deep research\n" + research},
+            }
+        ],
+        fixture,
+        workspace,
+    )
+    observations = audit["trace"]["observations"]
+    assert observations["deep_research"]["max_names"] == expected_deep
+    assert observations["unheld_candidates"]["count"] == expected_candidates
 
 
 def test_research_subheadings_remain_inside_research_section():
