@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import json
 import re
 import sys
@@ -91,9 +92,9 @@ def collect_option_metadata(
             return OpenQuoteContext(host=host, port=port)
 
         market_values = {"US": Market.US, "HK": Market.HK}
-        option_security_type = SecurityType.OPTION
+        option_security_type = SecurityType.DRVT
     if option_security_type is None:
-        option_security_type = "OPTION"
+        option_security_type = "DRVT"
     context = context_factory(host=host, port=port)
     result_rows: list[dict[str, object]] = []
     try:
@@ -125,7 +126,9 @@ def main() -> int:
         if len(raw) > 16 * 1024:
             return 2
         host, port, identities = _parse_request(raw)
-        result = collect_option_metadata(identities, host=host, port=port)
+        # Futu binds its console logger during import; keep SDK logs off the JSON pipe.
+        with redirect_stdout(sys.stderr):
+            result = collect_option_metadata(identities, host=host, port=port)
         encoded = json.dumps(
             result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode()

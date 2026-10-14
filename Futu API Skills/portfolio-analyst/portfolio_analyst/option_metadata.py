@@ -16,6 +16,7 @@ import sys
 import time
 from typing import Callable, Iterable, Mapping
 
+from .child_environment import controlled_child_environment
 from .models import _decimal_text, decimal_fits_report
 
 
@@ -332,11 +333,6 @@ class FutuOptionMetadataProvider:
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONNOUSERSITE": "1",
-        }
         try:
             completed = self._runner(
                 [sys.executable, "-s", str(self._worker_path)],
@@ -345,7 +341,7 @@ class FutuOptionMetadataProvider:
                 stderr=subprocess.PIPE,
                 timeout=timeout,
                 shell=False,
-                env=env,
+                env=controlled_child_environment(purpose="doctor"),
                 check=False,
             )
         except subprocess.TimeoutExpired:

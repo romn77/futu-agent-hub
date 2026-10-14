@@ -425,7 +425,7 @@ def build_audit(case, events, fixture, workspace):
     option_text = _section(response, "Option risk")
     option_report = fixture["options"]
     reported_status = re.search(
-        r"(?:tool status|工具状态|工具输出状态)[\s*`：:]+(COMPLETE|PARTIAL|UNAVAILABLE)\b",
+        r"(?:tool status|工具状态|工具输出状态)(?:为)?[\s*`：:]+(COMPLETE|PARTIAL|UNAVAILABLE)\b",
         option_text,
         re.I,
     )
@@ -508,7 +508,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.5",
+            "runner_version": "1.0.6",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

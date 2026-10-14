@@ -6,6 +6,7 @@ inferred from a code/name. Exact-code USER_CONFIG remains a fallback when OpenD 
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from dataclasses import replace
 import json
 import os
@@ -93,6 +94,7 @@ class FutuSecurityTypeProvider:
         self.runner = runner or _bounded_subprocess_run
 
     def metadata(self, identities, *, timeout):
+        from .child_environment import controlled_child_environment
         from .option_metadata import validate_opend_endpoint
 
         requested = _identities(identities)
@@ -114,11 +116,7 @@ class FutuSecurityTypeProvider:
                 timeout=timeout,
                 check=False,
                 shell=False,
-                env={
-                    "PATH": os.environ.get("PATH", ""),
-                    "PYTHONNOUSERSITE": "1",
-                    "PYTHONIOENCODING": "utf-8",
-                },
+                env=controlled_child_environment(purpose="doctor"),
             )
         except subprocess.TimeoutExpired:
             raise ValueError("SECURITY_METADATA_TIMEOUT") from None
@@ -182,7 +180,9 @@ def main():
         request = json.loads(raw)
         if set(request) != {"host", "port", "identities"}:
             return 2
-        body = collect_security_types(**request)
+        # Futu binds its console logger during import; keep SDK logs off the JSON pipe.
+        with redirect_stdout(sys.stderr):
+            body = collect_security_types(**request)
         encoded = json.dumps(body, allow_nan=False).encode()
         if len(encoded) > MAX_BYTES:
             return 2

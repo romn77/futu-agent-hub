@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,14 +77,14 @@ def test_worker_batches_only_us_and_hk_and_returns_allowlisted_fields():
     result = collect_option_metadata(
         ["HK.00700260116P00300000", "US.AAPL260116C00150000"],
         context_factory=factory,
-        option_security_type="OPTION",
+        option_security_type="DRVT",
         host="10.0.0.8",
         port=22222,
     )
 
     assert calls == [
-        ("HK", "OPTION", ("HK.00700260116P00300000",)),
-        ("US", "OPTION", ("US.AAPL260116C00150000",)),
+        ("HK", "DRVT", ("HK.00700260116P00300000",)),
+        ("US", "DRVT", ("US.AAPL260116C00150000",)),
     ]
     assert all(context.closed for context in contexts)
     assert result == {
@@ -106,6 +107,45 @@ def test_worker_batches_only_us_and_hk_and_returns_allowlisted_fields():
             },
         ]
     }
+
+
+@pytest.mark.parametrize("context_source", ["sdk", "injected"])
+def test_worker_queries_options_with_sdk_drvt_security_type(context_source, monkeypatch):
+    calls = []
+    row = {
+        "code": "US.AAPL260116C00150000",
+        "lot_size": 100,
+        "stock_owner": "US.AAPL",
+        "option_type": "CALL",
+        "strike_time": "2026-01-16",
+        "strike_price": 150,
+    }
+    context = _QuoteContext(calls, [row])
+
+    def factory(*, host, port):
+        assert (host, port) == ("127.0.0.1", 11111)
+        return context
+
+    # futu-api 10.10.7008 defines DRVT for options, with no OPTION alias.
+    monkeypatch.setitem(
+        sys.modules,
+        "futu",
+        SimpleNamespace(
+            Market=SimpleNamespace(US="US", HK="HK"),
+            SecurityType=SimpleNamespace(DRVT="DRVT"),
+            OpenQuoteContext=factory,
+        ),
+    )
+    result = collect_option_metadata(
+        [row["code"]],
+        host="127.0.0.1",
+        port=11111,
+        context_factory=factory if context_source == "injected" else None,
+    )
+
+    assert calls == [("US", "DRVT", (row["code"],))]
+    assert result == {"data": [row]}
+    assert context.closed
 
 
 def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
@@ -131,7 +171,7 @@ def test_worker_normalizes_dataframe_scalar_values_for_json_boundary():
     result = collect_option_metadata(
         ["US.A"],
         context_factory=lambda **_endpoint: context,
-        option_security_type="OPTION",
+        option_security_type="DRVT",
         host="127.0.0.1",
         port=11111,
     )
@@ -175,8 +215,22 @@ class _Completed:
         self.returncode = returncode
 
 
-def test_parent_uses_isolated_python_canonical_input_and_controlled_environment():
+def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(monkeypatch):
     observed = {}
+    safe = {"HOME": "/safe/home", "USERPROFILE": "C:/safe/home", "SYSTEMROOT": "C:/Windows"}
+    forbidden = (
+        "FUTU_TRADE_PWD",
+        "FUTU_LOGIN_PWD",
+        "FUTU_ACC_ID",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    )
+    for key, value in safe.items():
+        monkeypatch.setenv(key, value)
+    for key in forbidden:
+        monkeypatch.setenv(key, "must-not-inherit")
 
     def runner(command, **kwargs):
         observed["command"] = command
@@ -207,7 +261,10 @@ def test_parent_uses_isolated_python_canonical_input_and_controlled_environment(
     assert observed["input"] == (
         b'{"host":"10.0.0.8","identities":["US.AAPL260116C00150000"],"port":22222}'
     )
-    assert set(observed["env"]) == {"PATH", "PYTHONIOENCODING", "PYTHONNOUSERSITE"}
+    assert safe.items() <= observed["env"].items()
+    assert not set(forbidden) & observed["env"].keys()
+    assert observed["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert observed["env"]["PYTHONNOUSERSITE"] == "1"
     assert payload["data"][0]["lot_size"] == 100
 
 

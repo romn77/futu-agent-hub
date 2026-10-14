@@ -16,6 +16,13 @@ are labeled `RAW_CONTRACT_UNITS_NO_MULTIPLIER`; aggregates require complete popu
 Status may be `COMPLETE`, `PARTIAL`, `UNAVAILABLE`, or `NOT_APPLICABLE`; quote freshness is
 `UNVERIFIED`.
 
+The audited quote facade permits one `BUY` leg of quantity `1.0`. SDK versions that omit a
+response `code` use an explicit `request_binding` in the retained source evidence (command, code,
+action, quantity); this records the audited request, not a vendor identity echo. Bare responses
+without `code` remain invalid. A supplied response code must match, and malformed, multirow, or
+source-prebound responses are rejected. The binding survives bounded evidence normalization and
+semantic replay; it does not establish quote freshness.
+
 A package-owned bounded quote-only worker may additionally provide Futu static option metadata:
 multiplier (`lot_size`, provenance `FUTU_STATIC_INFO_LOT_SIZE`), exact underlying, Call/Put right,
 expiry, and strike. From those fields and only the same embedded snapshot, the command derives
