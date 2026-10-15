@@ -64,3 +64,8 @@
   主目录 approval-summary.json 是待确认范围，prepared/*/inputs.json 是逐文件清单。
 - 数值核对的临时副本将 `<=` 反转为 `>=` 后 5 项测试失败，证明比较逻辑变坏会被捕获；
   原源码未修改。最终所有本地代码及测试 Ruff check/format 通过，差异检查无空白错误。
+- [待执行证据包](../output/reliability-20261015/prepared-evidence.tar.gz) 与
+  [归档回执](../output/reliability-20261015/archive-receipt.json) 已保留在忽略目录，
+  状态为 PREPARED_NOT_EXECUTED；归档 SHA-256 为
+  `ac10d7f7561aacb26327c87c96d8ab9a0709e343e5d9e24b193d95e00236fb1b`。
+  这是准备材料和本地验证，不是已执行的模型报告或盲评结果。
