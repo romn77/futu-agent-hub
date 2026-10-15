@@ -35,6 +35,10 @@ Short comment: 1–3 evidence-based sentences. No Role, Inferred role, Score, Ra
 or forced `ADD/HOLD/TRIM/EXIT` columns. Identify shorts without implying complete short-risk analysis.
 Cash remains in Overview; researched candidates never enter this table.
 
+Before sending, reconcile final rows to the retained snapshot: weight, market value and unrealized
+P&L must remain in their own columns, including unknowns. A correct total or complete symbol list
+does not excuse a missing cell. Repair only the affected presentation; do not reacquire account data.
+
 For each selected held name use a level-three snapshot symbol heading (e.g. `### US.AAPL`) or a
 research table's first column named `Symbol`. Retain selected names even when evidence is unavailable.
 Explain 1–2 decisive questions through evidence, interpretation, portfolio implication and contrary

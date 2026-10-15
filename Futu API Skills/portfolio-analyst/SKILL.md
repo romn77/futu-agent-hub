@@ -19,8 +19,9 @@ reader. Public research uses existing authorized public research capabilities, n
 
 ## Default comprehensive route
 
-For each new comprehensive analysis, read these references, reusing complete current-version content
-already loaded in this session:
+Before acquisition, use the complete current-version content of these references. Read only documents
+missing from available context; a link or later step does not require reloading them. If prior output
+was truncated, recover missing content rather than rereading the collection:
 
 1. [Workflow](references/workflow.md) and [intent routing](references/intent-routing.md).
 2. [Portfolio analysis](references/portfolio-analysis-policy.md),

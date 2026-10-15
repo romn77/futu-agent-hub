@@ -40,6 +40,7 @@ with a short reminder beside materially affected claims.
 | Evidence | Required check |
 |---|---|
 | Missing inputs | Keep null/NaN/unavailable distinct from zero; never silently default cash, debt, shares, beta or revisions with `or 0`. |
+| Stocks versus flows | Cash/cash equivalents is a balance at a date. CFO, CapEx and FCF cover a period: CFO less positive cash CapEx is a period flow, never cash balance. Preserve source definitions, outflow signs, units, period and reported/adjusted basis in nearby prose. |
 | TTM | Four complete, consecutive, nonoverlapping standalone quarters; convert cumulative reports before summing. `num=4` is not proof. |
 | Forecast/peer multiples | Align FY1, NTM or FY2 earnings and multiples, business, currency, accounting and consolidation; disclose FX date. Forward P/E times trailing EPS is invalid. Current multiples do not establish historical ranges. |
 | Security identity | Match exchange, issuer, share class, ADR ratio, shares/per-share basis and price. |

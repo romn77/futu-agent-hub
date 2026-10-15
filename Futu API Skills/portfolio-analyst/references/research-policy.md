@@ -11,9 +11,9 @@ while the baseline holdings table remains complete. Otherwise prioritize portfol
 decision disagreement, catalysts and gaps likely to change the conclusion; break equivalent
 priorities by weight descending, then symbol. Explain selection and every omitted eligible name.
 Default: a maximum of eight held names. Do not silently drop baseline positions or expand the budget
-because a skill is available. Simple, verified cash-management/short-Treasury funds may receive
-liquidity, maturity, distributions and risk checks in Overview instead of a company deep-research
-slot. Explicitly requested, uncertain, complex or materially risky funds require focused deep research
+because a skill is available. Handle simple, verified cash-management/short-Treasury funds through
+liquidity, maturity, distributions and risk checks in Overview by default; use released research
+capacity for the next material company question. Explicitly requested, uncertain, complex or materially risky funds require focused deep research
 and count normally; disclose any budget omission rather than treating their risk as assessed.
 Never guess fund structure.
 
