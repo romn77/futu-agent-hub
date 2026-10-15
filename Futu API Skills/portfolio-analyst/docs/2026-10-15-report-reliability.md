@@ -21,6 +21,9 @@
 - 聚焦验证：test_report_integrity + test_codex_eval_producer + test_eval_runner，125 passed。
   四个涉及 Python 文件 Ruff check 通过，format 已应用。
 - 本阶段只证明评测能发现这些错误；尚不证明模型已不再生成错误，也不证明研究质量提高。
+- 后续单位反例先 RED 后 GREEN：中文港元/人民币不能当作美元，百分比不能当作金额。
+  将新核对器应用到原始 Q05-repeat1 两份归档报告，准确定位 A 的 US.SPY COLUMN_COUNT，
+  完整 B 表 VERIFIED（9 个数值字段）。原报告和原评分均未改写；新回放结果单独保留。
 
 ## R-03 observed loading cost
 

@@ -16,6 +16,18 @@ ALIASES = {
 }
 UNKNOWN = {"unknown", "unavailable", "n/a", "未知", "不可用", "无法取得", "未提供", "缺失"}
 CURRENCIES = re.compile(r"\b(?:USD|HKD|CNY|EUR|JPY|GBP|CAD|AUD|SGD)\b", re.I)
+LOCAL_CURRENCIES = {
+    "美元": "USD",
+    "港元": "HKD",
+    "港币": "HKD",
+    "人民币": "CNY",
+    "欧元": "EUR",
+    "日元": "JPY",
+    "英镑": "GBP",
+    "加元": "CAD",
+    "澳元": "AUD",
+    "新加坡元": "SGD",
+}
 SCALES = {
     "billion": "1e9",
     "十亿": "1e9",
@@ -55,6 +67,8 @@ def _scale(text):
 
 def _number(text, header, *, percent=False):
     value = _clean(text)
+    if not percent and ("%" in value or "%" in header or "百分比" in header):
+        raise ValueError("percentage is not a monetary amount")
     if not value:
         raise ValueError("empty cell")
     if value.casefold() in UNKNOWN:
@@ -149,6 +163,9 @@ def _check_holdings(section, snapshot):
             index = columns[field]
             header, cell = headers[index], cells[index]
             declared = {currency.upper() for currency in CURRENCIES.findall(header + " " + cell)}
+            declared.update(
+                code for label, code in LOCAL_CURRENCIES.items() if label in header + " " + cell
+            )
             if declared - {snapshot["base_currency"]}:
                 issues.append({"code": "CURRENCY_MISMATCH", "symbol": identity, "field": field})
                 continue
