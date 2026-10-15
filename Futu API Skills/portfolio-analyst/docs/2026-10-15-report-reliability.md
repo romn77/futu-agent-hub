@@ -69,3 +69,18 @@
   状态为 PREPARED_NOT_EXECUTED；归档 SHA-256 为
   `ac10d7f7561aacb26327c87c96d8ab9a0709e343e5d9e24b193d95e00236fb1b`。
   这是准备材料和本地验证，不是已执行的模型报告或盲评结果。
+
+## Authorized execution and observer correction
+
+- 用户随后明确回复“允许上述外发和合成评测”，授权这批具体代码/合成输入发送至既定
+  Codex/OpenAI 服务及必要失败重试。授权记录另存 external-approval.json，原拒绝记录不变。
+  已使用原 16 个槽位和配置启动真实模型执行；不再把准备阶段的 0/16 作为当前状态。
+- H01 一份原始 helper 回执完整返回且 exit 0，但 zsh 登录启动前缀的两行 parse-error
+  诊断混入 aggregated_output，导致严格 json.loads 未识别快照。实际 JSON 与冻结 fixture
+  完全相同，并非模型漏调 helper 或在采集前读取 backing file。
+- 新增 10 项回归，原评测器在真实诊断前缀下丢失 snapshot_id 的测试先失败；修正后通过。
+  producer 1.0.8 仅接受已观察到的 zsh -lc 精确前缀，其他诊断、非登录 shell、截断/多 JSON/
+  尾随文本仍失败；命令、成功状态和完整 body 绑定要求不变。全量 1384 passed in 21.23s。
+- 原 events/report/audit/execution 不改写。统一用新观察器在 replay-v1.0.8/ 生成独立
+  重放回执，保留源 events 哈希和观察器哈希。没有为修正观测误差重生成或挑选报告；
+  模型工作区、生产指令、输入、顺序和预算均未改变。最终结论使用同版观察器处理双方。

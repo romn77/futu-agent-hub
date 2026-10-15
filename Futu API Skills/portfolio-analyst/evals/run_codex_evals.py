@@ -343,6 +343,22 @@ def _argv(command):
         return []
 
 
+def parse_command_json(output, command):
+    """Allow only observed zsh login startup diagnostics before one complete JSON body.
+
+    Command authority, exit status and exact fixture binding remain caller checks.
+    Never search arbitrary chatter for a convenient JSON object or ignore trailing data.
+    """
+    try:
+        return json.loads(output)
+    except ValueError:
+        wrapper = shlex.split(command)
+        if len(wrapper) != 3 or Path(wrapper[0]).name != "zsh" or wrapper[1] != "-lc":
+            raise
+        clean = re.sub(r"\A(?:\(eval\):\d+: parse error near `end'\r?\n)+", "", output)
+        return json.loads(clean)
+
+
 def observe_reference_reads(completed, references):
     """Measure full-source receipts; costs do not establish why a reread occurred."""
     counts, item_ids, conflicts = {}, {}, set()
@@ -429,7 +445,7 @@ def build_audit(case, events, fixture, workspace):
         if len(args) < 2 or Path(args[0]).name not in {"python", "python3"}:
             continue
         try:
-            body = json.loads(output)
+            body = parse_command_json(output, command)
         except ValueError:
             continue
         if (
@@ -577,7 +593,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.7",
+            "runner_version": "1.0.8",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

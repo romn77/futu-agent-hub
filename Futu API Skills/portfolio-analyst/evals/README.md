@@ -17,7 +17,7 @@ validator cannot establish or claim a real Skill behavior evaluation PASS.
 The actual user deliverable remains `response_markdown`; the trace is external evaluation evidence
 and is not appended to the chat response.
 
-## Report field integrity (producer 1.0.7)
+## Report field integrity (producer 1.0.8)
 
 `holdings.field_integrity` checks the visible holdings table against the bound snapshot's nonzero
 canonical securities, including weight, base-currency market value and unrealized P&L. The execution
@@ -40,6 +40,13 @@ are counted once; conflicting duplicates are disclosed. This cannot infer whethe
 necessary after context loss, or certify that fragments form a complete read. `token_usage`
 comes only from `turn.completed.usage`; missing/invalid fields remain null, never zero. Document
 characters, actual provider token usage and semantic quality are different measurements.
+
+Producer 1.0.8 additionally recognizes the exact observed zsh `-lc` startup diagnostic
+``(eval):<line>: parse error near `end'`` before a single complete JSON response. It still requires
+the original successful command receipt and exact fixture equality. Unknown chatter, other shells,
+non-login commands, multiple JSON documents, trailing text and truncated JSON remain rejected.
+Rechecking an earlier receipt creates a separately versioned replay; never rewrite its original
+audit or label an observer correction as a regenerated model report.
 
 ## Prospective reliability cases
 
