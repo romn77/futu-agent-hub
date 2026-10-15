@@ -21,3 +21,11 @@
 - 聚焦验证：test_report_integrity + test_codex_eval_producer + test_eval_runner，125 passed。
   四个涉及 Python 文件 Ruff check 通过，format 已应用。
 - 本阶段只证明评测能发现这些错误；尚不证明模型已不再生成错误，也不证明研究质量提高。
+
+## R-03 observed loading cost
+
+- 新增 host 回执观测：完整读取次数、完整重复字符、原始读取输出字符/字节、失败/截断
+  尝试、重复/冲突 item ID，以及 turn.completed 实际 token usage。缺字段不填零。
+- 6 项新用例先 RED（缺观测函数）后 GREEN；与字段及 producer 回归共 123 passed。
+- 复用原 required_reference_reads_complete 的相同完整正文证据；账户和模拟回执条件不变。
+  指标仅定位无效读取，不能自动判定所有重读不合理，也不证明费用必然下降。

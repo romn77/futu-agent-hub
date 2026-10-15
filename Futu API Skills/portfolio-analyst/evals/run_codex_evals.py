@@ -340,6 +340,59 @@ def _argv(command):
         return []
 
 
+def observe_reference_reads(completed, references):
+    """Measure full-source receipts; costs do not establish why a reread occurred."""
+    counts, item_ids, conflicts = {}, {}, set()
+    output_characters = output_bytes = unverified = 0
+    for item in completed:
+        if item.get("type") != "command_execution":
+            continue
+        identity = item.get("id")
+        if identity is not None:
+            if identity in item_ids:
+                if item_ids[identity] != item:
+                    conflicts.add(str(identity))
+                continue
+            item_ids[identity] = item
+        command, output = item.get("command", ""), item.get("aggregated_output", "")
+        requested = {name: body for name, body in references.items() if name in command}
+        if not requested:
+            continue
+        output_characters += len(output)
+        output_bytes += len(output.encode("utf-8"))
+        success = item.get("exit_code") == 0 and item.get("status") == "completed"
+        for name, body in requested.items():
+            if success and body.strip() and body.strip() in output:
+                counts[name] = counts.get(name, 0) + 1
+            else:
+                unverified += 1
+    return {
+        "status": "PARTIAL" if conflicts else "OBSERVED",
+        "complete_reads": dict(sorted(counts.items())),
+        "duplicate_full_reads": sum(max(0, count - 1) for count in counts.values()),
+        "repeated_reference_characters": sum(
+            len(references[name]) * max(0, count - 1) for name, count in counts.items()
+        ),
+        "observed_output_characters": output_characters,
+        "observed_output_bytes": output_bytes,
+        "unverified_attempts": unverified,
+        "conflicting_item_ids": sorted(conflicts),
+    }
+
+
+def observe_token_usage(events):
+    usage = [event.get("usage", {}) for event in events if event.get("type") == "turn.completed"]
+    result = {}
+    for field in ("input_tokens", "cached_input_tokens", "output_tokens"):
+        values = [item.get(field) if isinstance(item, dict) else None for item in usage]
+        result[field] = (
+            sum(values)
+            if values and all(type(value) is int and value >= 0 for value in values)
+            else None
+        )
+    return result
+
+
 def build_audit(case, events, fixture, workspace):
     from portfolio_analyst.schema import validate_rebalance_result_document
     from jsonschema import ValidationError
@@ -353,12 +406,14 @@ def build_audit(case, events, fixture, workspace):
     response = answers[-1] if answers else ""
     if not response.strip():
         raise ValueError("MODEL_RESPONSE_MISSING")
-    commands, loaded, snapshots, simulations = [], set(), [], []
+    commands, snapshots, simulations = [], [], []
     references = {
         str(path.relative_to(workspace)): path.read_text()
         for path in (workspace / "references").rglob("*.md")
     }
     references["SKILL.md"] = (workspace / "SKILL.md").read_text()
+    reading = observe_reference_reads(completed, references)
+    loaded = set(reading["complete_reads"])
     for item in completed:
         if item.get("type") != "command_execution":
             continue
@@ -368,9 +423,6 @@ def build_audit(case, events, fixture, workspace):
             continue
         output = item.get("aggregated_output", "")
         args = _argv(command)
-        for name, body in references.items():
-            if name in command and body.strip() in output:
-                loaded.add(name)
         if len(args) < 2 or Path(args[0]).name not in {"python", "python3"}:
             continue
         try:
@@ -462,6 +514,8 @@ def build_audit(case, events, fixture, workspace):
     claimed = set(SYMBOL.findall(research + _section(response, "Observations")))
     observations = {
         "report": {"sections": list(_sections(response))},
+        "reference_reads": reading,
+        "token_usage": observe_token_usage(events),
         "holdings": {"symbols": holdings},
         "deep_research": {
             "max_names": len(deep),

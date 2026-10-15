@@ -33,6 +33,13 @@ versus cash-balance language or investment judgment; those still need independen
 
 The follow-up scope and prospective gates are in the
 [reliability spec](../../../docs/superpowers/specs/2026-10-15-portfolio-report-reliability.md).
+
+`reference_reads` records successful complete reads, repeated full-source characters, observed
+output size and partial/failed attempts from host receipts. Duplicate logs of the same item ID
+are counted once; conflicting duplicates are disclosed. This cannot infer whether a reread was
+necessary after context loss, or certify that fragments form a complete read. `token_usage`
+comes only from `turn.completed.usage`; missing/invalid fields remain null, never zero. Document
+characters, actual provider token usage and semantic quality are different measurements.
 The sidecar must not be supplied or self-reported by the model under test.
 
 ## Audit envelope 1.0
