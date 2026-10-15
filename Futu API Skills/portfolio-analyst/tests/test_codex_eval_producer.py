@@ -251,8 +251,18 @@ def test_complete_host_trace_is_required_in_addition_to_markdown_assertions(
         sections["Scope and data time"] = (
             fixture["snapshot"]["snapshot_id"] + " " + fixture["snapshot"]["as_of"]
         )
-        sections["Complete holdings table"] = "\n".join(
-            f"| {identity} | Unknown | fixture |" for identity in listed
+        positions = {
+            f"{row['market']}.{row['symbol']}": row for row in fixture["snapshot"]["positions"]
+        }
+        sections["Complete holdings table"] = (
+            "| Symbol | Current weight | Market value (USD) | Unrealized P&L (USD) | Sector/theme | Short comment |\n"
+            "|---|---:|---:|---:|---|---|\n"
+            + "\n".join(
+                f"| {identity} | {Decimal(positions[identity]['weight']) * 100}% | "
+                f"{positions[identity]['market_value_base']} | "
+                f"{positions[identity]['unrealized_pl_base']} | SYNTHETIC | Fixture. |"
+                for identity in listed
+            )
         )
         sections["Selected deep research"] = "\n".join(
             f"### {identity}\nUnavailable in offline fixture" for identity in identities[:8]

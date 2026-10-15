@@ -58,6 +58,15 @@ def load_cases():
     return _validator().load_eval_cases(ROOT / "evals/evals.json")
 
 
+def _report_checks():
+    spec = importlib.util.spec_from_file_location(
+        "portfolio_report_checks", ROOT / "evals/report_checks.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write(path, content):
     with path.open("xb") as stream:
         stream.write(content)
@@ -472,6 +481,8 @@ def build_audit(case, events, fixture, workspace):
         },
         "unheld_candidates": {"count": len(claimed - held)},
     }
+    fields = _report_checks().check_holdings(_section(response, "Complete holdings table"), source)
+    observations["holdings"]["field_integrity"] = fields
     required_reads = {
         "SKILL.md",
         "references/workflow.md",
@@ -488,6 +499,7 @@ def build_audit(case, events, fixture, workspace):
     }
     execution_checks = {
         "one_bound_snapshot_and_complete_holdings": not observations["workflow"]["stop"],
+        "holdings_fields_match_snapshot": fields["status"] == "VERIFIED",
         "required_reference_reads_complete": required_reads.issubset(loaded),
         "source_snapshot_id_present": source["snapshot_id"] in response,
         "source_as_of_present": _source_as_of_present(response, source["as_of"]),
@@ -508,7 +520,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.6",
+            "runner_version": "1.0.7",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),

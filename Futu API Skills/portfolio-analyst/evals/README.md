@@ -16,6 +16,23 @@ validator cannot establish or claim a real Skill behavior evaluation PASS.
 
 The actual user deliverable remains `response_markdown`; the trace is external evaluation evidence
 and is not appended to the chat response.
+
+## Report field integrity (producer 1.0.7)
+
+`holdings.field_integrity` checks the visible holdings table against the bound snapshot's nonzero
+canonical securities, including weight, base-currency market value and unrealized P&L. The execution
+gate `holdings_fields_match_snapshot` requires verified values as well as the existing unique-symbol
+gate. Empty/shifted cells, sign errors, unknown-as-zero and wrong values cannot pass just because
+the symbols are present. Existing historical receipts are not rewritten.
+
+The evaluation-only parser accepts English/Chinese column headers, reordered columns, explicit
+percentages, currency labels, parentheses for losses and declared numeric unit scales. Display
+rounding is checked at the reported precision. Unknown layouts/units remain `UNVERIFIED`; this is
+not proof that unsupported prose is financially wrong. The check does not assess company cash-flow
+versus cash-balance language or investment judgment; those still need independent semantic review.
+
+The follow-up scope and prospective gates are in the
+[reliability spec](../../../docs/superpowers/specs/2026-10-15-portfolio-report-reliability.md).
 The sidecar must not be supplied or self-reported by the model under test.
 
 ## Audit envelope 1.0
