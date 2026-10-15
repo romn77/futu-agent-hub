@@ -40,6 +40,26 @@ are counted once; conflicting duplicates are disclosed. This cannot infer whethe
 necessary after context loss, or certify that fragments form a complete read. `token_usage`
 comes only from `turn.completed.usage`; missing/invalid fields remain null, never zero. Document
 characters, actual provider token usage and semantic quality are different measurements.
+
+## Prospective reliability cases
+
+`prepare_reliability.py` reconstructs the raw synthetic portfolios in
+`reliability-fixtures/holdout.json` through the unchanged snapshot/risk/technical libraries, then
+reuses the existing isolated workspace and offline reader. It does not call a model or broker.
+Only the chosen case's request/data are copied; the registry and
+[operator rubric](reliability-holdout.md) stay outside the tested workspace.
+
+```bash
+python evals/prepare_reliability.py --registry evals/reliability-fixtures/holdout.json \
+  --case H01-reserve-and-company-exposures --output /private/new-reliability-attempt \
+  --instructions /private/frozen-instructions
+```
+
+Preparation validates the generated identities/semantics, preserves nullable numbers, records
+input hashes and refuses an existing attempt directory. These cases contain stocks/ETFs; use
+the existing option fixture for contract cases. R0/R1 paired input hashes must match outside
+SKILL.md/references, and prompts must be identical. External execution needs actual authorization
+for its concrete code/data payload; a prepared workspace is not a successful model evaluation.
 The sidecar must not be supplied or self-reported by the model under test.
 
 ## Audit envelope 1.0

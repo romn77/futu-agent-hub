@@ -44,3 +44,23 @@
 - 本地全量回归：1374 passed in 18.31s；没有据此声明模型行为或质量改善通过。
 - 本地审查在首次模型执行前明确 CapEx 为正现金流出、遵从来源定义与符号，R1 待执行
   指令及其清单同步更新并留痕；留出输入/量表不变。最终 quick_validate.py 通过。
+
+## Frozen prospective inputs and execution status
+
+- 独立准备者在未看被测输出前完成三个留出场景：29 持仓/储备基金与公司暴露、
+  财务期间/币种/存量流量、带反证的主动配置比较。全部为独立合成数据。
+- holdout.json SHA-256：`ae6e51003ef182d12c8b7477dd1997cb5e09e6d94a5c0edefaf67305ab629219`。
+  operator rubric SHA-256：`794e65805c4210cc5e2a8120fe29b2c4b3a9fb16a6c4cc4dbd82f85d595320cc`。
+- prepare_reliability.py 复用原隔离准备流程和不变计算库，写出真实重建的绑定快照，
+  不手改 ID/hash，不复制操作者量表到模型工作区。4 个准备/隔离/拒绝覆盖回归通过。
+- 16 个槽位已准备：新留出 3×2版本×2重复=12；旧 Q02/Q05 各两份 R1=4，仅作缺陷回归。
+  每对非产品指令文件和用户 prompt 哈希一致，随机顺序提前记录，目录名不含版本标签。
+- 配置：Codex CLI 0.154.0，已解析固定启动路径及 SHA-256，gpt-6-astra / medium，
+  600 秒 / 8 MiB 上限，只读且忽略用户配置。服务端模型 revision 未知，不能声称严格同权重对照。
+- 首个 probe 的宿主请求被自动审批审查拒绝，理由为尚未明确授权将这批仓库指令、实现、
+  schemas 发送至 Codex/OpenAI。模型进程未开始；没有使用代理、其他工具或传输路径绕过。
+  已向用户提出具体 payload 的确认，等待答复；当前生成报告数为 0/16，行为/盲评仍未完成。
+- 请求范围与清单、16 份输入、配置和计划保留于 `/private/tmp/portfolio-reliability-2bbvf488`。
+  主目录 approval-summary.json 是待确认范围，prepared/*/inputs.json 是逐文件清单。
+- 数值核对的临时副本将 `<=` 反转为 `>=` 后 5 项测试失败，证明比较逻辑变坏会被捕获；
+  原源码未修改。最终所有本地代码及测试 Ruff check/format 通过，差异检查无空白错误。

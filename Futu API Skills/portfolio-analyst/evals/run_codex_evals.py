@@ -188,18 +188,21 @@ def _fixture(case_id):
     }
 
 
-def prepare_workspace(workspace, case_id):
+def prepare_workspace(workspace, case_id, *, fixture=None, instructions=None):
     workspace.mkdir(mode=0o700)
+    instructions = instructions or ROOT
     for name in ("references", "portfolio_analyst", "schemas"):
         shutil.copytree(
-            ROOT / name, workspace / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+            (instructions if name == "references" else ROOT) / name,
+            workspace / name,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
-    shutil.copy2(ROOT / "SKILL.md", workspace / "SKILL.md")
+    shutil.copy2(instructions / "SKILL.md", workspace / "SKILL.md")
     (workspace / "scripts").mkdir(mode=0o700)
     for name in ("current_analysis.py", "portfolio.py"):
         shutil.copy2(ROOT / "evals/fixture_cli.py", workspace / "scripts" / name)
     (workspace / ".fixture").mkdir(mode=0o700)
-    envelope = _fixture(case_id)
+    envelope = _fixture(case_id) if fixture is None else fixture
     _write(workspace / ".fixture/envelope.json", _json_bytes(envelope))
     _write(workspace / ".fixture/snapshot.json", _json_bytes(envelope["snapshot"]))
     if case_id == "explicit-rebalance-request":
