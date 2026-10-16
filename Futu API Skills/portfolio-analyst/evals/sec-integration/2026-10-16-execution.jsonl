@@ -1,0 +1,2 @@
+{"script": "portfolio.py", "args": ["doctor", "--json", "--no-save"]}
+{"script": "current_analysis.py", "args": []}
