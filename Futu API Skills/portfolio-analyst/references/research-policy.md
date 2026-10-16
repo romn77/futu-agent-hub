@@ -86,8 +86,8 @@ materiality and recommendation policy for active views, allocation trade-offs an
 
 ## Source choice and reuse
 
-Reuse qualified evidence first, including non-Futu evidence. For real gaps prefer suitable existing
-authorized Futu public outputs, then another qualified Futu output or independently authorized source.
+Reuse qualified evidence first, including non-Futu evidence. For gaps use issuer/SEC originals for
+disclosures, qualified forecasts for expectations, and authorized Futu outputs for other covered facts.
 When using relevant Futu steps, consult [Futu public capabilities](futu-public-research.md) for actual
 limitations; do not rebuild a provider/parser or rely on `collect.py` zero-filled/truncated summaries.
 Necessary issuer/full-text or independent checks are not redundant dataset requests.

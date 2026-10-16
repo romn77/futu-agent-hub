@@ -45,6 +45,8 @@ and disclose actual technical coverage, not the tool's maximum capacity. Do not 
 
 ## Conditional routes
 
+- For SEC research, read [integration](references/sec-research.md).
+
 - Before calculating a target price, valuation range or sensitivity, read
   [valuation policy](references/valuation-policy.md), including for simple P/E models.
 - For held options, read [options policy](references/options-policy.md) and
