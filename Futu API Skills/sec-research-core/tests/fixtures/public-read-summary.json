@@ -1,0 +1,62 @@
+{
+  "data_kind": "public-sdk-integration-receipt",
+  "user_institution_list_modified": false,
+  "sdk_version": "5.62.0",
+  "knowledge_cutoff": "2026-10-16T00:00:00Z",
+  "downloaded_response_body_bytes": 81716,
+  "filings": [
+    {
+      "manager_cik": "0001067983",
+      "accession": "0001193125-26-352200",
+      "form": "13F-HR",
+      "report_period": "2026-06-30",
+      "filed": "2026-08-14",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1067983/000119312526352200/0001193125-26-352200-index.html",
+      "retrieved_at": "2026-10-16T08:21:45.133793+00:00",
+      "summary_count": 89,
+      "value_unit": "USD",
+      "unit_verified": false,
+      "unit_resolution": {
+        "unit": "dollars",
+        "source": "schema",
+        "ambiguous": true,
+        "priceable_rows": 89,
+        "fraction_sub_dollar": 0.0,
+        "schema_version": "X0202"
+      },
+      "discovery_complete": true
+    },
+    {
+      "manager_cik": "0001067983",
+      "accession": "0001193125-26-226661",
+      "form": "13F-HR",
+      "report_period": "2026-03-31",
+      "filed": "2026-05-15",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1067983/000119312526226661/0001193125-26-226661-index.html",
+      "retrieved_at": "2026-10-16T08:21:45.499092+00:00",
+      "summary_count": 90,
+      "value_unit": "USD",
+      "unit_verified": false,
+      "unit_resolution": {
+        "unit": "dollars",
+        "source": "schema",
+        "ambiguous": true,
+        "priceable_rows": 90,
+        "fraction_sub_dollar": 0.0,
+        "schema_version": "X0202"
+      },
+      "discovery_complete": true
+    }
+  ],
+  "analysis_status": "PARTIAL",
+  "research_lead_count": 0,
+  "comparison_issues": [
+    [
+      "CORPORATE_ACTIONS_UNVERIFIED",
+      "PARTIAL_FIXED_PRICE_COVERAGE",
+      "SECURITY_TYPE_UNVERIFIED",
+      "UNITS_AMBIGUOUS"
+    ]
+  ],
+  "raw_receipt_sha256": "23ae347b0071d902cc9f3bcb1f2c2a61300e5703fb55cb909d3e8a186f0d3fa9"
+}

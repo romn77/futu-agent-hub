@@ -15,6 +15,10 @@ add workers, or expand the audited account path. New relevant authorized public 
 not appear in this table to be usable. Doctor success and futuapi's general minimum version do not
 prove compatibility with each public interface.
 
+For issuer/SEC original statements, notes and explicitly requested 13F context, use
+[SEC integration](sec-research.md). The prebuilt public research helper is separate from this
+audited account path; source choice follows the fact domain and qualified same-run reuse.
+
 ## Capability map
 
 | Need | Existing capability | Use and boundary |

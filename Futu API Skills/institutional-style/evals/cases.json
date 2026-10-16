@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "data_kind": "synthetic",
+  "cases": [
+    {
+      "id": "price_drift_small_sample",
+      "prompt": "用我指定的甲、乙两家机构看是否转向科技。只使用下列合成公开信息，不增加机构、不访问账户或网络。",
+      "materials": [
+        {"source": "fixture://manager-a/q1", "period": "2026-03-31", "text": "Tech A 100 shares at $10; Utility B 100 shares at $10. Complete disclosed sample."},
+        {"source": "fixture://manager-a/q2", "period": "2026-06-30", "text": "Tech A 100 shares at $20; Utility B 100 shares at $10. Complete disclosed sample; verified no corporate actions."},
+        {"source": "fixture://manager-b/q1", "period": "2026-03-31", "text": "Same positions as manager A. Managers have verified separate control."},
+        {"source": "fixture://manager-b/q2", "period": "2026-06-30", "text": "Same positions as manager A. No quantity changes."}
+      ]
+    },
+    {
+      "id": "late_addition_and_partial_overview",
+      "prompt": "这个基金是不是刚买入 C 又清仓其他股票了？只分析这些合成披露，不联网、不读取账户。",
+      "materials": [
+        {"source": "fixture://manager/original", "period": "2026-03-31", "filed": "2026-05-01", "text": "Original full holdings A 100, B 50."},
+        {"source": "fixture://manager/amendment", "period": "2026-03-31", "filed": "2026-08-20", "text": "13F-HR/A NEW HOLDINGS: C 20. Prior confidential holding released."},
+        {"source": "fixture://mcp/overview", "text": "Latest filing overview shows only C. This is an amendment, not a complete manager portfolio."}
+      ]
+    }
+  ]
+}

@@ -7,7 +7,7 @@ for a fresh session or save new configuration. All routes retain the account rea
 | Intent | Route |
 |---|---|
 | Review/diagnose current holdings, no wider preference | Fresh REAL/USD comprehensive workflow |
-| Financials, expectations, thesis, earnings or valuation question | Relevant research-policy question route within scope |
+| Financials, expectations, thesis, earnings or valuation question | Relevant question route; standalone company research needs no account |
 | Explain held options | Conditional options policy and contract |
 | "What should I do?", more decisive/active advice, allocation changes | Recommendation policy: views, priorities, trade-offs and conditional proposals |
 | New names, replacements, event ideas or offensive strategies | Requested advisor extras under research/recommendation policies; prior explicit preference is reusable |

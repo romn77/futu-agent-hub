@@ -1,0 +1,8 @@
+# User-controlled list. Copy to a location you choose and add only your managers.
+schema_version: 1
+universe_id: my-managers
+managers: []
+# Each item: cik (string), optional display_name, enabled, tags, notes.
+# For verified independent voting: family_id and relationship_source.
+# For verified strategy grouping: strategy_group and strategy_source.
+# Do not store EDGAR_IDENTITY, account information or credentials here.

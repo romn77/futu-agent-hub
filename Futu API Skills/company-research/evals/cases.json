@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "data_kind": "synthetic",
+  "cases": [
+    {
+      "id": "cash_conversion_counterevidence",
+      "prompt": "研究 Example Software，重点看增长质量。只使用这些合成公开材料，无需账户或网络。",
+      "materials": [
+        {"source": "fixture://issuer/annual-2025#income", "period": "FY2025", "unit": "USD million", "text": "Revenue 1200 vs 1000 in FY2024. Net income 120 vs 90. Management attributes growth to enterprise adoption."},
+        {"source": "fixture://issuer/annual-2025#cash-flow", "period": "FY2025", "unit": "USD million", "text": "Cash from operations 45 vs 110. Accounts receivable 310 vs 180. CapEx 30 vs 25."},
+        {"source": "fixture://issuer/annual-2025#revenue-note", "period": "FY2025", "text": "Payment terms for a set of large contracts extended from 60 to 150 days. Two customers represented 38% of revenue."}
+      ]
+    },
+    {
+      "id": "foreign_issuer_incomplete_quarters",
+      "prompt": "研究 Example ADR 的利润与现金流。仅有这些合成材料，不读取账户，不联网。",
+      "materials": [
+        {"source": "fixture://issuer/20-F", "period": "FY2025", "unit": "CNY million", "text": "Annual revenue 4000, operating cash flow 800. Filing is Form 20-F."},
+        {"source": "fixture://issuer/6-K", "period": "H1 2026", "unit": "CNY million", "text": "Six-month cumulative revenue 2400, operating cash flow 300. No standalone Q1/Q2 figures provided."}
+      ]
+    }
+  ]
+}
