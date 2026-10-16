@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sec-research-core"
+version = "0.1.0"
+description = "Read-only SEC evidence and institutional allocation research"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+sdk = ["edgartools==5.62.0"]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["sec_research"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
