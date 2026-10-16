@@ -72,6 +72,19 @@ def recognized_command(command):
     if entry is not None:
         return entry in PYTHON_ENTRYPOINTS
     args = command_tokens(command)
+    # This fixed listing prints paths only; do not generalize it to arbitrary chains.
+    if args == [
+        "pwd;",
+        "rg",
+        "--files",
+        "-g",
+        "!data.json",
+        "-g",
+        "!public_reader.py",
+        "-g",
+        "!.fixture/**",
+    ]:
+        return True
     return bool(args) and Path(args[0]).name in {
         "cat",
         "head",

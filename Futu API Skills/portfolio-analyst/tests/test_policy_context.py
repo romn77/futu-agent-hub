@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import shlex
 
 import pytest
 
@@ -247,3 +248,21 @@ def test_complete_known_body_does_not_hide_an_unknown_markdown_read(source):
     )
     assert observation["complete_rereads"] == 0
     assert observation["unverified_accesses"]
+
+
+def test_fixture_directory_listing_is_a_recognized_combined_command():
+    command = "pwd; rg --files -g '!data.json' -g '!public_reader.py' -g '!.fixture/**'"
+    assert context().recognized_command("/bin/zsh -lc " + shlex.quote(command))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pwd; cat .fixture/envelope.json",
+        "pwd; rg --files; python scripts/portfolio.py snapshot",
+        "pwd; rg --files -g '!data.json' -g '!public_reader.py' -g '!.fixture/**'; cat SKILL.md",
+        "pwd; rg --files -g '!data.json' -g '!public_reader.py' -g '!.fixture/**' > listing.txt",
+    ],
+)
+def test_directory_listing_recognition_does_not_allow_other_chains(command):
+    assert context().recognized_command("/bin/zsh -lc " + shlex.quote(command)) is False
