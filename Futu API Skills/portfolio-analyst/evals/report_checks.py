@@ -12,7 +12,14 @@ ALIASES = {
     "symbol": ("symbol", "ticker", "标的", "代码", "股票代码", "证券代码"),
     "weight": ("current weight", "weight", "当前权重", "净资产权重", "权重", "仓位", "仓位占比"),
     "market_value_base": ("market value", "市值", "持仓市值"),
-    "unrealized_pl_base": ("unrealized p&l", "unrealized pnl", "未实现盈亏", "浮动盈亏", "浮盈亏"),
+    "unrealized_pl_base": (
+        "unrealized p&l",
+        "unrealized pnl",
+        "未实现盈亏",
+        "未实现损益",
+        "浮动盈亏",
+        "浮盈亏",
+    ),
 }
 UNKNOWN = {"unknown", "unavailable", "n/a", "未知", "不可用", "无法取得", "未提供", "缺失"}
 CURRENCIES = re.compile(r"\b(?:USD|HKD|CNY|EUR|JPY|GBP|CAD|AUD|SGD)\b", re.I)

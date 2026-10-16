@@ -48,6 +48,14 @@ def test_complete_rounded_fields_match_bound_snapshot():
 
 
 @pytest.mark.parametrize(
+    "title,verified", [("未实现损益", True), ("已实现损益", False), ("总损益", False)]
+)
+def test_chinese_pnl_synonym_keeps_realized_and_total_pnl_distinct(title, verified):
+    result = checks().check_holdings(TABLE.replace("Unrealized P&L", title), snapshot())
+    assert (result["status"] == "VERIFIED") is verified
+
+
+@pytest.mark.parametrize(
     "table,code",
     [
         (TABLE.replace(" | -123.46", ""), "COLUMN_COUNT"),

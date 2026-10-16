@@ -597,7 +597,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.9",
+            "runner_version": "1.0.10",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),
