@@ -1,0 +1,146 @@
+{
+  "operator_only": true,
+  "purpose": "Score independent portfolio-analysis behavior, with no required prose template or prescribed buy/sell conclusion.",
+  "scoring": {
+    "dimensions": [
+      "F",
+      "R",
+      "E",
+      "C",
+      "D"
+    ],
+    "weight_per_dimension": 0.2,
+    "range_per_dimension": [
+      0,
+      4
+    ],
+    "aggregate": "Arithmetic mean of five dimension scores, range 0-4; optionally multiply by 25 for percentage. Score each case independently before comparing runs.",
+    "evidence_requirement": "For each dimension cite specific report passages plus raw input field paths or observed request receipts. Missing evidence is not inferred from tone. Do not award format points. More words or tables do not raise a score.",
+    "critical_errors": "Record each critical error separately, even if other dimensions score well. Any critical error prevents an unqualified pass; do not hide it in the mean."
+  },
+  "dimensions": {
+    "F": {
+      "name": "Facts and quantitative integrity",
+      "anchors": {
+        "0": "Central portfolio or company facts fabricated or reversed; material arithmetic/units/period errors make conclusions unusable.",
+        "1": "Several material factual errors or unsupported figures; portfolio totals or source periods unreliable.",
+        "2": "Main totals and most facts correct, but one material omission or mismatch limits the conclusion; uncertainty sometimes omitted.",
+        "3": "Correct account totals, exposures and principal research facts; respects periods, units, cash balance versus flows and source limitations; only minor immaterial slips.",
+        "4": "All decision-relevant arithmetic and evidence reconcile; dates, units, stock/flow distinctions and valuation denominators traceable; gaps identified without invention."
+      }
+    },
+    "R": {
+      "name": "Importance of portfolio risks",
+      "anchors": {
+        "0": "Misses or reverses dominant risk and focuses on immaterial concerns.",
+        "1": "Lists generic risks without ranking; material positions or funding needs neglected.",
+        "2": "Identifies at least one major risk but incomplete material-exposure coverage or weak prioritization.",
+        "3": "Ranks material company, shared-exposure and liquidity risks using position size and evidence; fund role treated appropriately.",
+        "4": "Makes clear why some risks dominate others, including credible mitigants, interactions and near-term obligations; small holdings are accounted for proportionately."
+      }
+    },
+    "E": {
+      "name": "Explanation and portfolio connection",
+      "anchors": {
+        "0": "Unsupported labels or narrative unrelated to the actual portfolio.",
+        "1": "Company summaries mostly disconnected from portfolio exposure or user needs.",
+        "2": "Some evidence-to-business reasoning and some portfolio implications, but major causal steps absent.",
+        "3": "Connects source evidence to demand/profitability/cash or valuation and then to portfolio consequences in plain language.",
+        "4": "Explains multiple materially distinct exposures with coherent causal reasoning, appropriate magnitudes or scenarios, and explicit boundaries of inference."
+      }
+    },
+    "C": {
+      "name": "Counterevidence and calibration",
+      "anchors": {
+        "0": "Cherry-picks or contradicts available material contrary evidence; presents uncertain outcomes as certain.",
+        "1": "Token caveats with no effect on confidence or recommendation; material counterevidence omitted.",
+        "2": "Recognizes meaningful contrary evidence, but does not clearly weigh it or define what would change the view.",
+        "3": "Weighs supportive and adverse evidence, separates confirmed events from estimates/windows, and calibrates confidence to data availability.",
+        "4": "Tests the leading thesis against substantive alternatives, explains why evidence changes confidence/actions, and specifies observable falsifiers without false precision."
+      }
+    },
+    "D": {
+      "name": "Decision usefulness",
+      "anchors": {
+        "0": "No usable decision, infeasible recommendation, or violates explicit user constraints.",
+        "1": "Vague hold/reduce/watch advice with no prioritization or implementation logic.",
+        "2": "Plausible direction and some conditions, but funding, amounts or follow-up do not form a coherent next step.",
+        "3": "Clear prioritized decisions with feasible amounts/ranges or justified no-action choice, funding treatment, conditions and useful monitoring.",
+        "4": "Actionable choice compares relevant alternatives and costs, quantifies post-change exposure where useful, respects funding constraints, and gives specific revision triggers. Any defensible direction may earn 4."
+      }
+    }
+  },
+  "case_evidence": {
+    "archipelago_28": {
+      "raw_facts": [
+        "28 positions; NAV USD 2,000,000; securities USD 1,920,000; cash USD 80,000 (4%).",
+        "RQSV USD 320,000 (16%) verified Treasury bills 99.4%, cash 0.6%, duration 0.11 years, no leverage; fund is not bank cash and not capital-guaranteed.",
+        "Cash plus RQSV USD 400,000 (20%); stated nine-month spending USD 250,000 leaves USD 150,000 before any changes/price movement; avoid adding fund twice.",
+        "Seven larger companies: HLDN 11%, BEXR 9%, CNVT 7.5%, DMRQ 6.5%, ELMQ 5.5%, FTRL 5%, GNSP 4.5%; together 49%. Remaining 20 companies together 31%.",
+        "HLDN grid demand versus fixed-price costs; BEXR 20% revenue growth versus 112% retention, dilution and revisions; CNVT regulated rates versus capex/financing; DMRQ deposits/CET1 versus loan loss provisions; ELMQ shipment growth versus 56% top-two concentration/order slowdown; FTRL cash runway versus binary trial/negative cash flow; GNSP cash production versus falling carloads.",
+        "FTRL November timing is a window, not a confirmed November 1 release. No technical price-history evidence is supplied."
+      ],
+      "behavioral_anchors": [
+        "Coverage need not mean identical prose for each position. Material company risks should remain distinguishable despite the larger fund weight.",
+        "A high score may keep, trim or reallocate positions if supported. Cash reserve sufficiency does not remove company risks; market share count does not establish true diversification.",
+        "The eight-held research budget permits reserve verification and seven larger company investigations; thoughtful alternative prioritization may also score well."
+      ],
+      "critical_errors": [
+        "Treating RQSV as a single corporate operating exposure or unverified equity fund despite available direct holdings evidence, if it drives the decision.",
+        "Materially double-counting cash and reserve fund or spending designated reserves without acknowledging the USD 250,000 obligation.",
+        "Inventing material financial results, consensus or exact clinical dates; omitting an entire large exposure from both assessment and stated evidence limitations."
+      ]
+    },
+    "statement_crosscurrents": {
+      "raw_facts": [
+        "6 positions; NAV USD 400,000; cash USD 32,000 (8%); KXMV 32%, LQNT 20%, MNTR 16%, NPAX 10%, PRVX 8%, QSDF 6%. KXMV plus LQNT 52%. Planned USD 20,000 spending leaves USD 12,000 of current cash.",
+        "KXMV financial statements in USD thousands; release in USD millions. Nine-month revenue 720m versus 620m (+16.13%); Q3 revenue 198m versus 220m (-10%). Q3 operating margin approximately 2.02% versus 11.82%.",
+        "KXMV nine-month OCF 110m minus capex 64m = 46m, versus 96m minus 38m = 58m. Total ending cash including restricted is 156m = beginning 132m + 110m - 64m - 22m. Unrestricted cash 124m plus restricted 32m, not 156m plus 32m.",
+        "KXMV debt 490m including 190m due March 15, 2027; unrestricted-cash net debt 366m. Revolver 80m is available financing capacity, not cash. Company liquidity does not add to brokerage cash.",
+        "LQNT fiscal year ends June 30; July-September 2026 is FY2027 Q1. Quarter OCF 52m minus capex 60m = -8m versus 31m minus 20m = 11m. Deferred-revenue cash source 38m and SBC 24m matter to cash quality.",
+        "MNTR nine-month cash flow benefits from customer deposits, while Q3 sales decline; reported deposits are not revenue.",
+        "Optional correct valuation checks: KXMV FY2027 P/E 64/3.1 = 20.65x; EV 1,280m + 490m - 124m = 1,646m. LQNT FY2027 P/E 40/0.55 = 72.73x; EV 2,000m + 100m - 260m = 1,840m. No obligation to use those particular methods."
+      ],
+      "behavioral_anchors": [
+        "Use the valid period comparison for each assertion; quarterly and nine-month evidence can support different conclusions without being contradictory.",
+        "Cash generation quality and near-term debt should influence concentration judgments; positive OCF alone is insufficient.",
+        "Accept holding or reducing either company if the reasoning weighs business strength, cash quality, valuation and user spending."
+      ],
+      "critical_errors": [
+        "1000x monetary unit mistake that materially changes analysis.",
+        "Presenting nine-month revenue growth or cash flows as the latest quarter, or conflating company cash balances with cash generation or brokerage cash in a decision-relevant way.",
+        "Calling LQNT quarter free cash flow positive using the supplied OCF and capex, or treating restricted cash/revolver as unrestricted cash without qualification.",
+        "Ignoring the USD 20,000 withdrawal when recommending cash deployment."
+      ]
+    },
+    "allocation_fork": {
+      "raw_facts": [
+        "7 positions; NAV USD 600,000; cash USD 60,000 (10%), ZQTB USD 120,000 (20%), EVCP 30%, SWAT 12%, RLNM 10%, TXBV 8%, UWQH 5%, YVNG 5%.",
+        "Full USD 90,000 deployment to EVCP gives EVCP USD 270,000 (45%), EVCP plus SWAT 57%; full to TXBV gives TXBV USD 138,000 (23%). Reserve fund falls to USD 30,000 (5%) and cash remains 10%.",
+        "EVCP Q3 revenue +50%, operating margin approximately 17.06% versus 12.06%; backlog grew, 58% has deposits, competitor exit and platform qualifications support demand.",
+        "EVCP nine-month OCF 90m less capex 170m = -80m versus prior 110m - 80m = +30m; 34% largest customer and 61% top three; 28% backlog cancellable without material penalty. Subsequent cancelled orders 160m and rescheduled 280m should not be treated as identical losses.",
+        "EVCP FY2027 EPS revised 2.6 to 2.4, FCF 190m to 110m; price 90 / 2.4 = 37.5x. EV = 9,000m + 1,100m - 400m = 9,700m; forward EV/revenue 3.88x. Debt maturities are not immediate.",
+        "TXBV Q3 revenue +9.09%, operating margin 9% versus 10%; 60% fixed-price, 40% foreign revenue; DSO 91 versus 74 days. Nine-month OCF-capex 22m versus 48m. Backlog growth and collection of 14m after quarter-end are genuine mitigants.",
+        "TXBV FY2027 EPS 2.0 versus 2.2 prior; 40 / 2.0 = 20x versus peer values 16/18/21. EV 2,000m + 300m - 180m = 2,120m. It is cheaper than EVCP by P/E, not automatically low-risk or cheap relative to peers.",
+        "The 20% acceptable drawdown is user tolerance, not a guaranteed loss limit. Exact correlation or future drawdown data are unavailable."
+      ],
+      "behavioral_anchors": [
+        "A clear recommendation can deploy all, split, stage, redirect within supported scope, or defer; no single allocation is mandatory.",
+        "Strong work evaluates the investor-preferred EVCP thesis with both bullish and adverse facts, and does not idealize TXBV simply because it diversifies demand.",
+        "Useful implementation expresses amounts that reconcile and describes post-change exposures plus observable decision triggers."
+      ],
+      "critical_errors": [
+        "Spending the retained USD 60,000 cash, taking the short-bill fund below USD 30,000, or proposing unacknowledged leverage.",
+        "Reporting the all-EVCP result as below 45% or otherwise materially understating concentration.",
+        "Stating guaranteed return or a guaranteed 20% maximum drawdown; inventing correlations or precision risk probabilities.",
+        "Presenting cancellations as immaterial or treating the alternative as unconditionally safe while omitting the supplied substantive contrary evidence."
+      ]
+    }
+  },
+  "operator_protocol": [
+    "Keep this rubric out of all model prompts and workspaces. Score only after inputs and reports are frozen.",
+    "Attribute omissions to unsupported evidence when relevant; missing data can be honestly disclosed without a factual penalty.",
+    "Do not score any required report length, number of sections, heading order, table shape, or prescribed recommendation.",
+    "Record source-request compliance separately from these five quality dimensions; the same budget applies to every compared run."
+  ]
+}
