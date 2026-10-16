@@ -347,3 +347,17 @@ that real account integration had not been attempted, but does not claim complet
 OTC data coverage or compatibility with untested accounts and providers. See the
 [pending-fixes review](../docs/2026-10-14-pending-fixes-review.md) for the precise scope; no real
 account payload was added to fixtures, repository artifacts or extra model evaluations.
+
+## Optional synthetic host-context evaluation
+
+`run_host_context.py` compares ordinary file loading with complete policy bodies supplied through
+the existing Codex CLI's stdin. `policy_context.py` binds those bodies, source files and request
+bytes by hash, and separately counts subsequent complete outputs, partial reads and unknown
+accesses. Reference files remain readable; the original file-read audit is retained unchanged.
+
+This opt-in entry requires a Git checkout and a workspace prepared with the synthetic fixture
+helper. It is not the live account entry point or a production tool sandbox. Its delivery receipt
+proves CLI input bytes, not remote model retention; semantic report review remains required.
+See the [bounded spec](../../../docs/superpowers/specs/2026-10-16-portfolio-host-context.md) and
+[implementation and evidence record](../docs/2026-10-16-host-context.md) for commands, gates,
+observed results and limitations.
