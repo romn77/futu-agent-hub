@@ -40,6 +40,52 @@ SCALES = {
 }
 
 
+SECTION_TITLES = (
+    ("Scope and data time", "范围与数据时间"),
+    ("One-line conclusion", "一句话结论"),
+    ("Overview", "组合概览"),
+    ("Three principal risks", "三个主要风险"),
+    ("Complete holdings table", "完整持仓表"),
+    ("Selected deep research", "重点研究"),
+    ("Option risk", "期权风险"),
+    ("Macro impact", "宏观影响"),
+    ("Observations", "观察"),
+    ("Data gaps and sources", "数据缺口与来源"),
+)
+
+
+def check_sections(markdown, *, has_options):
+    """Check the literal output contract independently of tolerant content extraction."""
+    aliases = {
+        title: english for english, chinese in SECTION_TITLES for title in (english, chinese)
+    }
+    expected = [english for english, _ in SECTION_TITLES if has_options or english != "Option risk"]
+    observed, fence = [], None
+    for line in markdown.splitlines():
+        if fence:
+            if re.fullmatch(rf" {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*", line):
+                fence = None
+            continue
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            fence = marker.group(1)
+            continue
+        heading = re.fullmatch(r" {0,3}(#{1,2})[ \t]+(.+?)[ \t]*", line)
+        if heading:
+            title = re.sub(r"[ \t]+#+$", "", heading.group(2)).strip()
+            observed.append(aliases.get(title, title) if heading.group(1) == "##" else "# " + title)
+    issues = (
+        []
+        if observed == expected
+        else [{"code": "SECTION_ORDER_OR_TITLE", "expected": expected, "actual": observed}]
+    )
+    return {
+        "status": "UNVERIFIED" if issues else "VERIFIED",
+        "issues": issues,
+        "sections": observed,
+    }
+
+
 def _clean(text):
     return text.strip().strip("*` ").replace("−", "-").replace("％", "%")
 

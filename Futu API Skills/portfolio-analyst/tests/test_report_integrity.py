@@ -159,10 +159,22 @@ def test_real_audit_rejects_correct_symbols_with_missing_pnl(tmp_path):
             },
         }
     )
-    response = f"{source['snapshot_id']} {source['as_of']}\n## Complete holdings table\n"
+    response = (
+        f"## Scope and data time\n{source['snapshot_id']} {source['as_of']}\n"
+        "## One-line conclusion\nFixture.\n## Overview\nFixture.\n"
+        "## Three principal risks\nFixture.\n## Complete holdings table\n"
+    )
     response += "\n".join(TABLE.splitlines()[:2]) + "\n"
     for row in source["positions"]:
         response += f"| US.{row['symbol']} | {float(row['weight']) * 100}% | {row['market_value_base']} | Technology | Omitted P&L. |\n"
+    response += (
+        "## Selected deep research\nFixture.\n## Macro impact\nFixture.\n"
+        "## Observations\nFixture.\n## Data gaps and sources\nFixture.\n"
+    )
     events.append({"type": "item.completed", "item": {"type": "agent_message", "text": response}})
     audit = producer.build_audit(case, events, fixture, workspace)
+    assert (
+        audit["trace"]["observations"]["execution"]["checks"]["required_section_headings"] is True
+    )
+    assert audit["trace"]["observations"]["holdings"]["field_integrity"]["status"] != "VERIFIED"
     assert audit["trace"]["observations"]["execution"]["evidence_pass"] is False

@@ -323,7 +323,8 @@ def test_complete_host_trace_is_required_in_addition_to_markdown_assertions(
         )
 
     result = producer.run_case("comprehensive-many-holdings", tmp_path / "run", runner=runner)
-    assert result["behavior_pass"] is (not duplicate_holding)
+    # Legacy aliases remain extractable, but only canonical H2 headings meet the contract.
+    assert result["behavior_pass"] is (not duplicate_holding and not localized)
 
 
 @pytest.mark.parametrize(

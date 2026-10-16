@@ -531,8 +531,11 @@ def build_audit(case, events, fixture, workspace):
         }
     )
     claimed = set(SYMBOL.findall(research + _section(response, "Observations")))
+    section_integrity = _report_checks().check_sections(
+        response, has_options=any(row["security_type"] == "OPTION" for row in source["positions"])
+    )
     observations = {
-        "report": {"sections": list(_sections(response))},
+        "report": {"sections": list(_sections(response)), "section_integrity": section_integrity},
         "reference_reads": reading,
         "token_usage": observe_token_usage(events),
         "holdings": {"symbols": holdings},
@@ -572,6 +575,7 @@ def build_audit(case, events, fixture, workspace):
     }
     execution_checks = {
         "one_bound_snapshot_and_complete_holdings": not observations["workflow"]["stop"],
+        "required_section_headings": section_integrity["status"] == "VERIFIED",
         "holdings_fields_match_snapshot": fields["status"] == "VERIFIED",
         "required_reference_reads_complete": required_reads.issubset(loaded),
         "source_snapshot_id_present": source["snapshot_id"] in response,
@@ -593,7 +597,7 @@ def build_audit(case, events, fixture, workspace):
         "provenance": {
             "producer_kind": "external_harness",
             "runner_id": "codex-synthetic-portfolio",
-            "runner_version": "1.0.8",
+            "runner_version": "1.0.9",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "case_id": case["id"],
             "case_input_sha256": validator.case_input_sha256(case),
