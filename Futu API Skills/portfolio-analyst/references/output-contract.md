@@ -1,28 +1,27 @@
 # Markdown chat output contract
 
-Return one readable Markdown report in chat, without default saved artifacts or raw JSON.
-Keep the complete holdings table and stable sections; substantive views belong within them.
+Return one Markdown report in chat; no default saved artifacts or raw JSON. Use the required sections below.
 
 ## Required section order
 
-Use level-two headings with these exact English or Chinese titles, in order; omit Option risk only
-when inapplicable. Body language is natural; do not rename or combine required sections.
+Use these literal Chinese headings or `## ` followed by the exact English title, in order.
+Omit Option risk only when inapplicable; do not rename or combine sections.
 
 | Canonical section | Chinese heading | Content |
 |---|---|---|
-| Scope and data time | 范围与数据时间 | REAL/USD, bound snapshot_id/as_of including timezone and precision, separate research time. |
-| One-line conclusion | 一句话结论 | Most consequential supported portfolio view and material qualification. In active advice, state the preferred opportunity/choice. |
-| Overview | 组合概览 | NAV, cash/weight, reserve context, count, concentration, costs/values, unrealized P&L/contribution where supported. |
-| Three principal risks | 三个主要风险 | Three supported risks or explicit gaps, ordered by materiality with affected holdings, mechanism and priority reason. |
-| Complete holdings table | 完整持仓表 | Every nonzero filled holding, exactly once. |
-| Selected deep research | 重点研究 | Selection reason, decisive question/evidence, thesis/counterevidence, valuation, shared drivers and actual technical coverage. |
-| Option risk | 期权风险 | Conditional: preserve tool status and distinguish economic-risk gaps. |
-| Macro impact | 宏观影响 | Short transmission to current exposures. |
-| Observations | 观察 | Portfolio implications and concrete review triggers; conditional advice/candidates/strategies as requested. |
-| Data gaps and sources | 数据缺口与来源 | Local gaps, omitted research names/reasons, actual coverage and source notes. |
+| Scope and data time | `## 范围与数据时间` | REAL/USD, bound snapshot_id/as_of including timezone and precision, separate research time. |
+| One-line conclusion | `## 一句话结论` | Most consequential supported portfolio view and material qualification. In active advice, state the preferred opportunity/choice. |
+| Overview | `## 组合概览` | NAV, cash/weight, reserve context, count, concentration, costs/values, unrealized P&L/contribution where supported. |
+| Three principal risks | `## 三个主要风险` | Three supported risks or explicit gaps, ordered by materiality with affected holdings, mechanism and priority reason. |
+| Complete holdings table | `## 完整持仓表` | Every nonzero filled holding, exactly once. |
+| Selected deep research | `## 重点研究` | Selection reason, decisive question/evidence, thesis/counterevidence, valuation, shared drivers and actual technical coverage. |
+| Option risk | `## 期权风险` | Conditional: preserve tool status and distinguish economic-risk gaps. |
+| Macro impact | `## 宏观影响` | Short transmission to current exposures. |
+| Observations | `## 观察` | Portfolio implications and concrete review triggers; conditional advice/candidates/strategies as requested. |
+| Data gaps and sources | `## 数据缺口与来源` | Local gaps, omitted research names/reasons, actual coverage and source notes. |
 
 Within sections use level-three/four subheadings, bullets, or bold paragraph labels with a trailing
-colon, such as `**Data gaps:**`. Standalone bold titles without a colon count as section headings.
+colon, such as `**Data gaps:**`. Bold labels are paragraphs, not replacements for the required headings.
 Keep omissions and their budget reasons inside Data gaps and sources, not an unrecognized appendix.
 
 ## Holdings and research presentation
@@ -35,7 +34,8 @@ Short comment: 1–3 evidence-based sentences. No Role, Inferred role, Score, Ra
 or forced `ADD/HOLD/TRIM/EXIT` columns. Identify shorts without implying complete short-risk analysis.
 Cash remains in Overview; researched candidates never enter this table.
 
-Before sending, reconcile final rows to the retained snapshot: weight, market value and unrealized
+Before sending, check headings once each in order against this loaded contract. Reconcile final rows
+to the retained snapshot: weight, market value and unrealized
 P&L must remain in their own columns, including unknowns. A correct total or complete symbol list
 does not excuse a missing cell. Repair only the affected presentation; do not reacquire account data.
 

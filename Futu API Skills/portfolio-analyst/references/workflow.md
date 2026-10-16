@@ -56,13 +56,13 @@ not read it.
 
 ## 4. Research and compose
 
-Apply the six question routes, selection/budgets, and quality requirements in
+Apply the already-loaded six question routes, selection/budgets, and quality requirements in
 [research policy](research-policy.md), using the [research capability contract](tool-contract/core/research.md).
 Reuse qualified evidence and loaded instructions; validate facts/calculations under
 [evidence policy](evidence-policy.md). Keep public requests free of private portfolio context.
 Use actual [technical coverage](tool-contract/core/technical.md); research selection cannot enlarge it.
 
-Add conditional layers only through intent routing. Compose the [output contract](output-contract.md)
+Add conditional layers only through intent routing. Compose the retained [output contract](output-contract.md)
 Markdown sections in chat, connecting supported and contrary findings to portfolio implications.
 Cite account facts with the bound `snapshot_id`/`as_of`; external facts need sources, periods, units,
 and direct links or actual result locators. Put local gaps beside affected conclusions and summarize

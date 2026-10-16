@@ -452,8 +452,16 @@ def test_output_contract_headings_are_observable_in_both_languages():
             pairs.append(cells[:2])
     assert len(pairs) == len(producer.SECTION_ALIASES)
     for column in (0, 1):
-        report = "\n\n".join(f"## {pair[column]}\nEvidence" for pair in pairs)
+        headings = [pair[column].strip("`") for pair in pairs]
+        report = "\n\n".join(
+            (heading if heading.startswith("## ") else "## " + heading) + "\nEvidence"
+            for heading in headings
+        )
         assert list(producer._sections(report)) == list(producer.SECTION_ALIASES)
+        assert (
+            producer._report_checks().check_sections(report, has_options=True)["status"]
+            == "VERIFIED"
+        )
 
 
 def test_output_contract_requires_first_column_for_research_symbols():

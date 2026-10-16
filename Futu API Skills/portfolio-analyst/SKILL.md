@@ -19,18 +19,18 @@ reader. Public research uses existing authorized public research capabilities, n
 
 ## Default comprehensive route
 
-Before acquisition, use the complete current-version content of these references. Read only documents
-missing from available context; a link or later step does not require reloading them. If prior output
-was truncated, recover missing content rather than rereading the collection:
+Before acquisition, read these references in order, skipping complete current-version content
+already available. Treat each successful full read as loaded for this analysis: later links and phase
+changes reuse it. Recover only missing/truncated content. Finish with research/output, then acquire:
 
 1. [Workflow](references/workflow.md) and [intent routing](references/intent-routing.md).
 2. [Portfolio analysis](references/portfolio-analysis-policy.md),
-   [evidence](references/evidence-policy.md), [research](references/research-policy.md),
-   [output](references/output-contract.md) and
+   [evidence](references/evidence-policy.md) and
    [failure and degradation](references/failure-and-degradation.md).
 3. Core contracts: [snapshot](references/tool-contract/core/snapshot.md),
    [risk](references/tool-contract/core/risk.md), [research](references/tool-contract/core/research.md)
    and [technical](references/tool-contract/core/technical.md).
+4. [Research](references/research-policy.md), then [output](references/output-contract.md).
 
 Run the owned one-shot helper exactly once for a fresh `REAL` / `USD` snapshot. Use one bound snapshot (`snapshot_id` / `as_of`) for
 account facts and selection. There is **no default persistence** of snapshots, reports or research.
