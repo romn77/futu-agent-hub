@@ -108,13 +108,14 @@ class FutuPortfolioRepository:
         }
         self.discovery_complete = discovery_complete
 
-    def read(
+    def select_accounts(
         self,
         *,
         trd_env: str = "REAL",
         timeout: float = 30,
         account_ids: Sequence[str] | None = None,
-    ) -> PortfolioInputs:
+    ) -> tuple[_SelectedAccount, ...]:
+        """Validate the requested account population without fetching its holdings."""
         environment = trd_env.upper()
         requested: set[str] | None = None
         if account_ids is not None:
@@ -192,6 +193,17 @@ class FutuPortfolioRepository:
                 "multiple eligible securities accounts; select with --acc-id "
                 "(repeat only for explicitly requested aggregation)"
             )
+        return tuple(selected)
+
+    def read(
+        self,
+        *,
+        trd_env: str = "REAL",
+        timeout: float = 30,
+        account_ids: Sequence[str] | None = None,
+    ) -> PortfolioInputs:
+        environment = trd_env.upper()
+        selected = self.select_accounts(trd_env=environment, timeout=timeout, account_ids=account_ids)
         cash_balances: list[CashBalance] = []
         positions: list[Position] = []
         source_errors: list[str] = []

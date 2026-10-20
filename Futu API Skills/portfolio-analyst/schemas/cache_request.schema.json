@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public cache lookup request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query"],
+  "properties": {
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "interface", "version", "subject", "dataset", "parameters"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1, "maxLength": 512},
+        "interface": {"type": "string", "minLength": 1, "maxLength": 512},
+        "version": {"type": "string", "minLength": 1, "maxLength": 512},
+        "subject": {"type": "string", "minLength": 1, "maxLength": 512},
+        "dataset": {"enum": ["sec.index", "sec.content", "sec.facts", "sec.holdings", "market.ohlcv", "news", "estimates", "valuation", "disclosure", "summary"]},
+        "parameters": {"type": "object"}
+      }
+    },
+    "cutoff": {"type": "string"},
+    "historical": {"type": "boolean"},
+    "force": {"type": "boolean"}
+  }
+}

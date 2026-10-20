@@ -18,6 +18,8 @@ class FutuAdjustedPriceProvider:
         self, adapter: PrivateJsonReader, *, snapshots: Sequence[PortfolioSnapshot] = ()
     ) -> None:
         self.adapter = adapter
+        from .cache.market import active_market_cache
+        self._market_cache = active_market_cache()
         source_codes: dict[str, set[str]] = {}
         for snapshot in snapshots:
             for position in snapshot.positions:
@@ -50,7 +52,10 @@ class FutuAdjustedPriceProvider:
                 return None
             code = source_code
         start = as_of - timedelta(days=max(lookback * 2, 180))
-        payload = self.adapter.read_private_json(
+        read = (self.adapter.read_private_json if self._market_cache is None else
+                lambda name, args, **kwargs: self._market_cache.read_private_json(
+                    self.adapter, name, args, **kwargs))
+        payload = read(
             "get_kline",
             [
                 code,

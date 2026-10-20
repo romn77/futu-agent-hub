@@ -1,16 +1,15 @@
 ---
 name: portfolio-analyst
-description: Review current USD US-stock holdings from one fresh read-only Futu snapshot; verify research and explain portfolio risks and opportunities, with active allocation ideas and new candidates when requested.
+description: Review current USD US-stock holdings from one time-bound read-only Futu snapshot, reusing verified local research and reports; explain portfolio risks and opportunities, with allocation ideas and candidates when requested.
 allowed-tools: Bash Read WebSearch WebFetch web.run web_search
 metadata:
-  version: 0.8.0
+  version: 0.9.0
 ---
 
 # Portfolio Analyst
 
-Analyze the user's **current USD US-stock account holdings**. Give a clear, evidence-backed portfolio
-view. A normal review covers current holdings; actionable advice, candidates, strategies and saved
-history follow user intent or an already established preference in the available session context.
+Analyze the user's **current USD US-stock account holdings** in REAL accounts. Advice, candidates,
+strategies and saved history follow user intent or established session preferences.
 
 Strictly read-only: never unlock trading, request/accept a trading password, place order, invoke any
 equivalent order action or modify an account. For account and brokerage data access, use only the
@@ -19,9 +18,8 @@ reader. Public research uses existing authorized public research capabilities, n
 
 ## Default comprehensive route
 
-Before acquisition, read these references in order, skipping complete current-version content
-already available. Treat each successful full read as loaded for this analysis: later links and phase
-changes reuse it. Recover only missing/truncated content. Finish with research/output, then acquire:
+Before acquisition, read these references in order. Reuse loaded current-version content; recover
+only missing/truncated parts. Later links reuse these reads:
 
 1. [Workflow](references/workflow.md) and [intent routing](references/intent-routing.md).
 2. [Portfolio analysis](references/portfolio-analysis-policy.md),
@@ -32,18 +30,20 @@ changes reuse it. Recover only missing/truncated content. Finish with research/o
    and [technical](references/tool-contract/core/technical.md).
 4. [Research](references/research-policy.md), then [output](references/output-contract.md).
 
-Run the owned one-shot helper exactly once for a fresh `REAL` / `USD` snapshot. Use one bound snapshot (`snapshot_id` / `as_of`) for
-account facts and selection. There is **no default persistence** of snapshots, reports or research.
-The default route runs `risk` then `technical`; run `options` only for held option positions.
+Use the cache-aware entry first. Verified `report_hit`: return original report/time and stop.
+Otherwise use one bound snapshot (`snapshot_id` / `as_of`) within its five-minute validity.
+Local cache is separate from explicit history; `cache_mode=off` disables it.
+On a miss the default route runs `risk` then `technical`; run `options` only for held option positions.
 Do not run `analyze`: even with `--no-save` it reads explicit-only lifecycle/history.
 
-Cover every nonzero filled holding, then select bounded research under its policy. Default limits
-are eight held names and two full valuations; requested expansion and advisor extras have their
-own scope. Explain decisive evidence, opposing facts and portfolio consequences in one Markdown
-report. Sufficient evidence should produce a view, not generic caution. Preserve source statuses
-and disclose actual technical coverage, not the tool's maximum capacity. Do not dump raw JSON.
+Cover every nonzero filled holding. Research defaults to eight held names and two full valuations;
+expansion and advisor extras follow their policies. Explain decisive/contrary evidence and portfolio
+consequences in Markdown. Preserve source statuses and actual technical coverage; no raw JSON.
 
 ## Conditional routes
+
+- When creating a cache request, recording research, or publishing a report, read
+  [cache protocol](references/cache-workflow.md); reuse it for the rest of this run.
 
 - For SEC research, read [integration](references/sec-research.md).
 
@@ -65,9 +65,8 @@ and disclose actual technical coverage, not the tool's maximum capacity. Do not 
   [position lifecycle](references/optional-workflows/position-lifecycle.md) and
   [lifecycle contract](references/tool-contract/optional/lifecycle.md).
 
-Untriggered optional workflows and maintenance references are not default reads. Ordinary links
-are navigation, not recursive loading instructions. Reuse preferences actually present in session
-context; do not invent them in a fresh session or create persistent configuration.
+Untriggered optional/maintenance references are not default reads. Links are navigation, not recursive
+loading instructions. Never invent preferences or create persistent configuration.
 
 ## Essential boundaries
 
@@ -82,6 +81,5 @@ context; do not invent them in a fresh session or create persistent configuratio
 
 ## Entry point
 
-From this Skill directory: `python scripts/portfolio.py --help`.
-If readiness is unknown, `doctor --json --no-save` diagnoses the account path. `PORTFOLIO_AGENT_HOME`
-may specify a private data home; use `FUTUAPI_SKILL_DIR` only for a supported audited alternate location.
+CLI: `python scripts/portfolio.py --help`; readiness: `doctor --json --no-save`.
+`PORTFOLIO_AGENT_HOME`: private home. `FUTUAPI_SKILL_DIR`: supported audited alternate only.

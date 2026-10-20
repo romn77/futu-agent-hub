@@ -8,7 +8,7 @@ An institutional lead means “these disclosed managers changed positions”; mo
 
 ## Evidence path
 
-Use qualified evidence already in the session. Otherwise locate the latest applicable annual/interim filing and material event reports, retaining exact accessions. Establish growth, profitability, cash conversion, balance sheet and capital allocation using periods actually available.
+Use qualified evidence already in the session or verified public cache receipts. With the optional analyst cache bridge, call SEC reads with `--cache-mode prefer`; otherwise retain the standalone read path and disclose cache unavailability. Check the current filing directory (one-hour validity), then reuse exact accessions and content versions. A new cutoff must be covered by the checked directory. An unchanged directory refresh preserves content and compatible summaries; a new filing or amendment requires affected thesis work. Establish growth, profitability, cash conversion, balance sheet and capital allocation using periods actually available.
 
 Follow the decisive issue into notes: revenue quality → recognition and receivables; expansion → CapEx and commitments; leverage → maturity/covenants/liquidity; dilution → share compensation and share-count basis. Read the relevant original text, including a truncated excerpt's necessary continuation.
 
@@ -29,5 +29,7 @@ When a parent analyst workflow applies, retain its two-model budget and valuatio
 Lead with a supported conclusion and the research cutoff. Explain how the company earns money, decisive evidence, financial periods, contrary findings, any performed valuation/peer work, and observable next questions. Keep source links and limitations beside the claims they constrain.
 
 Hand off only relevant public findings: question, claim, fact/inference/scenario, actual source/accession/section, reporting period, support, contrary evidence and unfinished work. Portfolio implications are composed in analyst using its own fresh account evidence.
+
+Where available, use the analyst public cache protocol to reuse or publish question/method-specific summaries with evidence and discovery dependencies. Keep actual counterevidence and gaps. Retain original data and creation times; a hit is not a new source check. `refresh_all` explicitly rechecks evidence; `off` leaves no cache state. Summary metadata never proves a source was read: use actual authorized source receipts. Never publish account facts, the manager selection list or portfolio conclusions in public storage.
 
 No account access or persistence is necessary. A company-data gap remains local; a focused answer must not masquerade as a completed comprehensive review.

@@ -36,6 +36,10 @@ For exact raw 13F reads use holdings-13f with --cik, --accession and --cutoff. T
 
 All SDK commands accept --seconds (default 600) and --max-bytes (default 209715200). Filing index/collect accept --max-filings (default 100 per manager). Responses are streamed through a read-only SEC-host filter, use temporary SDK state and terminate on denial or resource exhaustion. There is no blanket retry loop on denied operations.
 
+The optional local bridge accepts `--cache-mode off|prefer|refresh_all` (standalone default `off`; cache-aware skills explicitly choose `prefer`). It calls the sibling analyst `scripts/cache.py` or installed `portfolio_analyst.cache.cli` using the existing interpreter; `RESEARCH_CACHE_PYTHON` may select an already installed absolute interpreter. No package is installed automatically. `RESEARCH_CACHE_HOME` selects a private, non-repository public cache root. Cache failures appear in diagnostics and leave the authorized source path available.
+
+`prefer` reuses complete fixed filings and slices cached whole text for pagination. Filing-index validity is one hour and must cover the requested cutoff; collect still rechecks amendment chains. `refresh_all` bypasses evidence hits. The controlled SEC transport reserves shared half-second request slots across cooperating bridge processes, in addition to SDK safeguards. Other MCP/host sources are not covered by this rate budget.
+
 ## Outputs
 
 JSON reads return success/data or success=false/error with a code. Exit 2 denotes failure. Partial collection may exit 0; inspect discovery_complete, diagnostics, truncation, issues and analysis status.

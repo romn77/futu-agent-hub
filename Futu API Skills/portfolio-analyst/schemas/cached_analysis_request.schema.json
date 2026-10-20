@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cache-aware analysis request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "question": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "preferences": {"type": ["object", "null"]},
+    "language": {"type": "string", "minLength": 1, "maxLength": 64},
+    "cache_mode": {"enum": ["prefer", "refresh_account", "refresh_all", "off"]},
+    "analysis_mode": {"enum": ["current", "historical"]},
+    "freshness_requirement": {"enum": ["bounded", "latest"]},
+    "account_ids": {"type": ["array", "null"], "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[1-9][0-9]{4,19}$"}},
+    "snapshot_id": {"type": ["string", "null"]},
+    "scope": {"type": "object"},
+    "requested_cutoff": {"type": ["string", "null"]},
+    "events": {"type": "array", "maxItems": 32, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "account_changed"}}},
+      {"type": "object", "additionalProperties": false, "required": ["type", "cik"], "properties": {"type": {"const": "sec_filing"}, "cik": {"type": "string", "pattern": "^[0-9]{1,10}$"}}}
+    ]}}
+  }
+}

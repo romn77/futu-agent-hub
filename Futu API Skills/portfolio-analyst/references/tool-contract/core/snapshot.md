@@ -6,10 +6,12 @@
 python scripts/portfolio.py snapshot --trd-env REAL --base-currency USD --json --no-save
 ```
 
-The comprehensive route acquires through the [one-shot helper](../../workflow.md), not a second
-snapshot command. The CLI accepts `REAL`/`SIMULATE` and parser-declared currencies; this route always
+The comprehensive route uses the [cache-aware workflow](../../workflow.md), with its owned one-shot
+helper on a miss, not a second snapshot command. The CLI accepts `REAL`/`SIMULATE` and parser-declared currencies; this route always
 uses REAL/USD. `--save` explicitly creates immutable history; `--output` is unsupported.
 Default/`--no-save` creates no canonical snapshot or stable alias key.
+The separate cache-aware entry may create its stable scope key and private short-term cache; it
+does not change that old CLI promise. Cached snapshots retain original IDs and data times.
 
 `--acc-id ACCOUNT_ID` selects a private account; repeat only for explicit aggregation. Without it,
 only one eligible account may be auto-selected. Multiple candidates return
