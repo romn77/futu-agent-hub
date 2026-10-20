@@ -98,7 +98,9 @@ then match locally; peers are comparisons, not candidates. Inspect existing valu
 data before fetching another peer set. Fetch each relevant earnings-calendar window once in chunks
 of no more than seven days; split 14-day windows, deduplicate, and do not repeat per holding.
 
-Keep reuse in this run or permitted temporary state, without a default database/cross-session cache.
+Reuse verified local evidence and cited summaries across sessions through the cache protocol; keep
+original retrieval and data times. Refresh discovery separately from fixed filings, and recompute
+only affected findings. A missing/expired discovery receipt prevents complete current-report replay.
 Explain necessary refetches due to freshness, missing fields or verification. Follow evidence policy
 for numerical/privacy rules and failure policy for ordinary corrections, bounded retries and denials.
 

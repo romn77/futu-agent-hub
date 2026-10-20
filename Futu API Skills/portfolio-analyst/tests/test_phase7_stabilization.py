@@ -141,7 +141,7 @@ def test_packaging_explicitly_limits_packages_and_exposes_cli_entrypoint():
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
     assert '[project.scripts]\nportfolio-analyst = "portfolio_analyst.cli:main"' in pyproject
-    assert '[tool.setuptools]\npackages = ["portfolio_analyst"]' in pyproject
+    assert '[tool.setuptools]\npackages = ["portfolio_analyst", "portfolio_analyst.cache"]' in pyproject
 
 
 def test_missing_history_note_at_producer_symbol_bound_validates_in_risk_and_portfolio():

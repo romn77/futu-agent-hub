@@ -1,6 +1,7 @@
 # Markdown chat output contract
 
-Return one Markdown report in chat; no default saved artifacts or raw JSON. Use the required sections below.
+Return one Markdown report in chat, not raw JSON. The cache-aware route may retain a private
+short-term copy; explicit exports/history stay separate. Use the required sections below.
 
 ## Required section order
 
@@ -85,3 +86,8 @@ Show classification known/unknown coverage alongside exposure claims. Preserve B
 WITHIN_LIMIT, UNKNOWN and NOT_CONFIGURED; UNKNOWN is neither an industry nor a pass/breach, and
 null breach is not false. Label NAV HHI separately from holdings-only HHI/effective positions;
 cash does not change relative holdings diversification. Mark legacy inverse NAV-HHI as legacy.
+
+For cache replay, show original snapshot/report time and a short reuse note without rewriting the
+entire report. For new reports, retain the exact snapshot ID and ISO as_of in Scope and data time;
+publish only after holdings cells, required research and actual dependency refs have been checked.
+Incomplete or cache-write-failed reports may be returned with their real gaps, never as a complete hit.

@@ -8,11 +8,13 @@ Disclose the enabled set and list version. Check parent/subsidiary, included-man
 
 ## Acquire and compare
 
-Use collect with the list, target quarter, number of snapshots and frozen cutoff. Keep the resulting public bundle in same-run temporary state, or save only if requested. Review per-manager discovery errors and returned periods.
+Use collect with the list, target quarter, number of snapshots and frozen cutoff. When the optional analyst cache bridge is available, pass `--cache-mode prefer`. Collect rechecks the required manager directories and reuses normalized filings by manager/accession/content version; adding a manager or quarter fetches missing documents without refetching unaffected filings. Keep the selected-universe bundle in same-run temporary state, or export only if requested; the public cache stores individual public filings, not the user's selected list or notes. Review per-manager discovery errors and returned periods.
 
 Use raw full holdings for all relevant originals/amendments. Validate summary totals, units and row completeness; reconstruct effective quarters before comparing. An updated filing of an older quarter is not a new current-quarter trade. Preserve partial managers instead of silently deleting them.
 
 Collect public action/classification/relationship evidence only to fill actual gaps. Then run analyze on the bundle, with the same universe version/cutoff and optional enrichment. The public helper has no account inputs. Use its actual metrics and status; do not recompute by mental arithmetic or override missing coverage.
+
+Analyze runs on the current full bundle and enrichment; do not reuse old calculations solely because `universe_version` is unchanged. Classification, relationships, action evidence, configuration revision and calculation method all affect the result. Preserve historical cutoff restrictions for amendments. `refresh_all` rechecks fixed documents too; `off` keeps standalone behavior and writes no cache. Bridge failures are explicit diagnostics, never permission to install a backend or change tools.
 
 If overlap, corporate actions, price coverage or classification are unresolved, explain the individual disclosed changes and what data would resolve the question. Do not promote missing metadata into a marketwide trend.
 
