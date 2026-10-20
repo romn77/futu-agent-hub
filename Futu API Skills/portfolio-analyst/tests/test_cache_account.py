@@ -131,3 +131,34 @@ def test_account_discovery_is_separate_from_holdings_reads():
     selected = repository.select_accounts(trd_env="REAL")
     assert [item.private_id for item in selected] == ["90000001"]
     assert reader.calls == ["get_accounts"]
+
+
+def test_verified_scope_changes_with_actual_members_even_on_same_endpoint(tmp_path):
+    class Reader:
+        def __init__(self): self.ids = ['90000001']; self.calls = []
+        def protect_sensitive_values(self, values): pass
+        def read_private_json(self, name, args, **kwargs):
+            self.calls.append(name)
+            assert name == 'get_accounts'
+            return {'accounts': [{'acc_id': identifier, 'trd_env': 'REAL', 'acc_status': 'ACTIVE',
+                                  'security_firm': 'FUTUSECURITIES', 'trdmarket_auth': ['US']}
+                                 for identifier in self.ids]}
+    home = tmp_path / 'private'
+    (home / 'config').mkdir(parents=True, mode=0o700)
+    home.chmod(0o700)
+    config = home / 'config/account_currencies.json'
+    config.write_text(json.dumps({'provenance':'USER_CONFIG','accounts':{'90000001':'USD','90000002':'USD'}}))
+    config.chmod(0o600)
+    reader = Reader()
+    first = resolve_scope(Settings(home), adapter=reader)
+    again = resolve_scope(Settings(home), adapter=reader)
+    assert first == again and '90000001' not in first.key
+    reader.ids = ['90000002']
+    other = resolve_scope(Settings(home), adapter=reader)
+    assert first.key != other.key
+    reader.ids = ['90000001', '90000002']
+    with pytest.raises(AccountSelectionRequired):
+        resolve_scope(Settings(home), adapter=reader)
+    both = resolve_scope(Settings(home), reader.ids, adapter=reader)
+    assert both.key not in {first.key, other.key}
+    assert reader.calls == ['get_accounts'] * 5

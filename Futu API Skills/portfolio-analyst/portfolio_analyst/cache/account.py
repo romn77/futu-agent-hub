@@ -18,6 +18,7 @@ from ..futu_adapter import FutuAdapter
 from ..private_home import ensure_private_home
 from ..repository import FutuPortfolioRepository, SourceDataError, _source_version
 from ..service import load_account_currencies
+from ..schema import _schema_path
 from ..settings import discover_futuapi_skill
 from .market import use_market_cache
 from .types import CacheError, canonical, digest, utc
@@ -29,7 +30,7 @@ class AccountScope:
     account_ids: tuple[str, ...]
 
 
-def resolve_scope(settings, account_ids=None, *, adapter=None):
+def resolve_scope(settings, account_ids=None, *, adapter=None, persist_identity=True):
     """Always discover account identity before a current-report lookup in a new request."""
     if adapter is None:
         location = discover_futuapi_skill()
@@ -44,8 +45,9 @@ def resolve_scope(settings, account_ids=None, *, adapter=None):
     if not selected or any(item.query_market is None or item.security_firm is None
                            or item.query_currency is None for item in selected):
         raise SourceDataError("account query metadata is incomplete")
-    ensure_private_home(settings.data_home, create=True)
-    aliaser = AccountAliasStore(settings.data_home).load_or_create()
+    ensure_private_home(settings.data_home, create=persist_identity)
+    alias_store = AccountAliasStore(settings.data_home)
+    aliaser = alias_store.load_or_create() if persist_identity else alias_store.load()
     identity = {"endpoint": [settings.opend_host, settings.opend_port], "trd_env": "REAL",
                 "base_currency": "USD", "accounts": sorted(
                     (item.private_id, item.security_firm, item.query_currency, item.public.account_type,
@@ -57,8 +59,10 @@ def resolve_scope(settings, account_ids=None, *, adapter=None):
 def implementation_version(settings):
     """Include actual source, schemas and relevant configuration, including uncommitted edits."""
     package = Path(__file__).resolve().parents[1]
-    sources = sorted(package.rglob("*.py")) + sorted((package.parent / "schemas").glob("*.json"))
-    body = [(str(path.relative_to(package.parent)), hashlib.sha256(path.read_bytes()).hexdigest()) for path in sources]
+    body = [(str(path.relative_to(package.parent)), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in sorted(package.rglob("*.py"))]
+    body.extend(("schemas/" + path.name, hashlib.sha256(path.read_bytes()).hexdigest())
+                for path in sorted(_schema_path().parent.glob("*.json")))
     for name in ("fx_rates.json", "classifications.json", "security_metadata.json",
                  "account_currencies.json", "risk_policy.json"):
         path = settings.data_home / "config" / name
@@ -85,7 +89,8 @@ class AccountCache:
 
     def _save(self, query, payload, *, source_as_of, guards, kind, dependencies=()):
         try:
-            result = self.store.put(query, payload, source_as_of=source_as_of, ttl=300,
+            result = self.store.put(query, payload, source_as_of=source_as_of,
+                                    ttl=self.store.policy.values["ACCOUNT_TTL_SECONDS"],
                                     guards=guards, dependencies=dependencies, kind=kind,
                                     metadata={"query": query})
             return result
@@ -121,6 +126,7 @@ class AccountCache:
         risk_ref = None
         self.market.references.clear()
         report_eligible = True
+        response = None
 
         def command(arguments):
             nonlocal snapshot, snapshot_ref, risk, risk_ref, report_eligible
@@ -191,11 +197,22 @@ class AccountCache:
         try:
             with use_market_cache(self.market):
                 envelope = run_current_analysis(settings=self.settings, invoke=command, account_ids=scope.account_ids)
-            if self.store.guard("account:" + scope.key) != guard:
+            try:
+                current_guard = self.store.guard("account:" + scope.key)
+            except CacheError as exc:
+                self.diagnostics.append(exc.code)
+                current_guard, report_eligible = guard, False
+            if current_guard != guard:
                 raise CacheError("DEPENDENCY_CHANGED")
-            return {"envelope": envelope, "references": references, "guard": guard,
-                    "report_eligible": report_eligible, "counts": dict(self.counts),
-                    "diagnostics": [*self.diagnostics, *self.market.diagnostics]}
+            response = {"envelope": envelope, "references": references, "guard": guard,
+                        "report_eligible": report_eligible, "counts": dict(self.counts),
+                        "diagnostics": [*self.diagnostics, *self.market.diagnostics]}
+            return response
         finally:
             if lease is not None:
-                self.store.release(lease)
+                try:
+                    self.store.release(lease)
+                except CacheError as exc:
+                    if response is not None:
+                        response["diagnostics"].append(exc.code)
+                        response["report_eligible"] = False

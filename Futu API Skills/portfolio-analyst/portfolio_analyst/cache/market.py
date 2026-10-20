@@ -57,6 +57,7 @@ class MarketCache:
         self.references = []
         self.diagnostics = []
         self.source_calls = 0
+        self._refreshed = set()
 
     def read_private_json(self, adapter, name, arguments, *, timeout=5):
         if name != "get_kline":
@@ -93,10 +94,15 @@ class MarketCache:
                 return False
 
         try:
-            ttl = 300 if interval == "1w" and end.weekday() != 4 else 86400
-            result = self.store.get_or_create(query, load, force=self.force, accept=covers, ttl=ttl,
+            ttl = self.store.policy.ttl("market.ohlcv")
+            if interval == "1w" and end.weekday() != 4:
+                ttl = min(300, ttl)
+            key = digest(query)
+            result = self.store.get_or_create(query, load, force=self.force and key not in self._refreshed,
+                                               accept=covers, ttl=ttl,
                                                kind="public_evidence", metadata={"query": query,
                                                "source_url": "tool://futu/get_kline", "data_end": end.isoformat()})
+            self._refreshed.add(key)
             if result.get("ref"):
                 self.references.append(result["ref"])
             value = result["payload"]["response"]
