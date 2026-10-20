@@ -186,3 +186,29 @@ def test_same_universe_recomputes_changed_classification_without_mutating_filing
     assert 'Utilities' not in {s['label'] for s in after['signals']}
     assert 'Energy' in {s['label'] for s in after['signals']}
     assert documents == original
+
+
+def test_two_sec_client_processes_reuse_cached_filing_pagination(tmp_path):
+    import json
+    import os
+    import subprocess
+    code = '''
+import json,sys
+from pathlib import Path
+from sec_research.cache import CacheBridge,CachedReader
+from test_cache import make_reader,ACC,NOW
+counts=dict(company=0,index=0,text=0)
+r=CachedReader(make_reader(counts),CacheBridge(root=Path(sys.argv[1])))
+result=r.content('1',ACC,NOW.isoformat(),offset=int(sys.argv[2]),limit=4)
+print(json.dumps({'counts':counts,'text':result['text'],'diagnostics':r.diagnostics}))
+'''
+    root = Path(__file__).parents[1]
+    env = {**os.environ,'PYTHONPATH':os.pathsep.join((str(root),str(root/'tests'),str(root.parent/'portfolio-analyst')))}
+    receipts = []
+    for offset in ('0','4'):
+        value = subprocess.run([sys.executable,'-B','-c',code,str(tmp_path/'public'),offset],
+                               capture_output=True,text=True,env=env,check=True)
+        receipts.append(json.loads(value.stdout))
+    assert receipts[0]['counts']['text'] == 1 and receipts[0]['text'] == 'abcd'
+    assert receipts[1]['counts'] == {'company':0,'index':0,'text':0}
+    assert receipts[1]['text'] == 'efgh' and receipts[1]['diagnostics'] == []

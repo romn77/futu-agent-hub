@@ -157,3 +157,27 @@ def test_cleanup_failure_cannot_replace_loader_exception(tmp_path, monkeypatch):
     monkeypatch.setattr(coordination, 'release', lambda *a: (_ for _ in ()).throw(CacheError('CORRUPT')))
     with pytest.raises(RuntimeError, match='source denied'):
         store.get_or_create(QUERY, fail)
+
+
+def test_crashed_process_lease_expires_and_late_owner_is_fenced(tmp_path):
+    code = '''
+import json,os,sys
+from datetime import datetime
+from portfolio_analyst.cache import CacheStore
+s=CacheStore(sys.argv[1],clock=lambda:datetime.fromisoformat(sys.argv[2]))
+lease=s.reserve({'crash':1},seconds=1)['lease']
+print(json.dumps(lease),flush=True)
+if sys.argv[3]=='crash':os._exit(23)
+s.put({'crash':1},'new owner',lease=lease)
+'''
+    root = str(tmp_path / 'cache')
+    first = subprocess.run([sys.executable,'-B','-c',code,root,NOW.isoformat(),'crash'],capture_output=True,text=True)
+    assert first.returncode == 23
+    old = json.loads(first.stdout)
+    later = NOW + timedelta(seconds=1)
+    second = subprocess.run([sys.executable,'-B','-c',code,root,later.isoformat(),'publish'],capture_output=True,text=True)
+    assert second.returncode == 0, second.stderr
+    store = CacheStore(root,clock=lambda:later)
+    with pytest.raises(CacheError,match='STALE_LEASE'):
+        store.put({'crash':1},'late original',lease=old)
+    assert store.lookup({'crash':1})['payload'] == 'new owner'

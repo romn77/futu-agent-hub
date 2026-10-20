@@ -9,9 +9,8 @@ from .types import CacheError, canonical, utc
 from .evidence_shape import validate_evidence
 
 
-TTL = {"sec.index": 3600, "news": 900, "estimates": 86400, "valuation": 86400,
-       "market.ohlcv": 86400, "sec.content": None, "sec.facts": None,
-       "sec.holdings": None, "disclosure": None, "summary": None}
+DATASETS = {"sec.index", "news", "estimates", "valuation", "market.ohlcv",
+            "sec.content", "sec.facts", "sec.holdings", "disclosure", "summary"}
 PRIVATE_KEYS = {"acc_id", "account_id", "account_ids", "account_ref", "private_id",
                 "source_snapshot_id", "snapshot_id", "nav_base", "total_assets",
                 "portfolio_snapshot", "account_scope", "portfolio_implications",
@@ -44,7 +43,7 @@ def validate_query(query):
     if any(not isinstance(query[key], str) or not 0 < len(query[key]) <= 512
            for key in required - {"parameters"}):
         raise CacheError("INVALID_QUERY")
-    if query["dataset"] not in TTL or not isinstance(query["parameters"], dict):
+    if query["dataset"] not in DATASETS or not isinstance(query["parameters"], dict):
         raise CacheError("INVALID_QUERY")
     parameter_fields = {
         "sec.index": {"forms", "start", "limit"},
@@ -105,7 +104,7 @@ class PublicCache:
             complete = False
         if available_at is not None and utc(available_at) > utc(self.store.clock()):
             raise CacheError("CLOCK_INVALID")
-        default_ttl = TTL[query["dataset"]]
+        default_ttl = self.store.policy.ttl(query["dataset"])
         if default_ttl is not None and source_as_of is None:
             raise CacheError("SOURCE_TIME_REQUIRED")
         if ttl is not None and default_ttl is not None:

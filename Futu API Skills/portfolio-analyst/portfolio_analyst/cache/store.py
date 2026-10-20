@@ -8,6 +8,7 @@ from pathlib import Path
 import secrets
 
 from .storage import Disk
+from .policy import CachePolicy
 from .types import CacheError, canonical, digest, now_utc, utc
 from . import coordination
 
@@ -19,8 +20,10 @@ class CacheStore:
             raise CacheError("INVALID_INPUT")
         self.root = Path(root).expanduser().absolute()
         self.scope, self.clock, self.enabled = scope, clock, enabled
-        self.max_item_bytes = max_item_bytes or (64 if scope == "public" else 16) * 1024**2
-        self.max_bytes = max_bytes or (512 if scope == "public" else 128) * 1024**2
+        self.policy = CachePolicy(enabled=enabled)
+        self.policy_version = self.policy.version(scope)
+        self.max_item_bytes = (64 if scope == "public" else 16) * 1024**2 if max_item_bytes is None else max_item_bytes
+        self.max_bytes = self.policy.values[scope.upper() + "_MAX_MIB"] * 1024**2 if max_bytes is None else max_bytes
         if type(self.max_bytes) is not int or self.max_bytes < 128 or type(self.max_item_bytes) is not int or self.max_item_bytes <= 0:
             raise CacheError("INVALID_INPUT")
         self.peers = {scope: self}
@@ -48,9 +51,9 @@ class CacheStore:
         scopes = {self.scope}
         self._dependencies(dependencies, historical=False, visited=set(), scopes=scopes)
         retention = retention_seconds if retention_seconds is not None else (
-            86400 if self.scope == "private" else None)
+            self.policy.values["PRIVATE_RETENTION_SECONDS"] if self.scope == "private" else None)
         record = {
-            "schema_version": 1, "scope": self.scope, "kind": kind,
+            "schema_version": 1, "scope": self.scope, "kind": kind, "policy_version": self.policy_version,
             "query_key": digest(query), "content_hash": digest(payload),
             "source_as_of": source.isoformat(), "created_at": now.isoformat(),
             "first_retrieved_at": now.isoformat(),
@@ -205,6 +208,8 @@ class CacheStore:
             raise CacheError("CORRUPT")
         if record.get("schema_version") != 1 or record.get("scope") != self.scope:
             raise CacheError("CORRUPT")
+        if not historical and record.get("policy_version") != self.policy_version:
+            raise CacheError("VERSION_CHANGED")
         if not historical:
             self._guards(disk, record.get("guards", []))
             state = self._state(disk, "query:" + record["query_key"])
@@ -212,6 +217,12 @@ class CacheStore:
                 raise CacheError("DEPENDENCY_CHANGED")
         if not historical and (utc(record["source_as_of"]) > now or utc(record["created_at"]) > now):
             raise CacheError("CLOCK_INVALID")
+        if not historical:
+            try:
+                if utc(disk.read("access", record_id)["at"]) > now:
+                    raise CacheError("CLOCK_INVALID")
+            except FileNotFoundError:
+                pass
         if record["retention_until"] and now >= utc(record["retention_until"]):
             raise CacheError("EXPIRED")
         if not historical and record["expires_at"] and now >= utc(record["expires_at"]):
@@ -245,7 +256,12 @@ class CacheStore:
                        else disk.read("refs", requested["query_key"]))
                 record, payload = self._read(disk, ref["record_id"], now, historical)
                 self._match_ref(requested, record)
-                access = {"at": now.isoformat()}
+                observed = now
+                try:
+                    observed = max(now, utc(disk.read("access", ref["record_id"])["at"]))
+                except FileNotFoundError:
+                    pass
+                access = {"at": observed.isoformat()}
                 if disk.total_bytes() + len(canonical(access)) - disk.size("access", ref["record_id"]) <= self.max_bytes:
                     disk.write("access", ref["record_id"], access)
             self._dependencies(record.get("dependencies", []), historical=historical, visited=visited,

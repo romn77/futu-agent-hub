@@ -42,6 +42,11 @@ class CacheBridge:
                 command.extend(("--" + name, str(path)))
             environment = {key: os.environ[key] for key in
                            ("PATH", "HOME", "TMPDIR", "LANG", "RESEARCH_CACHE_HOME") if key in os.environ}
+            for name in ("SEC_INDEX_TTL_SECONDS", "NEWS_TTL_SECONDS", "ESTIMATES_TTL_SECONDS",
+                         "VALUATION_TTL_SECONDS", "OHLCV_TTL_SECONDS", "PUBLIC_MAX_MIB"):
+                key = "RESEARCH_CACHE_" + name
+                if key in os.environ:
+                    environment[key] = os.environ[key]
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
             if self.root is not None:
                 environment["RESEARCH_CACHE_HOME"] = str(self.root)

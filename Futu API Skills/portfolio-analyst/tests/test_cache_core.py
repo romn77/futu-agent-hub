@@ -104,3 +104,15 @@ def test_private_modes_and_no_unknown_value_coercion(tmp_path):
     assert store.lookup(QUERY)["payload"] == {"zero": 0, "unknown": None, "empty": []}
     for path in store.root.rglob("*"):
         assert path.stat().st_mode & 0o777 == (0o700 if path.is_dir() else 0o600)
+
+
+def test_rollback_after_a_successful_read_does_not_rewind_last_access(tmp_path):
+    moment = [NOW]
+    store = CacheStore(tmp_path / 'cache', clock=lambda: moment[0])
+    store.put(QUERY, 'body', ttl=300)
+    moment[0] += timedelta(seconds=100)
+    assert store.lookup(QUERY)['status'] == 'HIT'
+    moment[0] -= timedelta(seconds=50)
+    assert store.lookup(QUERY)['reason'] == 'CLOCK_INVALID'
+    assert store.lookup(QUERY, historical=True)['status'] == 'HIT'
+    assert store.lookup(QUERY)['reason'] == 'CLOCK_INVALID'
