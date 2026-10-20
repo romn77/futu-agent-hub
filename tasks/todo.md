@@ -2,7 +2,7 @@
 
 各任务按依赖顺序完成，验证命令使用本 worktree PYTHONPATH 与已有 Python 测试环境。
 
-- [ ] T1 安全存储、记录、TTL与禁用路径
+- [x] T1 安全存储、记录、TTL与禁用路径
   - 验收：C01–C06、C12；跨进程读、到期不续期、拒绝不安全文件。
   - 文件：cache/types.py、cache/storage.py、cache/store.py、test_cache_core.py。
   - 验证：pytest tests/test_cache_core.py；红→绿。
@@ -50,3 +50,5 @@
 ## 执行记录
 
 - 2026-10-20：T3已绑定独立worktree；12份设计/证据文件迁入且SHA-256一致；原主工作区未改动。
+
+- T1：新增8项行为测试先因缺少cache模块失败，随后全部通过；验证独立进程读取、精确到期、关闭缓存、时间异常、软链接/权限、损坏、大小和零值。
