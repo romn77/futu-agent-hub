@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "mode": "OFFLINE_SYNTHETIC",
+  "controlled_time": "2026-10-20T14:00:00+00:00",
+  "cache_source_sha256": "1e1e4d2325a6cf93aa24de307a72fca2a6c01a4203cd9c98b5eaf1c04417393d",
+  "cases": {
+    "stocks": {
+      "pairs": [
+        [
+          {
+            "phase": "cold",
+            "route": "report_published",
+            "seconds": 0.08771166601218283,
+            "prepare_seconds": 0.06399808300193399,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_hit",
+            "seconds": 0.010355083039030433,
+            "prepare_seconds": 0.010353541001677513,
+            "identity_discoveries": 1,
+            "source_methods": {},
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 0,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_published",
+            "seconds": 0.0753180420724675,
+            "prepare_seconds": 0.053929417044855654,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_hit",
+            "seconds": 0.01048004103358835,
+            "prepare_seconds": 0.010479083051905036,
+            "identity_discoveries": 1,
+            "source_methods": {},
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 0,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_published",
+            "seconds": 0.0815817080438137,
+            "prepare_seconds": 0.05921262502670288,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_hit",
+            "seconds": 0.009270708076655865,
+            "prepare_seconds": 0.009269832982681692,
+            "identity_discoveries": 1,
+            "source_methods": {},
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 0,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_published",
+            "seconds": 0.07691679208073765,
+            "prepare_seconds": 0.051773083047010005,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_hit",
+            "seconds": 0.01060724991839379,
+            "prepare_seconds": 0.010606415919028223,
+            "identity_discoveries": 1,
+            "source_methods": {},
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 0,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_published",
+            "seconds": 0.07623495801817626,
+            "prepare_seconds": 0.053154957946389914,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_hit",
+            "seconds": 0.00962687493301928,
+            "prepare_seconds": 0.009626165963709354,
+            "identity_discoveries": 1,
+            "source_methods": {},
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 0,
+            "report_digest": "f84042bed3481dbf791778c8b4c1949a2ab6219f099efef1c4f08a49e863dd5a",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ]
+      ],
+      "cold_median_seconds": 0.07691679208073765,
+      "hot_median_seconds": 0.010355083039030433
+    },
+    "options": {
+      "pairs": [
+        [
+          {
+            "phase": "cold",
+            "route": "report_uncached",
+            "seconds": 0.07508708303794265,
+            "prepare_seconds": 0.068009625072591,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1,
+              "options": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_uncached",
+            "seconds": 0.05891441705171019,
+            "prepare_seconds": 0.055283957975916564,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "options": 1
+            },
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_uncached",
+            "seconds": 0.07510125008411705,
+            "prepare_seconds": 0.06894862500485033,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1,
+              "options": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_uncached",
+            "seconds": 0.06907608301844448,
+            "prepare_seconds": 0.06507883302401751,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "options": 1
+            },
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_uncached",
+            "seconds": 0.0739713329821825,
+            "prepare_seconds": 0.0684086250839755,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1,
+              "options": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_uncached",
+            "seconds": 0.058392792008817196,
+            "prepare_seconds": 0.05481829203199595,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "options": 1
+            },
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_uncached",
+            "seconds": 0.0729151249397546,
+            "prepare_seconds": 0.06709725002292544,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1,
+              "options": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_uncached",
+            "seconds": 0.05795841699000448,
+            "prepare_seconds": 0.05444108403753489,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "options": 1
+            },
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "route": "report_uncached",
+            "seconds": 0.07303149998188019,
+            "prepare_seconds": 0.06700204196386039,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "snapshot": 1,
+              "risk": 1,
+              "technical": 1,
+              "options": 1
+            },
+            "public_fixture_reads": 2,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          },
+          {
+            "phase": "hot",
+            "route": "report_uncached",
+            "seconds": 0.057593542034737766,
+            "prepare_seconds": 0.05410129204392433,
+            "identity_discoveries": 2,
+            "source_methods": {
+              "options": 1
+            },
+            "public_fixture_reads": 0,
+            "synthetic_report_renders": 1,
+            "report_digest": "0018aaf0fee62101781b31265f475abd0e64b2fc415e75f23c4a64bfebd201c7",
+            "snapshot_as_of": "2026-10-20T14:00:00+00:00",
+            "extra_refreshes": 0,
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline production workflow + synthetic source/renderer"
+          }
+        ]
+      ],
+      "cold_median_seconds": 0.0739713329821825,
+      "hot_median_seconds": 0.058392792008817196
+    },
+    "sec": {
+      "pairs": [
+        [
+          {
+            "phase": "cold",
+            "seconds": 0.0035008330596610904,
+            "source_methods": {
+              "company": 1,
+              "index": 1,
+              "text": 1
+            },
+            "payload_digest": "bc91fe50dbf02ae92597dda8b1493783359abff7a3f4485f85ed4779747be894",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          },
+          {
+            "phase": "hot",
+            "seconds": 0.0009753750637173653,
+            "source_methods": {
+              "company": 0,
+              "index": 0,
+              "text": 0
+            },
+            "payload_digest": "bc91fe50dbf02ae92597dda8b1493783359abff7a3f4485f85ed4779747be894",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "seconds": 0.0029269170481711626,
+            "source_methods": {
+              "company": 1,
+              "index": 1,
+              "text": 1
+            },
+            "payload_digest": "2c16c26cfd5dd8a70b64e87ba368e1a6170f3047137cbf13bc1a2f23f3945ea6",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          },
+          {
+            "phase": "hot",
+            "seconds": 0.0011369159910827875,
+            "source_methods": {
+              "company": 0,
+              "index": 0,
+              "text": 0
+            },
+            "payload_digest": "2c16c26cfd5dd8a70b64e87ba368e1a6170f3047137cbf13bc1a2f23f3945ea6",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "seconds": 0.0034292920026928186,
+            "source_methods": {
+              "company": 1,
+              "index": 1,
+              "text": 1
+            },
+            "payload_digest": "91759eb9c3cefa4a7dfb2f7eac78939fc3933e16f8ec7dfaa2d33f6ae05e8fa6",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          },
+          {
+            "phase": "hot",
+            "seconds": 0.0010812500258907676,
+            "source_methods": {
+              "company": 0,
+              "index": 0,
+              "text": 0
+            },
+            "payload_digest": "91759eb9c3cefa4a7dfb2f7eac78939fc3933e16f8ec7dfaa2d33f6ae05e8fa6",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "seconds": 0.003067457932047546,
+            "source_methods": {
+              "company": 1,
+              "index": 1,
+              "text": 1
+            },
+            "payload_digest": "ecccbdf5f537c5768e2efc19b9b6064269b863f4711919384266e10870cce021",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          },
+          {
+            "phase": "hot",
+            "seconds": 0.0011297919554635882,
+            "source_methods": {
+              "company": 0,
+              "index": 0,
+              "text": 0
+            },
+            "payload_digest": "ecccbdf5f537c5768e2efc19b9b6064269b863f4711919384266e10870cce021",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          }
+        ],
+        [
+          {
+            "phase": "cold",
+            "seconds": 0.0028468749951571226,
+            "source_methods": {
+              "company": 1,
+              "index": 1,
+              "text": 1
+            },
+            "payload_digest": "290af63d2839b673b1863bbc13e005080d5256bd808349426696841ba7bbb165",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          },
+          {
+            "phase": "hot",
+            "seconds": 0.0009386669844388962,
+            "source_methods": {
+              "company": 0,
+              "index": 0,
+              "text": 0
+            },
+            "payload_digest": "290af63d2839b673b1863bbc13e005080d5256bd808349426696841ba7bbb165",
+            "returned_text_bytes": 4,
+            "cache_receipts": 1,
+            "diagnostics": [],
+            "http_requests": null,
+            "model_input_bytes": null,
+            "model_input_tokens": null,
+            "model_output_tokens": null,
+            "measurement_scope": "offline SEC adapter + synthetic source"
+          }
+        ]
+      ],
+      "cold_median_seconds": 0.003067457932047546,
+      "hot_median_seconds": 0.0010812500258907676
+    }
+  },
+  "real_network_performance": "NOT_RUN",
+  "host_model_tokens": "NOT_RUN",
+  "reason": "No real account, source network or LLM was invoked; local wall time is not end-to-end host performance."
+}

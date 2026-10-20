@@ -1,0 +1,15 @@
+Cache architecture audit, 2026-10-20
+Repository baseline: main 72c477a plus existing working-tree changes.
+
+Offline synthetic probe, from repository root:
+PYTHONDONTWRITEBYTECODE=1 'Futu API Skills/portfolio-analyst/.venv/bin/python' output/cache-architecture-audit-2026-10-20/probe.py > output/cache-architecture-audit-2026-10-20/probe-results.json
+Exit status: 0.
+No Futu or SEC network connection; fixtures and in-memory SDK fake only.
+Counters measure command/method invocations, not real HTTP traffic or latency.
+
+Focused existing tests, from Futu API Skills/portfolio-analyst:
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_current_analysis_helper.py tests/test_price_history_adapter.py tests/test_technical_cli.py -q -p no:cacheprovider
+Exit status: 0.
+Captured stdout:
+...................................                                      [100%]
+35 cases passed. No cache implementation was added by this audit.

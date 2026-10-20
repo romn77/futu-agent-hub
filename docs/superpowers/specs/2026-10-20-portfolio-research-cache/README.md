@@ -1,6 +1,6 @@
 # 组合分析与研究缓存设计
 
-日期：2026-10-20。状态：PRD 与技术 Spec 草案；缓存尚未实现。用户已同意分层复用方向与时间场景，本目录将其整理成可评审的产品要求和实现契约，不代表下面的具体接口已经上线或完成验收。
+日期：2026-10-20。状态：已批准设计，已在独立分支 `feature/portfolio-research-cache` 实现。实际功能测试、安装验证及46项验收状态见[实施与验收记录](../../../reviews/2026-10-20-cache-implementation.md)。真实宿主/token/网络性能的未执行项在该记录中单列，不将设计要求当作通过证据。
 
 目标是在本机同一用户的不同 session、thread 和进程之间，复用合格公开证据、研究摘要、短期账户结果和完整报告。没有新输入时减少重复工作；输入变化时只更新受影响部分，并保留真实的数据时间与来源。
 
@@ -43,4 +43,4 @@
 
 产品范围与用户可见行为以 PRD 为准；字段、状态与算法以对应 Spec 为准；可测条件以验收规范为准。发现冲突时先修订文档，不自行降低完整性或放宽时间规则。
 
-后续实现需同步现有 Skill、workflow、research/evidence/output contracts 中“默认不跨 session 缓存”的规则。本次只写文档，不改变现行执行行为，也不创建外部 issue、PR 或定时任务。
+实施已同步相关 Skill、workflow、research/evidence/output contracts。原 `current_analysis.py` 和 `--no-save` 保持兼容，新 `cached_analysis.py` 提供缓存组合入口。未合并main、未创建外部 issue/PR 或定时任务。原批准的需求与验收标准保持不变。

@@ -1,0 +1,149 @@
+{
+  "scope": "offline synthetic fixtures; command counts, not network or latency measurements",
+  "repeated_analysis": [
+    {
+      "held_options": false,
+      "runs": [
+        {
+          "run": 1,
+          "commands": [
+            "snapshot",
+            "risk",
+            "technical"
+          ],
+          "same_snapshot": true,
+          "remaining_files": 0,
+          "helper_degradations": []
+        },
+        {
+          "run": 2,
+          "commands": [
+            "snapshot",
+            "risk",
+            "technical"
+          ],
+          "same_snapshot": true,
+          "remaining_files": 0,
+          "helper_degradations": []
+        }
+      ],
+      "command_counts": {
+        "snapshot": 2,
+        "risk": 2,
+        "technical": 2
+      }
+    },
+    {
+      "held_options": true,
+      "runs": [
+        {
+          "run": 1,
+          "commands": [
+            "snapshot",
+            "risk",
+            "technical",
+            "options"
+          ],
+          "same_snapshot": true,
+          "remaining_files": 0,
+          "helper_degradations": []
+        },
+        {
+          "run": 2,
+          "commands": [
+            "snapshot",
+            "risk",
+            "technical",
+            "options"
+          ],
+          "same_snapshot": true,
+          "remaining_files": 0,
+          "helper_degradations": []
+        }
+      ],
+      "command_counts": {
+        "snapshot": 2,
+        "risk": 2,
+        "technical": 2,
+        "options": 2
+      }
+    }
+  ],
+  "repeated_history_provider_reads": {
+    "adapter_calls": 6,
+    "requests": [
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1d",
+        "start": "2026-02-21",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "1000"
+      },
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1d",
+        "start": "2026-04-02",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "160"
+      },
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1w",
+        "start": "2024-10-14",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "110"
+      },
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1d",
+        "start": "2026-02-21",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "1000"
+      },
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1d",
+        "start": "2026-04-02",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "160"
+      },
+      {
+        "command": "get_kline",
+        "code": "US.AAA",
+        "interval": "1w",
+        "start": "2024-10-14",
+        "end": "2026-10-19",
+        "adjustment": "forward",
+        "session": "NONE",
+        "page_size": "110"
+      }
+    ]
+  },
+  "sec_pagination": {
+    "same_reader_two_pages": {
+      "company": 1,
+      "get_filings": 1,
+      "text": 1
+    },
+    "two_cli_executions": {
+      "company": 2,
+      "get_filings": 2,
+      "text": 2
+    }
+  }
+}
