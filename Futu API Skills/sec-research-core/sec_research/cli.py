@@ -209,7 +209,12 @@ def main(argv=None):
         receipt = {"success": True, "data": json_value(result)}
         cached_reader = getattr(args, "_cache_reader", None)
         if cached_reader is not None:
-            receipt["cache"] = {"refs": [item["ref"] for item in cached_reader.receipts if item.get("ref")],
+            def evidence_ref(item):
+                if item["record"]["metadata"].get("query", {}).get("dataset") == "sec.index":
+                    return {"scope": "public", "query_key": item["record"]["query_key"],
+                            "generation": item["record"]["generation"], "epoch": item["record"]["query_epoch"]}
+                return item["ref"]
+            receipt["cache"] = {"refs": [evidence_ref(item) for item in cached_reader.receipts if item.get("ref")],
                                 "diagnostics": cached_reader.diagnostics}
         elif getattr(args, "_cache_unavailable", False):
             receipt["cache"] = {"refs": [], "diagnostics": ["UNSUPPORTED_BACKEND"]}

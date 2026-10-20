@@ -25,6 +25,7 @@ class DirectBridge:
     def publish(self, query, payload, **kwargs): return self.public.publish(query, payload, **kwargs)
     def release(self, lease): return self.store.release(lease)
     def rate_limit(self): return self.store.rate_limit("SEC")
+    def guard(self, tag): return self.store.guard(tag)
 
 
 def make_reader(counts):
@@ -94,3 +95,94 @@ def test_cache_off_preserves_reader_behavior(tmp_path):
     from sec_research.cli import parser
     args = parser().parse_args(["filing-content", "--cik", "1", "--accession", ACC])
     assert args.cache_mode == "off"
+
+
+def test_normalized_13f_payload_is_reused_without_losing_units_or_rows(tmp_path):
+    from sec_research.reader import normalize_13f
+    from test_reader import obj, metadata
+    calls = []
+    document = normalize_13f(obj(), metadata(), "<edgarSubmission/>")
+    def holdings(*args):
+        calls.append(args)
+        return document
+    raw = SimpleNamespace(budget=Budget(), holdings=holdings)
+    bridge = DirectBridge(CacheStore(tmp_path / "public", clock=lambda: NOW))
+    for _ in range(2):
+        result = CachedReader(raw, bridge, clock=lambda: NOW).holdings("1", ACC, NOW.isoformat())
+        assert result["value_unit"] == "USD"
+        assert result["rows"] == document["rows"]
+    assert len(calls) == 1
+
+
+def test_historical_index_cache_does_not_cover_a_later_requested_period(tmp_path):
+    calls = []
+    def index(identifier, forms, start, cutoff, **kwargs):
+        calls.append(cutoff)
+        return {"filings": [], "complete": True, "issues": [], "time_precision": "date",
+                "knowledge_cutoff": cutoff}
+    reader = SimpleNamespace(budget=Budget(), index=index)
+    bridge = DirectBridge(CacheStore(tmp_path / "public", clock=lambda: NOW))
+    cached = CachedReader(reader, bridge, clock=lambda: NOW)
+    cached.index("1", ["10-K"], "2026-01-01", "2026-06-01T00:00:00Z")
+    result = cached.index("1", ["10-K"], "2026-01-01", NOW.isoformat())
+    assert len(calls) == 2
+    assert result["knowledge_cutoff"] == NOW.isoformat()
+
+
+def test_index_coverage_uses_disclosure_timezone_across_eastern_midnight(tmp_path):
+    calls = []
+    def index(identifier, forms, start, cutoff, **kwargs):
+        calls.append(cutoff)
+        return {'filings': [], 'complete': True, 'knowledge_cutoff': cutoff}
+    reader = CachedReader(SimpleNamespace(budget=Budget(), index=index),
+                          DirectBridge(CacheStore(tmp_path / 'public', clock=lambda: NOW)), clock=lambda: NOW)
+    reader.index('1', ['10-K'], '2026-01-01', '2026-10-20T02:00:00Z')
+    reader.index('1', ['10-K'], '2026-01-01', '2026-10-20T14:00:00Z')
+    assert len(calls) == 2
+
+
+def test_collect_expansion_fetches_only_missing_manager_period_filings(tmp_path):
+    from copy import deepcopy
+    from sec_research.cli import collect
+    from sec_research.universe import Universe
+    from test_signals import scenario
+    universe, documents, enrichment = scenario(2)
+    calls = []
+    for doc in documents:
+        doc['manager_cik'] = doc['manager_cik'].zfill(10)
+        doc['retrieved_at'] = NOW.isoformat()
+    def index(identifier, forms, start, cutoff, **kwargs):
+        return {'filings': [{key: doc[key] for key in
+                            ('manager_cik','accession','form','filed','source_url','retrieved_at','report_period')}
+                           for doc in documents if doc['manager_cik'] == identifier.zfill(10)],
+                'complete': True, 'knowledge_cutoff': cutoff}
+    def holdings(identifier, accession, cutoff):
+        calls.append((identifier, accession))
+        return deepcopy(next(doc for doc in documents if doc['accession'] == accession))
+    raw = SimpleNamespace(budget=Budget(), index=index, holdings=holdings)
+    reader = CachedReader(raw, DirectBridge(CacheStore(tmp_path / 'public', clock=lambda: NOW)),
+                          clock=lambda: NOW, strict_index=True)
+    one = Universe.from_mapping({'schema_version': 1, 'universe_id': 'one', 'managers':[{'cik':'1'}]})
+    first = collect(reader, one, '2026-06-30', NOW.isoformat(), 1, 100)
+    second = collect(reader, one, '2026-06-30', NOW.isoformat(), 2, 100)
+    expanded = collect(reader, universe, '2026-06-30', NOW.isoformat(), 2, 100)
+    assert len(first['filings']) == 1 and len(second['filings']) == 2 and len(expanded['filings']) == 4
+    assert len(calls) == len(set(calls)) == 4
+    assert not reader.diagnostics
+
+
+def test_same_universe_recomputes_changed_classification_without_mutating_filings():
+    from copy import deepcopy
+    from test_signals import scenario, run
+    universe, documents, enrichment = scenario()
+    original = deepcopy(documents)
+    before = run(universe, documents, enrichment)
+    for item in enrichment['classifications'].values():
+        if item['industry'] == 'Utilities':
+            item['industry'] = 'Energy'
+    enrichment['classification_version'] = 'revised-v2'
+    after = run(universe, documents, enrichment)
+    assert 'Utilities' in {s['label'] for s in before['signals']}
+    assert 'Utilities' not in {s['label'] for s in after['signals']}
+    assert 'Energy' in {s['label'] for s in after['signals']}
+    assert documents == original

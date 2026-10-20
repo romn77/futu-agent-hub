@@ -129,3 +129,31 @@ def test_bounded_wait_returns_busy(tmp_path):
     store.reserve(QUERY)
     with pytest.raises(CacheError, match="LEASE_BUSY"):
         store.get_or_create(QUERY, lambda: "must not run", wait_seconds=0.01)
+
+
+def test_two_sec_processes_share_request_slots(tmp_path):
+    code = '''
+import json,sys,time
+from portfolio_analyst.cache import CacheStore
+s=CacheStore(sys.argv[1])
+s.rate_limit('SEC', interval=0.2)
+print(json.dumps({'at':time.time()}))
+'''
+    children = [subprocess.Popen([sys.executable, '-B', '-c', code, str(tmp_path / 'cache')],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
+    times = []
+    for child in children:
+        out, err = child.communicate(timeout=15)
+        assert child.returncode == 0, err.decode()
+        times.append(json.loads(out)['at'])
+    assert abs(times[1] - times[0]) >= 0.15
+
+
+def test_cleanup_failure_cannot_replace_loader_exception(tmp_path, monkeypatch):
+    from portfolio_analyst.cache import coordination
+    store = CacheStore(tmp_path / 'cache')
+    def fail():
+        raise RuntimeError('source denied')
+    monkeypatch.setattr(coordination, 'release', lambda *a: (_ for _ in ()).throw(CacheError('CORRUPT')))
+    with pytest.raises(RuntimeError, match='source denied'):
+        store.get_or_create(QUERY, fail)

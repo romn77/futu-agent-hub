@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
+import secrets
 
 from .storage import Disk
 from .types import CacheError, canonical, digest, now_utc, utc
@@ -20,6 +21,8 @@ class CacheStore:
         self.scope, self.clock, self.enabled = scope, clock, enabled
         self.max_item_bytes = max_item_bytes or (64 if scope == "public" else 16) * 1024**2
         self.max_bytes = max_bytes or (512 if scope == "public" else 128) * 1024**2
+        if type(self.max_bytes) is not int or self.max_bytes < 128 or type(self.max_item_bytes) is not int or self.max_item_bytes <= 0:
+            raise CacheError("INVALID_INPUT")
         self.peers = {scope: self}
         self.events = []
 
@@ -72,10 +75,12 @@ class CacheStore:
             semantic_hash = digest(payload if semantic is None else semantic)
             generation = state["generation"] + int(state.get("semantic") != semantic_hash)
             record["generation"] = generation
+            record["query_epoch"] = state.get("epoch") or secrets.token_hex(16)
             record["created_at"] = now.isoformat()
             record_id = digest(record)
             writes = [("objects", record["content_hash"], payload), ("entries", record_id, record),
-                      ("state", digest(generation_key), {"generation": generation, "semantic": semantic_hash}),
+                      ("state", digest(generation_key), {"generation": generation, "semantic": semantic_hash,
+                                                         "epoch": record["query_epoch"]}),
                       ("access", record_id, {"at": now.isoformat()}),
                       ("refs", record["query_key"], {"record_id": record_id})]
             keep = {rid for scope, rid in protected if scope == self.scope}
@@ -85,7 +90,8 @@ class CacheStore:
                 pass
             extra = sum(len(canonical(value)) - disk.size(bucket, key) for bucket, key, value in writes)
             if extra + disk.total_bytes() > self.max_bytes:
-                self._prune(disk, now, keep=keep, target_bytes=max(0, self.max_bytes - extra))
+                self._prune(disk, now, keep=keep, target_bytes=max(0, self.max_bytes - extra),
+                            keep_states={digest(generation_key), *(digest(g["tag"]) for g in guards)})
             extra = sum(len(canonical(value)) - disk.size(bucket, key) for bucket, key, value in writes)
             if extra + disk.total_bytes() > self.max_bytes:
                 raise CacheError("CAPACITY_EXCEEDED")
@@ -99,7 +105,7 @@ class CacheStore:
 
     def discovery_ref(self, receipt):
         return {"scope": self.scope, "query_key": receipt["record"]["query_key"],
-                "generation": receipt["record"]["generation"]}
+                "generation": receipt["record"]["generation"], "epoch": receipt["record"]["query_epoch"]}
 
     @staticmethod
     def _state(disk, tag):
@@ -114,27 +120,29 @@ class CacheStore:
     def guard(self, tag):
         if not self.enabled:
             return {"scope": self.scope, "tag": tag, "generation": 0}
-        try:
-            with Disk(self.root, self.scope).locked() as disk:
-                generation = self._state(disk, tag)["generation"]
-        except FileNotFoundError:
-            generation = 0
-        return {"scope": self.scope, "tag": tag, "generation": generation}
+        with Disk(self.root, self.scope).locked(create=True) as disk:
+            state = self._state(disk, tag)
+            if "epoch" not in state:
+                state["epoch"] = secrets.token_hex(16)
+                self._metadata_write(disk, "state", digest(tag), state)
+        return {"scope": self.scope, "tag": tag, "generation": state["generation"], "epoch": state["epoch"]}
 
     def invalidate(self, tag):
         if not self.enabled:
             return self._result("BYPASS", "CACHE_DISABLED")
         with Disk(self.root, self.scope).locked(create=True) as disk:
-            value = self._state(disk, tag)["generation"] + 1
-            disk.write("state", digest(tag), {"generation": value})
-        return {"scope": self.scope, "tag": tag, "generation": value}
+            previous = self._state(disk, tag)
+            value, epoch = previous["generation"] + 1, previous.get("epoch") or secrets.token_hex(16)
+            self._metadata_write(disk, "state", digest(tag), {"generation": value, "epoch": epoch})
+        return {"scope": self.scope, "tag": tag, "generation": value, "epoch": epoch}
 
     def _guards(self, disk, guards):
         if not isinstance(guards, (list, tuple)) or len(guards) > 256:
             raise CacheError("INVALID_INPUT")
         for guard in guards:
             if (guard.get("scope") != self.scope
-                    or self._state(disk, guard["tag"])["generation"] != guard["generation"]):
+                    or self._state(disk, guard["tag"])["generation"] != guard["generation"]
+                    or self._state(disk, guard["tag"]).get("epoch") != guard.get("epoch")):
                 raise CacheError("DEPENDENCY_CHANGED")
 
     def _dependencies(self, dependencies, *, historical, visited, scopes=None, budget=None):
@@ -188,6 +196,8 @@ class CacheStore:
             raise CacheError("CORRUPT")
         if requested.get("generation", record["generation"]) != record["generation"]:
             raise CacheError("DEPENDENCY_CHANGED")
+        if requested.get("epoch", record["query_epoch"]) != record["query_epoch"]:
+            raise CacheError("DEPENDENCY_CHANGED")
 
     def _read(self, disk, record_id, now, historical):
         record = disk.read("entries", record_id)
@@ -197,7 +207,8 @@ class CacheStore:
             raise CacheError("CORRUPT")
         if not historical:
             self._guards(disk, record.get("guards", []))
-            if self._state(disk, "query:" + record["query_key"])["generation"] != record["generation"]:
+            state = self._state(disk, "query:" + record["query_key"])
+            if state["generation"] != record["generation"] or state.get("epoch") != record.get("query_epoch"):
                 raise CacheError("DEPENDENCY_CHANGED")
         if not historical and (utc(record["source_as_of"]) > now or utc(record["created_at"]) > now):
             raise CacheError("CLOCK_INVALID")
@@ -234,7 +245,9 @@ class CacheStore:
                        else disk.read("refs", requested["query_key"]))
                 record, payload = self._read(disk, ref["record_id"], now, historical)
                 self._match_ref(requested, record)
-                disk.write("access", ref["record_id"], {"at": now.isoformat()})
+                access = {"at": now.isoformat()}
+                if disk.total_bytes() + len(canonical(access)) - disk.size("access", ref["record_id"]) <= self.max_bytes:
+                    disk.write("access", ref["record_id"], access)
             self._dependencies(record.get("dependencies", []), historical=historical, visited=visited,
                                scopes=_scopes, budget=budget)
             return self._result("HIT" if record["availability"] == "COMPLETE" else "HIT_PARTIAL",
@@ -261,9 +274,49 @@ class CacheStore:
     def rate_limit(self, source, **options):
         return coordination.rate_limit(self, source, **options)
 
-    def _prune(self, disk, now, *, keep=None, target_bytes=None):
+    def _metadata_write(self, disk, bucket, key, value):
+        extra = len(canonical(value)) - disk.size(bucket, key)
+        if disk.total_bytes() + extra > self.max_bytes:
+            self._prune(disk, utc(self.clock()), target_bytes=max(0, self.max_bytes - extra),
+                        keep_states={key} if bucket == "state" else set(),
+                        keep_leases={key} if bucket == "leases" else set())
+        extra = len(canonical(value)) - disk.size(bucket, key)
+        if disk.total_bytes() + extra > self.max_bytes:
+            raise CacheError("CAPACITY_EXCEEDED")
+        disk.write(bucket, key, value)
+
+    def _gc_metadata(self, disk, now, keep_states, keep_leases):
+        active = False
+        for key in disk.keys("leases"):
+            try:
+                lease = coordination._validate_lease(disk.read("leases", key), key)
+                live = now < utc(lease["expires_at"])
+            except CacheError:
+                live = False
+            if live:
+                active = True
+            elif key not in keep_leases:
+                disk.remove("leases", key)
+        referenced = set(keep_states)
+        for key in disk.keys("entries"):
+            record = disk.read("entries", key)
+            referenced.add(digest("query:" + record["query_key"]))
+            referenced.update(digest(guard["tag"]) for guard in record["guards"])
+        for key in disk.keys("state"):
+            if key in referenced:
+                continue
+            state = disk.read("state", key)
+            if "reserved_until" in state:
+                if utc(state["reserved_until"]) <= now:
+                    disk.remove("state", key)
+            elif not active:
+                # A recreated guard/query gets a new epoch, preventing generation ABA.
+                disk.remove("state", key)
+
+    def _prune(self, disk, now, *, keep=None, target_bytes=None, keep_states=(), keep_leases=()):
         keep = set() if keep is None else set(keep)
         limit = self.max_bytes if target_bytes is None else target_bytes
+        self._gc_metadata(disk, now, keep_states, keep_leases)
         records = []
         for key in disk.keys("entries"):
             record = disk.read("entries", key)
@@ -294,6 +347,7 @@ class CacheStore:
             for blob in disk.keys("objects"):
                 if blob not in live:
                     disk.remove("objects", blob)
+            self._gc_metadata(disk, now, keep_states, keep_leases)
         if disk.total_bytes() > limit:
             raise CacheError("CAPACITY_EXCEEDED")
         return {"removed_records": removed, "bytes": disk.total_bytes()}

@@ -46,7 +46,22 @@ def validate_query(query):
         raise CacheError("INVALID_QUERY")
     if query["dataset"] not in TTL or not isinstance(query["parameters"], dict):
         raise CacheError("INVALID_QUERY")
+    parameter_fields = {
+        "sec.index": {"forms", "start", "limit"},
+        "sec.content": {"accession", "section"},
+        "sec.holdings": {"accession"},
+        "sec.facts": {"accessions", "concepts", "limit"},
+        "market.ohlcv": {"interval", "rehab", "session", "normalizer"},
+    }.get(query["dataset"], {"query", "window", "start", "end", "period", "as_of", "timezone", "limit",
+                              "section", "accession", "concepts", "method", "method_version", "question",
+                              "universe_version", "config_revision", "enrichment_hash", "target_period", "quarters"})
+    if set(query["parameters"]) - parameter_fields:
+        raise CacheError("INVALID_QUERY")
     reject_private(query)
+    for item in query["parameters"].values():
+        values = item if isinstance(item, list) else [item]
+        if len(values) > 1000 or any(type(value) not in {str, int, float, bool, type(None)} for value in values):
+            raise CacheError("INVALID_QUERY")
     if len(canonical(query)) > 16384:
         raise CacheError("INVALID_QUERY")
     return query

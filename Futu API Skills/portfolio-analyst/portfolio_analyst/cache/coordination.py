@@ -37,7 +37,7 @@ def reserve(store, query, *, seconds=60):
             pass
         lease = {"query_key": key, "token": secrets.token_hex(32),
                  "created_at": now.isoformat(), "expires_at": (now + timedelta(seconds=seconds)).isoformat()}
-        disk.write("leases", key, lease)
+        store._metadata_write(disk, "leases", key, lease)
     return {"status": "OWNER", "lease": lease}
 
 
@@ -71,7 +71,7 @@ def renew(store, lease, *, seconds=60):
         now = utc(store.clock())
         verify(disk, lease, lease["query_key"], now)
         updated = {**lease, "expires_at": (now + timedelta(seconds=seconds)).isoformat()}
-        disk.write("leases", lease["query_key"], updated)
+        store._metadata_write(disk, "leases", lease["query_key"], updated)
     return updated
 
 
@@ -96,7 +96,10 @@ def get_or_create(store, query, loader, *, force=False, wait_seconds=10, lease_s
                 value = loader()
                 return store.put(query, value, lease=lease, **options)
             finally:
-                release(store, lease)
+                try:
+                    release(store, lease)
+                except CacheError as exc:
+                    store.events.append({"status": "ERROR", "reason": exc.code, "operation": "release"})
         if time.monotonic() >= deadline:
             raise CacheError("LEASE_BUSY")
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
@@ -117,6 +120,6 @@ def rate_limit(store, source, *, interval=0.5, wait_seconds=30, sleeper=time.sle
         delay = max(0, (previous - now).total_seconds())
         if delay > wait_seconds:
             raise CacheError("LEASE_BUSY")
-        disk.write("state", key, {"reserved_until": (max(now, previous) + timedelta(seconds=interval)).isoformat()})
+        store._metadata_write(disk, "state", key, {"reserved_until": (max(now, previous) + timedelta(seconds=interval)).isoformat()})
     if delay:
         sleeper(delay)

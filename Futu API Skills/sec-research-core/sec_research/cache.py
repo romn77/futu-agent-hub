@@ -23,8 +23,7 @@ class CacheBridge:
     def __init__(self, *, root=None):
         self.root = root
         self.script = Path(__file__).resolve().parents[2] / "portfolio-analyst/scripts/cache.py"
-        if not self.script.is_file():
-            raise BridgeError("UNSUPPORTED_BACKEND")
+        self.entry = [str(self.script)] if self.script.is_file() else ["-m", "portfolio_analyst.cache.cli"]
         self.python = os.environ.get("RESEARCH_CACHE_PYTHON", sys.executable)
         if not Path(self.python).is_absolute() or not os.access(self.python, os.X_OK):
             raise BridgeError("UNSUPPORTED_BACKEND")
@@ -32,7 +31,7 @@ class CacheBridge:
     def _call(self, operation, *, request=None, manifest=None, payload=None, lease=None):
         with tempfile.TemporaryDirectory(prefix="sec-cache-bridge-") as directory:
             folder = Path(directory).resolve()
-            command = [self.python, "-B", str(self.script), operation, "--json"]
+            command = [self.python, "-B", *self.entry, operation, "--json"]
             for name, value in (("request", request), ("manifest", manifest), ("payload", payload), ("lease", lease)):
                 if value is None:
                     continue
@@ -72,6 +71,9 @@ class CacheBridge:
     def rate_limit(self):
         return self._call("rate-limit", request={"source": "SEC"})
 
+    def guard(self, tag):
+        return self._call("guard", request={"tag": tag})
+
 
 def _available_at(value):
     if len(str(value)) == 10:
@@ -103,15 +105,18 @@ class CachedReader:
         return {"provider": "SEC", "interface": "edgartools-5.62.0", "version": self.version,
                 "subject": cik(identifier), "dataset": dataset, "parameters": parameters}
 
-    def _resolve(self, query, load, *, cutoff=None, force=False, source_url=None, available=None):
-        lease, result = None, None
+    def _resolve(self, query, load, *, cutoff=None, force=False, source_url=None, available=None,
+                 accept=lambda payload: True):
+        lease, result, guards = None, None, []
         try:
             try:
                 if not (self.force or force):
                     result = self.bridge.lookup(query, **({"cutoff": cutoff} if cutoff else {}))
-                    if result["status"] == "HIT":
+                    if result["status"] == "HIT" and accept(result["payload"]):
                         self.receipts.append(result)
                         return result["payload"]
+                if query["dataset"] == "sec.index":
+                    guards = [self.bridge.guard("sec-discovery:" + query["subject"])]
                 deadline = time.monotonic() + 10
                 while True:
                     ownership = self.bridge.reserve(query)
@@ -120,7 +125,7 @@ class CachedReader:
                         break
                     if not (self.force or force):
                         result = self.bridge.lookup(query, **({"cutoff": cutoff} if cutoff else {}))
-                        if result["status"] == "HIT":
+                        if result["status"] == "HIT" and accept(result["payload"]):
                             self.receipts.append(result)
                             return result["payload"]
                     self.budget.check()
@@ -129,7 +134,7 @@ class CachedReader:
                     time.sleep(0.05)
                 if not (self.force or force):
                     result = self.bridge.lookup(query, **({"cutoff": cutoff} if cutoff else {}))
-                    if result["status"] == "HIT":
+                    if result["status"] == "HIT" and accept(result["payload"]):
                         self.receipts.append(result)
                         return result["payload"]
             except (BridgeError, OSError, subprocess.SubprocessError) as error:
@@ -145,7 +150,7 @@ class CachedReader:
                         source_as_of=self.clock().isoformat(),
                         available_at=_available_at(published) if published else None,
                         complete=not payload.get("truncated", False) and payload.get("complete", True),
-                        semantic=_semantic(payload),
+                        semantic=_semantic(payload), guards=guards,
                     )
                     self.receipts.append(receipt)
                 except (BridgeError, OSError, subprocess.SubprocessError) as error:
@@ -159,10 +164,12 @@ class CachedReader:
                     self.diagnostics.append("CACHE_RELEASE_FAILED")
 
     def index(self, identifier, forms, start, cutoff, *, limit=100):
-        query = self._query(identifier, "sec.index", {"forms": sorted(forms), "start": start,
-                             "end_date": timestamp(cutoff).date().isoformat(), "limit": limit})
+        query = self._query(identifier, "sec.index", {"forms": sorted(forms), "start": start, "limit": limit})
+        eastern = ZoneInfo("America/New_York")
         result = self._resolve(query, lambda: self.reader.index(identifier, forms, start, cutoff, limit=limit),
-                               force=self.strict_index)
+                               force=self.strict_index,
+                               accept=lambda payload: timestamp(payload["knowledge_cutoff"]).astimezone(eastern).date()
+                               >= timestamp(cutoff).astimezone(eastern).date())
         return {**result, "filings": [row for row in result["filings"] if available_by(row["filed"], cutoff)]}
 
     def content(self, identifier, accession, cutoff, *, section="full_text", offset=0, limit=12000):

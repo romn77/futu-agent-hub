@@ -16,6 +16,8 @@ def _fields(value, allowed, required):
 
 
 def _sec_meta(value, subject):
+    if any(not isinstance(value.get(key), str) or len(value[key]) > 4096 for key in SEC_META):
+        raise CacheError("INVALID_EVIDENCE")
     if (not re.fullmatch(r"[0-9]{10}", str(value.get("manager_cik", "")))
             or value["manager_cik"] != subject or not re.fullmatch(r"\d{10}-\d{2}-\d{6}", str(value.get("accession", "")))
             or urlsplit(value.get("source_url", "")).hostname not in {"www.sec.gov", "data.sec.gov"}):
@@ -50,20 +52,34 @@ def validate_evidence(query, payload, source_url):
                 {"filings", "complete", "knowledge_cutoff"})
         if type(payload["complete"]) is not bool or not isinstance(payload["filings"], list):
             raise CacheError("INVALID_EVIDENCE")
+        if (not isinstance(payload.get("issues", []), list)
+                or any(not isinstance(item, str) for item in payload.get("issues", []))
+                or not isinstance(payload.get("time_precision", ""), str)):
+            raise CacheError("INVALID_EVIDENCE")
         utc(payload["knowledge_cutoff"])
         for row in payload["filings"]:
             _fields(row, SEC_META | {"report_period"}, SEC_META)
             _sec_meta(row, query["subject"])
+            if row.get("report_period") is not None and not isinstance(row["report_period"], str):
+                raise CacheError("INVALID_EVIDENCE")
     elif dataset == "sec.facts":
         _fields(payload, {"cik", "knowledge_cutoff", "facts", "truncated", "coverage"},
                 {"cik", "knowledge_cutoff", "facts", "truncated"})
         if payload["cik"] != query["subject"] or type(payload["truncated"]) is not bool or not isinstance(payload["facts"], list):
+            raise CacheError("INVALID_EVIDENCE")
+        if not isinstance(payload.get("coverage", ""), str):
             raise CacheError("INVALID_EVIDENCE")
         for row in payload["facts"]:
             fields = {"concept", "value", "unit", "start", "end", "duration_days", "period_kind",
                       "basis", "accession", "filed", "derived"}
             _fields(row, fields, fields)
             if row["accession"] not in query["parameters"].get("accessions", []):
+                raise CacheError("INVALID_EVIDENCE")
+            if (type(row["value"]) not in {str, int, float, type(None)}
+                    or type(row["derived"]) is not bool
+                    or any(row[key] is not None and not isinstance(row[key], str)
+                           for key in ("concept", "unit", "start", "end", "period_kind", "basis", "accession", "filed"))
+                    or type(row["duration_days"]) not in {int, type(None)}):
                 raise CacheError("INVALID_EVIDENCE")
     elif dataset == "sec.holdings":
         allowed = SEC_META | {"report_period", "report_type", "amendment_type", "amendment_number",
@@ -73,13 +89,49 @@ def validate_evidence(query, payload, source_url):
         _sec_meta(payload, query["subject"])
         if not isinstance(payload["rows"], list):
             raise CacheError("INVALID_EVIDENCE")
+        for key in ("discovery_complete", "confidential", "unit_verified"):
+            if key in payload and type(payload[key]) is not bool:
+                raise CacheError("INVALID_EVIDENCE")
+        for key in ("report_period", "report_type", "amendment_type", "amendment_number",
+                    "value_unit", "summary_count", "summary_value"):
+            if type(payload.get(key)) not in {str, int, float, type(None)}:
+                raise CacheError("INVALID_EVIDENCE")
+        unit = payload.get("unit_resolution", {})
+        _fields(unit, {"unit", "source", "ambiguous", "priceable_rows", "fraction_sub_dollar", "schema_version"}, set())
+        if any(type(item) not in {str, int, float, bool, type(None)} for item in unit.values()):
+            raise CacheError("INVALID_EVIDENCE")
+        if not isinstance(payload.get("other_included_managers", []), list):
+            raise CacheError("INVALID_EVIDENCE")
+        for manager in payload.get("other_included_managers", []):
+            _fields(manager, {"cik", "name", "file_number", "sequence_number"}, set())
+            if any(type(item) not in {str, int, type(None)} for item in manager.values()):
+                raise CacheError("INVALID_EVIDENCE")
         fields = {"cusip", "issuer", "class_title", "put_call", "quantity_type", "quantity", "reported_value",
                   "instrument_type", "investment_discretion", "other_managers", "row_id", "voting_authority"}
         for row in payload["rows"]:
             _fields(row, fields, {"cusip", "reported_value"})
+            if any(value is not None and not isinstance(value, str)
+                   for key, value in row.items() if key not in {"other_managers", "voting_authority"}):
+                raise CacheError("INVALID_EVIDENCE")
+            if (not isinstance(row.get("other_managers", []), list)
+                    or any(not isinstance(item, str) for item in row.get("other_managers", []))):
+                raise CacheError("INVALID_EVIDENCE")
+            voting = row.get("voting_authority", {})
+            _fields(voting, {"Sole", "Shared", "None"}, set())
+            if any(value is not None and not isinstance(value, str) for value in voting.values()):
+                raise CacheError("INVALID_EVIDENCE")
     elif dataset == "market.ohlcv":
         _fields(payload, {"start", "end", "response", "revision_checked_at"},
                 {"start", "end", "response", "revision_checked_at"})
+        for field in ("start", "end", "revision_checked_at"):
+            if not isinstance(payload[field], str):
+                raise CacheError("INVALID_EVIDENCE")
+        _fields(payload["response"], {"code", "ktype", "source", "data"}, {"code", "ktype", "source", "data"})
+        for row in payload["response"]["data"]:
+            _fields(row, {"time", "open", "high", "low", "close", "volume", "turnover"},
+                    {"time", "open", "high", "low", "close", "volume"})
+            if any(type(item) not in {str, int, float} for item in row.values()):
+                raise CacheError("INVALID_EVIDENCE")
         from .market import _valid_response
         if not _valid_response(payload["response"], query["subject"], query["parameters"].get("interval")):
             raise CacheError("INVALID_EVIDENCE")
@@ -93,3 +145,9 @@ def validate_evidence(query, payload, source_url):
             _fields(observation, {"text", "value", "unit", "period", "source_locator"}, {"text"})
             if not isinstance(observation["text"], str):
                 raise CacheError("INVALID_EVIDENCE")
+            if type(observation.get("value")) not in {str, int, float, bool, type(None)}:
+                raise CacheError("INVALID_EVIDENCE")
+            for key in ("unit", "period", "source_locator"):
+                if observation.get(key) is not None and (not isinstance(observation[key], str)
+                                                         or len(observation[key]) > 4096):
+                    raise CacheError("INVALID_EVIDENCE")

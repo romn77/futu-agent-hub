@@ -33,7 +33,7 @@ def read_input(path, *, limit=16 * 1024 * 1024, private=False):
 def parser():
     root = argparse.ArgumentParser(description="Private local research cache; no network or account reads")
     commands = root.add_subparsers(dest="command", required=True)
-    for name in ("lookup", "reserve", "publish", "invalidate", "status", "prune", "release", "renew", "rate-limit"):
+    for name in ("lookup", "reserve", "publish", "invalidate", "guard", "status", "prune", "release", "renew", "rate-limit"):
         command = commands.add_parser(name)
         command.add_argument("--json", action="store_true")
         command.add_argument("--scope", choices=("public", "private"), default="public")
@@ -76,10 +76,10 @@ def execute(args):
             raise CacheError("INVALID_INPUT")
         store.rate_limit("SEC", interval=0.5)
         return {"status": "READY"}
-    if args.command == "invalidate":
+    if args.command in {"invalidate", "guard"}:
         if set(request) != {"tag"} or not isinstance(request["tag"], str):
             raise CacheError("INVALID_INPUT")
-        return store.invalidate(request["tag"])
+        return getattr(store, args.command)(request["tag"])
     manifest = read_input(args.manifest)
     payload = read_input(args.payload, limit=64 * 1024 * 1024)
     lease = read_input(args.lease, private=True) if args.lease else None
@@ -103,3 +103,7 @@ def main(argv=None):
         code = exc.code if isinstance(exc, CacheError) else "INVALID_INPUT"
         print(json.dumps({"status": "ERROR", "reason": code}))
         return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
