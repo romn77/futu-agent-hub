@@ -64,14 +64,15 @@ def renew(store, lease, *, seconds=60):
     return updated
 
 
-def get_or_create(store, query, loader, *, force=False, wait_seconds=10, lease_seconds=60, **options):
+def get_or_create(store, query, loader, *, force=False, wait_seconds=10, lease_seconds=60,
+                  accept=None, **options):
     if not store.enabled:
         return {"status": "BYPASS", "reason": "CACHE_DISABLED", "payload": loader()}
     deadline = time.monotonic() + min(max(wait_seconds, 0), 600)
     while True:
         if not force:
             cached = store.lookup(query)
-            if cached["status"] == "HIT":
+            if cached["status"] == "HIT" and (accept is None or accept(cached)):
                 return cached
         reservation = reserve(store, query, seconds=lease_seconds)
         if reservation["status"] == "OWNER":
@@ -79,7 +80,7 @@ def get_or_create(store, query, loader, *, force=False, wait_seconds=10, lease_s
             try:
                 if not force:
                     cached = store.lookup(query)
-                    if cached["status"] == "HIT":
+                    if cached["status"] == "HIT" and (accept is None or accept(cached)):
                         return cached
                 value = loader()
                 return store.put(query, value, lease=lease, **options)

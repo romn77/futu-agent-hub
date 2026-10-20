@@ -146,6 +146,8 @@ class FutuTechnicalHistoryProvider:
 
     def __init__(self, adapter: Any) -> None:
         self.adapter = adapter
+        from .cache.market import active_market_cache
+        self._market_cache = active_market_cache()
 
     def bars(
         self,
@@ -164,7 +166,10 @@ class FutuTechnicalHistoryProvider:
             else (WEEKLY_START_DAYS, WEEKLY_BAR_CAP)
         )
         code = f"US.{symbol.upper()}"
-        payload = self.adapter.read_private_json(
+        read = (self.adapter.read_private_json if self._market_cache is None else
+                lambda name, args, **kwargs: self._market_cache.read_private_json(
+                    self.adapter, name, args, **kwargs))
+        payload = read(
             "get_kline",
             [
                 code,

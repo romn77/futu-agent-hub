@@ -14,7 +14,7 @@
   - 依赖：T2。验收：P10–P13；来源校验、摘要引用和隐私范围、结构化CLI。
   - 文件：cache/public.py、cache/cli.py、scripts/cache.py、schemas/cache_request.schema.json、test_cache_public.py。
   - 验证：公开读写和CLI subprocess tests。
-- [ ] T4 行情共享接入
+- [x] T4 行情共享接入
   - 依赖：T3。验收：P07–P09；同口径覆盖复用，错误口径不命中。
   - 文件：cache/market.py、price_history.py、technical.py、test_cache_market.py。
   - 验证：新行情缓存与原行情/技术回归。
@@ -56,3 +56,5 @@
 - T2：10项新测试先失败，依赖/动态目录代次、租约fencing、容量清理和真实双进程协调实现后，与T1合计18项通过。首次并发创建锁的macOS ENOENT已定位并使用同一锚定名称的安全重开修复。
 
 - T3：公开证据/摘要和CLI新增9项测试先失败，完成后与核心合计27项通过；公共写入验证来源、时间、完整性、引用及已知私人字段，CLI新进程命中有效。
+
+- T4：5项行情行为测试及核心/原行情/技术共33项通过；同口径日线复用、周线独立、过期重取、非完整OHLCV不污染缓存，旧入口不隐式落盘。
