@@ -92,6 +92,8 @@ class CacheStore:
             return {"generation": 0}
 
     def guard(self, tag):
+        if not self.enabled:
+            return {"scope": self.scope, "tag": tag, "generation": 0}
         try:
             with Disk(self.root, self.scope).locked() as disk:
                 generation = self._state(disk, tag)["generation"]

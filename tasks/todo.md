@@ -22,7 +22,7 @@
   - 依赖：T3。验收：P01–P06、P14；正文分页、目录无变化、增量申报、共享节流。
   - 文件：sec_research/cache.py、reader.py、cli.py、transport.py、tests/test_cache.py。
   - 验证：SEC完整离线回归和跨解释器桥接。
-- [ ] T6 账户身份与短期结果
+- [x] T6 账户身份与短期结果
   - 依赖：T2、T4。验收：A01–A09；先发现再查、事件失效、旧helper兼容。
   - 文件：repository.py、current_analysis.py、cache/account.py、test_cache_account.py。
   - 验证：账户新测试与原账户选择/helper回归。
@@ -60,3 +60,5 @@
 - T4：5项行情行为测试及核心/原行情/技术共33项通过；同口径日线复用、周线独立、过期重取、非完整OHLCV不污染缓存，旧入口不隐式落盘。
 
 - T5：SEC全部74项（原69+新增5）通过。可选CLI桥接不增加强制依赖；缓存正文供分页复用、保留历史截止；collect为新的冻结cutoff执行必要目录检查，申报正文仍增量复用。后续验收需补增量13F及共享节流断言。
+
+- T6：账户和原helper/账户选择回归146项通过，核心复测24项通过；发现与持仓分离，稳定HMAC范围、快照/结果TTL、事件失效和新快照绑定已实现。现有options quote_freshness=UNVERIFIED，因此不得自动回放其当前结果；该边界已测。
