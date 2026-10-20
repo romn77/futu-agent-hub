@@ -34,6 +34,8 @@ def parser():
         command = commands.add_parser(name)
         command.add_argument("--cutoff", default=None, help="Timezone-qualified knowledge cutoff")
         command.add_argument("--output", help="Explicit new output file; never overwrite")
+        command.add_argument("--cache-mode", choices=("off", "prefer", "refresh_all"), default="off",
+                             help="Explicit opt-in local public-evidence cache")
         if name in {"collect", "analyze"}:
             command.add_argument("--managers", required=True)
             command.add_argument("--target-period")
@@ -130,6 +132,21 @@ def _run_sdk(args, cutoff, universe):
     try:
         with sdk_session(budget) as sdk:
             reader = EdgarReader(sdk, budget)
+            if getattr(args, "cache_mode", "off") != "off":
+                from .cache import BridgeError, CacheBridge, CachedReader
+                try:
+                    bridge = CacheBridge()
+                    reader = CachedReader(reader, bridge, force=args.cache_mode == "refresh_all",
+                                          strict_index=args.command == "collect")
+                    args._cache_reader = reader
+                    def shared_limit():
+                        try:
+                            bridge.rate_limit()
+                        except (BridgeError, OSError):
+                            reader.diagnostics.append("SHARED_RATE_LIMIT_UNAVAILABLE")
+                    budget.shared_rate_limiter = shared_limit
+                except BridgeError:
+                    args._cache_unavailable = True
             if args.command == "collect":
                 return collect(reader, universe, args.target_period or default_report_period(cutoff),
                                cutoff, args.quarters, args.max_filings)
@@ -189,8 +206,15 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         result = execute(args)
+        receipt = {"success": True, "data": json_value(result)}
+        cached_reader = getattr(args, "_cache_reader", None)
+        if cached_reader is not None:
+            receipt["cache"] = {"refs": [item["ref"] for item in cached_reader.receipts if item.get("ref")],
+                                "diagnostics": cached_reader.diagnostics}
+        elif getattr(args, "_cache_unavailable", False):
+            receipt["cache"] = {"refs": [], "diagnostics": ["UNSUPPORTED_BACKEND"]}
         output = (render_institutional(result) if args.command == "analyze" and not args.json
-                  else json.dumps({"success": True, "data": json_value(result)},
+                  else json.dumps(receipt,
                                   ensure_ascii=False, indent=2, allow_nan=False) + "\n")
         if getattr(args, "output", None):
             # The user explicitly chose this destination. Existing content is never replaced.

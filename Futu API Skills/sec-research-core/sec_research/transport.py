@@ -85,6 +85,10 @@ def _sdk_resources(budget):
                 require(request.method == "GET" and request.url.scheme == "https" and
                         request.url.host in {"www.sec.gov", "data.sec.gov"} and
                         request.url.port in {None, 443}, "PUBLIC_REQUEST_NOT_ALLOWED")
+                limiter = getattr(budget, "shared_rate_limiter", None)
+                if limiter is not None:
+                    limiter()
+                    budget.check()
 
             def after_response(response):
                 budget.check()

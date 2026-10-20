@@ -193,6 +193,11 @@ class EdgarReader:
 
     def content(self, identifier, accession_number, cutoff, *, section="full_text",
                 offset=0, limit=12000):
+        document = self.document(identifier, accession_number, cutoff, section=section)
+        return {**document, **content_slice(document["text"], offset=offset, limit=limit)}
+
+    def document(self, identifier, accession_number, cutoff, *, section="full_text"):
+        """Complete selected text, for local cache slicing within the same SDK session."""
         filing = self._filing(identifier, accession_number, cutoff)
         key = filing.accession_no, section
         if key not in self.contents:
@@ -208,8 +213,7 @@ class EdgarReader:
                 text = obj[section]
             require(text is not None, "SECTION_UNAVAILABLE")
             self.contents[key] = str(text)
-        return {**self._metadata(filing), "section": section,
-                **content_slice(self.contents[key], offset=offset, limit=limit)}
+        return {**self._metadata(filing), "section": section, "text": self.contents[key]}
 
     def facts(self, identifier, accessions, concepts, cutoff, *, limit=2000):
         require(bool(accessions) and bool(concepts) and 1 <= limit <= 10000, "INVALID_FACT_SCOPE")
