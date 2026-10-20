@@ -10,7 +10,7 @@
   - 依赖：T1。验收：C07–C11；依赖变化失效、竞争和旧所有者不能发布。
   - 文件：cache/store.py、cache/coordination.py、test_cache_processes.py。
   - 验证：独立进程竞争与故障注入、核心回归。
-- [ ] T3 公开证据/摘要与缓存CLI
+- [x] T3 公开证据/摘要与缓存CLI
   - 依赖：T2。验收：P10–P13；来源校验、摘要引用和隐私范围、结构化CLI。
   - 文件：cache/public.py、cache/cli.py、scripts/cache.py、schemas/cache_request.schema.json、test_cache_public.py。
   - 验证：公开读写和CLI subprocess tests。
@@ -54,3 +54,5 @@
 - T1：新增8项行为测试先因缺少cache模块失败，随后全部通过；验证独立进程读取、精确到期、关闭缓存、时间异常、软链接/权限、损坏、大小和零值。
 
 - T2：10项新测试先失败，依赖/动态目录代次、租约fencing、容量清理和真实双进程协调实现后，与T1合计18项通过。首次并发创建锁的macOS ENOENT已定位并使用同一锚定名称的安全重开修复。
+
+- T3：公开证据/摘要和CLI新增9项测试先失败，完成后与核心合计27项通过；公共写入验证来源、时间、完整性、引用及已知私人字段，CLI新进程命中有效。
