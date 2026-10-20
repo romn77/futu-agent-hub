@@ -57,8 +57,13 @@ class Disk:
             _private(os.fstat(current), directory=True)
             self.fd = current
             try:
-                lock_fd = os.open(".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
-                                  dir_fd=current)
+                try:
+                    lock_fd = os.open(".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                      0o600, dir_fd=current)
+                except FileNotFoundError:
+                    # Concurrent initial creation can surface ENOENT on macOS even
+                    # once the name exists. Reopen that exact anchored name only.
+                    lock_fd = os.open(".lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=current)
                 _private(os.fstat(lock_fd))
                 until = time.monotonic() + 10
                 while True:
@@ -170,3 +175,18 @@ class Disk:
                               if re.fullmatch(r"[a-f0-9]{64}\.json", name))
         except FileNotFoundError:
             return []
+
+    def total_bytes(self):
+        total = 0
+        for bucket in BUCKETS:
+            try:
+                with self.bucket(bucket) as fd:
+                    for name in os.listdir(fd):
+                        metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        _private(metadata)
+                        total += metadata.st_size
+            except FileNotFoundError:
+                continue
+        for name in ("marker.json", ".lock"):
+            total += os.stat(name, dir_fd=self.fd, follow_symlinks=False).st_size
+        return total

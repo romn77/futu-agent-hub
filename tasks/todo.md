@@ -6,7 +6,7 @@
   - 验收：C01–C06、C12；跨进程读、到期不续期、拒绝不安全文件。
   - 文件：cache/types.py、cache/storage.py、cache/store.py、test_cache_core.py。
   - 验证：pytest tests/test_cache_core.py；红→绿。
-- [ ] T2 依赖、租约、限额和清理
+- [x] T2 依赖、租约、限额和清理
   - 依赖：T1。验收：C07–C11；依赖变化失效、竞争和旧所有者不能发布。
   - 文件：cache/store.py、cache/coordination.py、test_cache_processes.py。
   - 验证：独立进程竞争与故障注入、核心回归。
@@ -52,3 +52,5 @@
 - 2026-10-20：T3已绑定独立worktree；12份设计/证据文件迁入且SHA-256一致；原主工作区未改动。
 
 - T1：新增8项行为测试先因缺少cache模块失败，随后全部通过；验证独立进程读取、精确到期、关闭缓存、时间异常、软链接/权限、损坏、大小和零值。
+
+- T2：10项新测试先失败，依赖/动态目录代次、租约fencing、容量清理和真实双进程协调实现后，与T1合计18项通过。首次并发创建锁的macOS ENOENT已定位并使用同一锚定名称的安全重开修复。
