@@ -67,3 +67,13 @@ Futu API Skills/portfolio-analyst/trades.json
 Futu API Skills/portfolio-analyst/credentials.json
 Futu API Skills/portfolio-analyst/personal_rules.yaml
 Futu API Skills/portfolio-analyst/report.json
+
+# User-configured institutional research universe
+Futu API Skills/institutional-style/config/managers.local.json
+Futu API Skills/institutional-style/config/managers.source.local.json
+
+# Local SEC request identity
+Futu API Skills/sec-research-core/.env*
+
+# Local generated research, previews, and test output
+/output/

@@ -18,6 +18,8 @@ Run from the repository root with SEC_RESEARCH_PYTHON set to an **existing** int
 
 EDGAR_IDENTITY must already be supplied to SDK reads through the authorized process environment. Do not print its value or fabricate a name/email. MCP can have its own identity configuration; MCP success does not prove the shell is configured.
 
+The user may persist their request identity in `Futu API Skills/sec-research-core/.env.local` (git-ignored, mode 0600). If the process has no EDGAR_IDENTITY, load only that key from this user-configured file into the command's environment before calling the helper; never execute arbitrary file contents or expose the value. An explicit process value takes precedence. Keep this identity out of institution lists and reports.
+
 Executable commands (replace public IDs and paths with actual inputs):
 
 ```bash

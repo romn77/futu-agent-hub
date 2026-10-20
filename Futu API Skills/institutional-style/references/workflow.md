@@ -2,7 +2,15 @@
 
 ## Establish the sample
 
-Read only the user-provided list/path. Validate with validate-universe. Resolve ambiguous institution names using public evidence and ask only if identity remains ambiguous. Store no inferred persistent preferences. User notes never go to data providers.
+Read the explicit user-provided list/path, or the user-configured `config/managers.local.json` fallback relative to the skill. Validate with validate-universe. Resolve ambiguous institution names using public evidence and ask only if identity remains ambiguous. Store no inferred persistent preferences. User notes never go to data providers.
+
+When the user asks to save a list, use the supported schema: map `name` to `display_name`, preserve user `group` and `priority` as `tags`, and retain `id`, `sec_filer_name`, `focus`, `watch_forms`, `analysis_warning` and `historical_cik_notes` in local `notes`. Read the raw configuration for these notes; the helper's public summary omits them. User groups are not verified `strategy_group` values, and priority tags do not exclude watch-tier managers. Keep incomplete source fields explicitly marked; never invent missing managers. Save personal configuration in the git-ignored local file; keep the distributed templates empty.
+
+For the local fallback, if `config/managers.source.local.json` exists, read it as the user-supplied source, including its list version and snapshot metadata. `managers.local.json` is its schema-compatible projection for the helper; reconcile CIKs, names, enabled membership and notes before use, and regenerate it from the source when the user updates that source. Preserve `enabled` when supplied (default true); keep `universe_id` stable across routine membership updates because the helper computes a separate membership version. The source's `as_of`, `last_complete_quarter` and `next_quarter_deadline` are user-supplied snapshot metadata, not a permanently pinned research period or independently verified filing calendar.
+
+Historical CIK notes require public verification of the entity/period relationships during research. The current collector reads configured CIKs and does not automatically stitch predecessor filings. Do not count historical CIKs as additional independent managers, sum overlapping filers blindly, or interpret a filer transition as a portfolio entry/exit. If continuity remains unresolved, report the historical gap and limit comparisons accordingly.
+
+`watch_forms` retained in notes is descriptive only: the current collector handles 13F holdings/amendments and checks 13F notices. It does not collect 13D/13G filings or schedule monitoring. Preserve that distinction when describing what configuration enables.
 
 Disclose the enabled set and list version. Check parent/subsidiary, included-manager and delegated relationships before independent aggregation. Strategy labels need evidence; unknown groups remain unknown. Small or correlated user pools are valid research scopes with narrower conclusions.
 

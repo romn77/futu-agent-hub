@@ -9,7 +9,7 @@
 账户事实、数值计算引擎及只读边界保持，新增内容由 prompt 与现有授权研究工具完成。
 
 相关文档：[实施计划](../plans/2026-10-14-portfolio-analyst-prompt-simplification.md)、
-[任务清单](../../../tasks/todo.md)、[既有 v0.8.0 PRD](../../../portfolio-analyst-v0.8.0-prd-rev6.md)。
+本地任务清单 `tasks/todo.md`（不纳入版本管理）、[既有 v0.8.0 PRD](../../../portfolio-analyst-v0.8.0-prd-rev6.md)。
 本 spec 调整指令组织、研究综合与报告质量要求，并用固定输入的新旧对照验证效果；
 未明确调整的产品要求沿用既有 PRD。报告解释和风险讨论顺序允许改变，权威数值和工具状态不变。
 

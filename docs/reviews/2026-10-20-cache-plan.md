@@ -1,8 +1,10 @@
 # 分层研究缓存实施计划
 
+> 已完成缓存实现的历史归档；日常 `tasks/` 文件保持本地使用，不纳入 Git。
+
 分支：feature/portfolio-research-cache。基线：72c477a。用户已批准设计和完整实施；本计划不新增范围。
 
-设计入口：[缓存 PRD 与 Spec](../docs/superpowers/specs/2026-10-20-portfolio-research-cache/README.md)。任务清单见 [todo](todo.md)，执行与验收记录写入 `docs/reviews/2026-10-20-cache-implementation.md`。
+设计入口：[缓存 PRD 与 Spec](../superpowers/specs/2026-10-20-portfolio-research-cache/README.md)。任务清单见 [任务归档](2026-10-20-cache-tasks.md)，执行与验收记录写入 `docs/reviews/2026-10-20-cache-implementation.md`。
 
 ## 实现顺序
 

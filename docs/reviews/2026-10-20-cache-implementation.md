@@ -4,7 +4,7 @@
 
 实现位于独立 worktree `/Users/yaoma/.t3/worktrees/futu-agent-hub/feature-portfolio-research-cache`。T3 绑定已核验。批准文档的 12 文件交接清单及归档哈希已核验迁入；原主目录未提交内容保持原样，未在原目录继续业务开发、reset、stash、提交或合并 main。
 
-[批准设计入口](../superpowers/specs/2026-10-20-portfolio-research-cache/README.md) · [验收原规范](../superpowers/specs/2026-10-20-portfolio-research-cache/ACCEPTANCE.md) · [任务记录](../../tasks/todo.md)
+[批准设计入口](../superpowers/specs/2026-10-20-portfolio-research-cache/README.md) · [验收原规范](../superpowers/specs/2026-10-20-portfolio-research-cache/ACCEPTANCE.md) · [任务记录归档](2026-10-20-cache-tasks.md) · [实施计划归档](2026-10-20-cache-plan.md)
 
 ## 已实现行为
 

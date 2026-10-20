@@ -2,16 +2,16 @@
 name: institutional-style
 description: Analyze a user-configured list of institutional managers' 13F holdings across quarters to identify allocation, industry and style research leads, with explicit sample coverage and disclosure limits.
 metadata:
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # Institutional Allocation Research
 
 Investigate disclosed allocation changes in the user's institution list. Use only the managers they specify; do not auto-populate a famous-fund or largest-manager universe.
 
-Read [workflow](references/workflow.md), [13F contract](../sec-research-core/references/institutional.md) and [shared evidence](../sec-research-core/references/evidence.md), reusing loaded content. Read [commands](../sec-research-core/references/tools.md) when executing the collector or calculations.
+Resolve this skill directory's real path before opening sibling resources when invoked through a symlink. Read [workflow](references/workflow.md), [13F contract](../sec-research-core/references/institutional.md) and [shared evidence](../sec-research-core/references/evidence.md), reusing loaded content. Read [commands](../sec-research-core/references/tools.md) when executing the collector or calculations.
 
-1. Resolve the supplied list and CIKs. No list means ask for the missing list/path; do not scan the user's directories. Use the empty [JSON template](config/managers.example.json) or [YAML template](config/managers.example.yaml).
+1. Resolve the supplied list and CIKs. An explicit list/path takes precedence; otherwise use `config/managers.local.json` relative to this skill if the user has configured it. Do not merge the two implicitly. If neither exists, ask for the missing list/path; do not scan the user's directories. The [JSON template](config/managers.example.json) and [YAML template](config/managers.example.yaml) remain empty starting points.
 2. Fix calendar quarters and a knowledge cutoff. Default four snapshots yield at most three adjacent changes. Explicit in-progress quarters are preliminary.
 3. Acquire complete original and amended filings through the existing read-only helper. Preserve report-period, source, unit and completeness evidence.
 4. Use deterministic normalization and calculations; supply only verified corporate-action, price, classification and manager-relationship enrichment.
