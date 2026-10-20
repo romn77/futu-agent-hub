@@ -3,9 +3,20 @@
 from datetime import timedelta
 import secrets
 import time
+import re
 
 from .storage import Disk
 from .types import CacheError, digest, utc
+
+
+def _validate_lease(value, key):
+    if (not isinstance(value, dict) or set(value) != {"query_key", "token", "created_at", "expires_at"}
+            or value["query_key"] != key or not isinstance(value["token"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["token"])):
+        raise CacheError("CORRUPT")
+    if utc(value["expires_at"]) <= utc(value["created_at"]):
+        raise CacheError("CORRUPT")
+    return value
 
 
 def reserve(store, query, *, seconds=60):
@@ -17,7 +28,7 @@ def reserve(store, query, *, seconds=60):
     with Disk(store.root, store.scope).locked(create=True) as disk:
         now = utc(store.clock())
         try:
-            old = disk.read("leases", key)
+            old = _validate_lease(disk.read("leases", key), key)
             if utc(old["created_at"]) > now:
                 raise CacheError("CLOCK_INVALID")
             if now < utc(old["expires_at"]):
@@ -32,7 +43,7 @@ def reserve(store, query, *, seconds=60):
 
 def verify(disk, lease, key, now):
     try:
-        current = disk.read("leases", key)
+        current = _validate_lease(disk.read("leases", key), key)
         valid = (lease["query_key"] == key and current["token"] == lease["token"]
                  and utc(current["created_at"]) <= now < utc(current["expires_at"]))
     except (FileNotFoundError, KeyError, TypeError):
@@ -46,7 +57,7 @@ def release(store, lease):
         return
     try:
         with Disk(store.root, store.scope).locked() as disk:
-            current = disk.read("leases", lease["query_key"])
+            current = _validate_lease(disk.read("leases", lease["query_key"]), lease["query_key"])
             if current["token"] == lease["token"]:
                 disk.remove("leases", lease["query_key"])
     except FileNotFoundError:
@@ -56,8 +67,8 @@ def release(store, lease):
 def renew(store, lease, *, seconds=60):
     if not 0 < seconds <= 600:
         raise CacheError("INVALID_INPUT")
-    now = utc(store.clock())
     with Disk(store.root, store.scope).locked() as disk:
+        now = utc(store.clock())
         verify(disk, lease, lease["query_key"], now)
         updated = {**lease, "expires_at": (now + timedelta(seconds=seconds)).isoformat()}
         disk.write("leases", lease["query_key"], updated)

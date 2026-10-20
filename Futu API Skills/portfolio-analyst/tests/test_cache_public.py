@@ -13,13 +13,13 @@ from test_cache_core import NOW
 
 
 QUERY = {"provider": "issuer", "interface": "filing", "version": "1",
-         "subject": "US.AAA", "dataset": "sec.content", "parameters": {"accession": "F1"}}
+         "subject": "US.AAA", "dataset": "disclosure", "parameters": {"accession": "F1"}}
 URL = "https://www.sec.gov/Archives/example"
 
 
 def test_public_evidence_preserves_provenance_across_lookup(tmp_path):
     cache = PublicCache(CacheStore(tmp_path / "public", clock=lambda: NOW))
-    result = cache.publish(QUERY, {"text": "public operating facts"}, source_url=URL,
+    result = cache.publish(QUERY, {"observations": [{"text": "public operating facts"}]}, source_url=URL,
                            source_as_of=NOW, available_at=NOW)
     hit = cache.lookup(QUERY, cutoff=NOW)
     assert hit["status"] == "HIT"
@@ -43,19 +43,19 @@ def test_source_failures_and_unknown_dynamic_times_are_not_successes(tmp_path):
     with pytest.raises(CacheError, match="SOURCE_UNAVAILABLE"):
         cache.publish(QUERY, {"success": False, "error": "denied"}, source_url=URL, source_as_of=NOW)
     with pytest.raises(CacheError, match="SOURCE_TIME_REQUIRED"):
-        cache.publish({**QUERY, "dataset": "estimates"}, {"eps": 1}, source_url=URL)
+        cache.publish({**QUERY, "dataset": "estimates"}, {"observations": [{"text": "estimate", "value": 1}]}, source_url=URL)
 
 
 def test_partial_evidence_never_becomes_complete(tmp_path):
     cache = PublicCache(CacheStore(tmp_path / "public", clock=lambda: NOW))
-    cache.publish(QUERY, {"rows": [], "truncated": True}, source_url=URL,
+    cache.publish(QUERY, {"observations": [], "truncated": True}, source_url=URL,
                   source_as_of=NOW, complete=False)
     assert cache.lookup(QUERY)["status"] == "HIT_PARTIAL"
 
 
 def test_summary_requires_real_dependencies_and_retains_counterevidence(tmp_path):
     cache = PublicCache(CacheStore(tmp_path / "public", clock=lambda: NOW))
-    fact = cache.publish(QUERY, {"facts": [1, 2]}, source_url=URL, source_as_of=NOW)
+    fact = cache.publish(QUERY, {"observations": [{"text": "facts", "value": 1}]}, source_url=URL, source_as_of=NOW)
     summary = {"question": "cash conversion", "subject": "US.AAA", "period": "2026Q2",
                "facts": ["sales increased"], "inferences": ["growth may persist"],
                "scenarios": [], "supporting_refs": [fact["ref"]], "contrary_refs": [fact["ref"]],
@@ -71,7 +71,7 @@ def test_summary_requires_real_dependencies_and_retains_counterevidence(tmp_path
 def test_public_cli_lookup_is_available_in_a_new_process(tmp_path):
     root = tmp_path / "cache"
     cache = PublicCache(CacheStore(root))
-    cache.publish(QUERY, {"text": "fact"}, source_url=URL)
+    cache.publish(QUERY, {"observations": [{"text": "fact"}]}, source_url=URL)
     request = tmp_path / "request.json"
     request.write_text(json.dumps({"query": QUERY}))
     script = Path(__file__).parents[1] / "scripts/cache.py"

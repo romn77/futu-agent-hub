@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl
+import re
 
 from .types import CacheError, canonical, utc
+from .evidence_shape import validate_evidence
 
 
 TTL = {"sec.index": 3600, "news": 900, "estimates": 86400, "valuation": 86400,
@@ -28,8 +30,11 @@ def reject_private(value, depth=0):
     elif isinstance(value, list):
         for child in value:
             reject_private(child, depth + 1)
-    elif isinstance(value, str) and any(text in value.lower() for text in PRIVATE_TEXT):
-        raise CacheError("PRIVATE_CONTENT")
+    elif isinstance(value, str):
+        if (any(text in value.lower() for text in PRIVATE_TEXT)
+                or re.search(r"\b(?:i|we)\s+(?:hold|own)\s+\d+\s+shares\b|\byour\s+(?:position|holdings)\b", value, re.I)
+                or re.search(r"(?:/Users/[^/]+/|/home/[^/]+/)", value)):
+            raise CacheError("PRIVATE_CONTENT")
 
 
 def validate_query(query):
@@ -55,6 +60,8 @@ class PublicCache:
 
     def lookup(self, query, *, cutoff=None, historical=False, force=False):
         validate_query(query)
+        if type(historical) is not bool or type(force) is not bool:
+            raise CacheError("INVALID_INPUT")
         if force:
             return {"status": "BYPASS", "reason": "FORCED_REFRESH"}
         result = self.store.lookup(query, historical=historical)
@@ -70,13 +77,19 @@ class PublicCache:
         reject_private(payload)
         parsed = urlsplit(source_url)
         if (parsed.scheme not in {"https", "tool", "fixture"} or not parsed.netloc
-                or parsed.username or parsed.password):
+                or parsed.username or parsed.password or any(key.lower() in
+                   {"token", "api_key", "password", "access_token"} for key, _ in parse_qsl(parsed.query))):
             raise CacheError("INVALID_SOURCE")
         if isinstance(payload, dict) and (payload.get("success") is False or payload.get("ok") is False
                                           or "error" in payload):
             raise CacheError("SOURCE_UNAVAILABLE")
         if type(complete) is not bool:
             raise CacheError("INVALID_INPUT")
+        validate_evidence(query, payload, source_url)
+        if isinstance(payload, dict) and (payload.get("truncated") is True or payload.get("complete") is False):
+            complete = False
+        if available_at is not None and utc(available_at) > utc(self.store.clock()):
+            raise CacheError("CLOCK_INVALID")
         default_ttl = TTL[query["dataset"]]
         if default_ttl is not None and source_as_of is None:
             raise CacheError("SOURCE_TIME_REQUIRED")

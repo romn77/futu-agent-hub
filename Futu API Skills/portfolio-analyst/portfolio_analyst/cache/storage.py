@@ -93,7 +93,9 @@ class Disk:
             finally:
                 if lock_fd is not None:
                     os.close(lock_fd)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            if create:
+                raise CacheError("UNSAFE_PATH") from exc
             raise
         except OSError as exc:
             raise CacheError("UNSAFE_PATH") from exc
@@ -190,3 +192,12 @@ class Disk:
         for name in ("marker.json", ".lock"):
             total += os.stat(name, dir_fd=self.fd, follow_symlinks=False).st_size
         return total
+
+    def size(self, bucket, key):
+        try:
+            with self.bucket(bucket) as fd:
+                info = os.stat(self.filename(key), dir_fd=fd, follow_symlinks=False)
+                _private(info)
+                return info.st_size
+        except FileNotFoundError:
+            return 0
